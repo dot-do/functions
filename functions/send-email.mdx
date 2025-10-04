@@ -1,0 +1,94 @@
+---
+title: Send Email
+description: Send transactional emails via email service provider
+type: code
+inputs:
+  - name: to
+    type: string
+    description: Email address of the recipient
+    required: true
+  - name: subject
+    type: string
+    description: Email subject line
+    required: true
+  - name: body
+    type: string
+    description: Email body content (HTML or plain text)
+    required: true
+  - name: from
+    type: string
+    description: Sender email address
+    required: false
+outputs:
+  - name: messageId
+    type: string
+    description: Unique identifier for the sent email
+  - name: status
+    type: string
+    description: Delivery status (sent, queued, failed)
+metadata:
+  ns: function
+  visibility: public
+tags:
+  - email
+  - communication
+  - transactional
+---
+
+# Send Email Function
+
+This function sends transactional emails through an email service provider (e.g., SendGrid, AWS SES, Resend).
+
+## Implementation
+
+```typescript
+export async function sendEmail({
+  to,
+  subject,
+  body,
+  from = 'noreply@example.com'
+}: SendEmailInput): Promise<SendEmailOutput> {
+  // Validate email addresses
+  if (!isValidEmail(to)) {
+    throw new Error('Invalid recipient email address')
+  }
+
+  // Send via email provider
+  const result = await emailProvider.send({
+    to,
+    from,
+    subject,
+    html: body
+  })
+
+  return {
+    messageId: result.id,
+    status: result.status
+  }
+}
+```
+
+## Usage Example
+
+```typescript
+const result = await sendEmail({
+  to: 'user@example.com',
+  subject: 'Welcome to our platform',
+  body: '<h1>Welcome!</h1><p>Thanks for signing up.</p>'
+})
+
+console.log(`Email sent with ID: ${result.messageId}`)
+```
+
+## Error Handling
+
+The function throws an error if:
+- Invalid email address format
+- Email provider API failure
+- Rate limiting exceeded
+
+## Rate Limits
+
+- **Free tier**: 100 emails/day
+- **Pro tier**: 10,000 emails/day
+- **Enterprise**: Unlimited

@@ -1,0 +1,85 @@
+---
+title: Create
+description: Bring a new entity or resource into existence
+subject: Agent
+object: Resource
+parameters:
+  - name: type
+    type: string
+    description: Type of resource to create
+    required: true
+  - name: properties
+    type: object
+    description: Initial properties for the new resource
+    required: true
+  - name: options
+    type: object
+    description: Creation options (validation, permissions, etc.)
+    required: false
+metadata:
+  ns: verb
+  visibility: public
+tags:
+  - action
+  - crud
+  - operation
+---
+
+# Create
+
+The **Create** action brings a new entity or resource into existence in the system.
+
+## Signature
+
+```typescript
+create(type: string, properties: object, options?: CreateOptions): Promise<Resource>
+```
+
+## Parameters
+
+- **type**: The type of resource to create (e.g., 'User', 'Organization', 'Document')
+- **properties**: Initial property values for the new resource
+- **options**: Optional configuration
+  - `validate`: Whether to validate before creation (default: true)
+  - `permissions`: Access control settings
+  - `notify`: Whether to trigger notifications (default: false)
+
+## Behavior
+
+1. **Validate Input**: Check that all required properties are provided
+2. **Check Permissions**: Ensure the agent has create permissions for this type
+3. **Generate ID**: Assign a unique identifier
+4. **Set Timestamps**: Add createdAt and updatedAt
+5. **Persist**: Save to database
+6. **Index**: Update search indexes
+7. **Notify**: Trigger creation events if configured
+8. **Return**: Return the newly created resource
+
+## Example
+
+```typescript
+const user = await create('User', {
+  email: 'user@example.com',
+  name: 'Jane Doe',
+  role: 'member'
+}, {
+  validate: true,
+  notify: true
+})
+
+console.log(user.id) // auto-generated UUID
+console.log(user.createdAt) // current timestamp
+```
+
+## Error Handling
+
+Common errors:
+- **ValidationError**: Required properties missing or invalid
+- **PermissionError**: Agent lacks create permission
+- **ConflictError**: Resource with same unique constraint already exists
+
+## Related Actions
+
+- **Read**: Retrieve an existing resource
+- **Update**: Modify an existing resource
+- **Delete**: Remove a resource
