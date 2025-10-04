@@ -2,11 +2,35 @@
 
 ## Project Overview
 
-The **functions repository** stores **function and capability definitions** as MDX files with Zod schema validation via Velite, enabling bidirectional synchronization with the PostgreSQL database.
+The **functions repository** stores **11 production function definitions** as MDX files with Zod schema validation via Velite, enabling bidirectional synchronization with the PostgreSQL database.
 
 **Purpose**: Define and manage function entities as version-controlled MDX files that sync automatically to the database.
 
 **Position**: 📝 **Content Layer** - Content source that syncs to db layer
+
+## Repository Structure
+
+```
+functions/
+├── communication/    # 1 function - Email and messaging
+│   └── sendEmail.mdx
+├── development/      # 4 functions - Code analysis and generation
+│   ├── analyzeCode.mdx
+│   ├── generateDocs.mdx
+│   ├── optimizeQuery.mdx
+│   └── parseCode.mdx
+├── finance/          # 3 functions - Financial calculations
+│   ├── assessRisk.mdx
+│   ├── calculateROI.mdx
+│   └── detectFraud.mdx
+├── ecommerce/        # 2 functions - E-commerce operations
+│   ├── calculateShipping.mdx
+│   └── validateOrder.mdx
+└── verbs/            # 1 verb - CRUD operations
+    └── create.mdx
+```
+
+**Total:** 11 function definitions (10 functions + 1 verb)
 
 ## Schema
 

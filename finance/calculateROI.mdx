@@ -1,0 +1,146 @@
+---
+title: calculateROI
+$type: Function
+name: calculateROI
+description: Calculate return on investment for financial analysis
+
+input:
+  initialInvestment: Initial investment amount in dollars (number)
+  finalValue: Final value in dollars (number)
+  timePeriod: Time period in months (number)
+  cashFlows: Optional array of intermediate cash flows (array)
+
+output:
+  roi: Return on investment percentage (number)
+  annualizedReturn: Annualized return percentage (number)
+  totalGain: Total gain/loss in dollars (number)
+  irr: Internal rate of return if cash flows provided (number)
+---
+
+# Calculate ROI Function
+
+Calculate return on investment and related financial metrics.
+
+## Usage
+
+```yaml
+function: calculateROI
+input:
+  initialInvestment: 10000
+  finalValue: 15000
+  timePeriod: 24
+```
+
+**Output:**
+```yaml
+roi: 50.0
+annualizedReturn: 22.5
+totalGain: 5000
+```
+
+## Related
+
+- [[../agents/FinancialAdvisor|Financial Advisor Agent]]
+- [[../workflows/analyzeInvestment|Analyze Investment Workflow]]
+
+## Implementation
+
+```typescript
+import type { BusinessModule } from 'graphdl'
+
+interface ROIParams {
+  initialInvestment: number
+  finalValue: number
+  timePeriod: number // months
+  cashFlows?: number[]
+}
+
+interface ROIResult {
+  roi: number
+  annualizedReturn: number
+  totalGain: number
+  irr?: number
+}
+
+/**
+ * Calculate ROI Function - Financial return analysis and metrics
+ *
+ * Relationships:
+ * - Used by Financial Advisor Agent for investment evaluation
+ * - Used by Analyze Investment Workflow for portfolio analysis
+ * - Calculates ROI, annualized returns, and IRR
+ */
+export const calculateROI: BusinessModule = $ => {
+  const { db, ai, api, send, on } = $
+
+  function calculateIRR(cashFlows: number[], guess = 0.1): number {
+    // Newton-Raphson method for IRR calculation
+    const maxIterations = 100
+    const tolerance = 0.0001
+    let rate = guess
+
+    for (let i = 0; i < maxIterations; i++) {
+      let npv = 0
+      let dnpv = 0
+
+      for (let j = 0; j < cashFlows.length; j++) {
+        npv += cashFlows[j] / Math.pow(1 + rate, j)
+        dnpv -= (j * cashFlows[j]) / Math.pow(1 + rate, j + 1)
+      }
+
+      const newRate = rate - npv / dnpv
+
+      if (Math.abs(newRate - rate) < tolerance) {
+        return newRate
+      }
+
+      rate = newRate
+    }
+
+    return rate
+  }
+
+  async function performROICalculation(params: ROIParams): Promise<ROIResult> {
+    // Basic ROI calculation
+    const totalGain = params.finalValue - params.initialInvestment
+    const roi = (totalGain / params.initialInvestment) * 100
+
+    // Annualized return calculation
+    const years = params.timePeriod / 12
+    const annualizedReturn = (Math.pow(params.finalValue / params.initialInvestment, 1 / years) - 1) * 100
+
+    // IRR calculation if cash flows provided
+    let irr: number | undefined
+    if (params.cashFlows && params.cashFlows.length > 0) {
+      const allCashFlows = [-params.initialInvestment, ...params.cashFlows]
+      irr = calculateIRR(allCashFlows) * 100
+    }
+
+    // Store calculation in database
+    await db.calculations.create({
+      type: 'roi',
+      params,
+      result: { roi, annualizedReturn, totalGain, irr },
+      timestamp: new Date(),
+    })
+
+    return {
+      roi: Math.round(roi * 100) / 100,
+      annualizedReturn: Math.round(annualizedReturn * 100) / 100,
+      totalGain: Math.round(totalGain * 100) / 100,
+      irr: irr ? Math.round(irr * 100) / 100 : undefined,
+    }
+  }
+
+  on.function.completed(async event => {
+    await db.analytics.track({
+      event: 'roi_calculated',
+      roi: event.result.roi,
+      timePeriod: event.params.timePeriod,
+      timestamp: new Date(),
+    })
+  })
+
+  return { calculateROI: performROICalculation }
+}
+```

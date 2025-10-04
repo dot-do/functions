@@ -1,0 +1,145 @@
+---
+title: generateDocs
+$type: Function
+name: generateDocs
+description: Generate documentation from code comments and signatures
+
+input:
+  code: Source code with JSDoc/docstring comments
+  language: Programming language
+  format: Output format (markdown, html, json)
+
+output:
+  documentation: Generated documentation content
+  metadata: Documentation metadata (title, version, etc) (object)
+---
+
+# Generate Docs Function
+
+Generate API documentation from code comments.
+
+## Usage
+
+```yaml
+function: generateDocs
+input:
+  code: "/** Sends email */ function sendEmail(to, subject) {}"
+  language: javascript
+  format: markdown
+```
+
+## Related
+
+- [[parseCode|Parse Code Function]]
+- [[../agents/DocumentationWriter|Documentation Writer Agent]]
+
+## Implementation
+
+```typescript
+import type { BusinessModule } from 'graphdl'
+
+interface DocsParams {
+  code: string
+  language: string
+  format: 'markdown' | 'html' | 'json'
+}
+
+interface DocsResult {
+  documentation: string
+  metadata: {
+    title: string
+    version: string
+    generatedAt: Date
+    functions: number
+    classes: number
+  }
+}
+
+/**
+ * Generate Docs Function - API documentation from code comments
+ *
+ * Relationships:
+ * - Used by Documentation Writer Agent for automated docs
+ * - Calls parseCode function for AST and symbols extraction
+ * - Generates markdown, HTML, or JSON documentation
+ */
+export const generateDocs: BusinessModule = $ => {
+  const { db, ai, api, send, on } = $
+
+  async function performDocGeneration(params: DocsParams): Promise<DocsResult> {
+    // Parse code to extract symbols and comments
+    const ast = await api.post('/functions/parseCode', {
+      code: params.code,
+      language: params.language,
+      includeComments: true,
+    })
+
+    // Extract JSDoc comments and signatures
+    const functions = ast.symbols.filter((s: any) => s.type === 'function')
+    const classes = ast.symbols.filter((s: any) => s.type === 'class')
+
+    let documentation = ''
+
+    if (params.format === 'markdown') {
+      documentation = '# API Documentation\n\n'
+
+      // Functions section
+      if (functions.length > 0) {
+        documentation += '## Functions\n\n'
+        for (const fn of functions) {
+          documentation += `### ${fn.name}\n\n`
+          if (fn.comment) {
+            documentation += `${fn.comment}\n\n`
+          }
+          documentation += '```typescript\n'
+          documentation += `function ${fn.name}(${fn.params.join(', ')})\n`
+          documentation += '```\n\n'
+        }
+      }
+
+      // Classes section
+      if (classes.length > 0) {
+        documentation += '## Classes\n\n'
+        for (const cls of classes) {
+          documentation += `### ${cls.name}\n\n`
+          if (cls.comment) {
+            documentation += `${cls.comment}\n\n`
+          }
+        }
+      }
+    } else if (params.format === 'html') {
+      documentation = '<html><body><h1>API Documentation</h1>'
+      // Simplified HTML generation
+      documentation += '<h2>Functions</h2>'
+      for (const fn of functions) {
+        documentation += `<h3>${fn.name}</h3>`
+        if (fn.comment) documentation += `<p>${fn.comment}</p>`
+      }
+      documentation += '</body></html>'
+    } else if (params.format === 'json') {
+      documentation = JSON.stringify({ functions, classes }, null, 2)
+    }
+
+    const metadata = {
+      title: 'API Documentation',
+      version: '1.0.0',
+      generatedAt: new Date(),
+      functions: functions.length,
+      classes: classes.length,
+    }
+
+    return { documentation, metadata }
+  }
+
+  on.function.completed(async event => {
+    await db.analytics.track({
+      event: 'docs_generated',
+      format: event.params.format,
+      functionsCount: event.result.metadata.functions,
+      timestamp: new Date(),
+    })
+  })
+
+  return { generateDocs: performDocGeneration }
+}
+```

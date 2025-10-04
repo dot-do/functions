@@ -1,0 +1,269 @@
+---
+title: sendEmail
+$type: Function
+name: sendEmail
+description: Send transactional email via Resend
+
+input:
+  to: Email recipient address
+  subject: Email subject line
+  body: Email body content in HTML or plain text
+  from: Sender email address
+
+output:
+  messageId: Unique identifier for sent email
+  status: Delivery status (sent, delivered, bounced, failed)
+
+config:
+  provider: resend
+  apiKey: ${env.RESEND_API_KEY}
+  timeout: 5000
+  retries: 3
+
+templates:
+  welcome:
+    subject: Welcome to {{companyName}}!
+    from: hello@company.com
+
+  payment-receipt:
+    subject: Payment Receipt - ${{amount}}
+    from: billing@company.com
+
+  password-reset:
+    subject: Reset Your Password
+    from: security@company.com
+
+  invoice:
+    subject: Invoice #{{invoiceNumber}}
+    from: billing@company.com
+---
+
+# Email Function
+
+Send transactional emails with template support via Resend.
+
+## Basic Usage
+
+The function can be called directly with email details:
+
+```yaml
+function: send-email
+input:
+  to: customer@example.com
+  subject: Welcome!
+  body: Thanks for signing up
+  from: hello@company.com
+```
+
+## Template Usage
+
+Use pre-configured templates with variable substitution:
+
+```yaml
+function: send-email
+input:
+  to: customer@example.com
+  template: welcome
+  data:
+    companyName: Acme Corp
+```
+
+## Available Templates
+
+**welcome** - New user onboarding
+- Subject: "Welcome to {{companyName}}!"
+- Variables: companyName
+
+**payment-receipt** - Payment confirmation
+- Subject: "Payment Receipt - ${{amount}}"
+- Variables: amount, receiptUrl
+
+**password-reset** - Password reset
+- Subject: "Reset Your Password"
+- Variables: resetUrl, expiresIn
+
+**invoice** - Invoice notification
+- Subject: "Invoice #{{invoiceNumber}}"
+- Variables: invoiceNumber, amount, dueDate
+
+## Configuration
+
+**Provider:** Resend (default)
+- API key from environment: `RESEND_API_KEY`
+- Timeout: 5 seconds
+- Retries: 3 attempts
+
+**Alternative Providers:**
+Can be configured for SendGrid, Postmark, or Mailgun by changing the provider config.
+
+## Error Handling
+
+- Invalid email address → Returns error immediately
+- Provider timeout → Retries up to 3 times
+- Template not found → Returns error with available templates
+
+## Implementation
+
+```typescript
+import type { BusinessModule } from 'graphdl'
+
+interface EmailParams {
+  to: string
+  subject?: string
+  body?: string
+  from?: string
+  template?: string
+  data?: Record<string, any>
+}
+
+interface Email {
+  id: string
+  to: string
+  from: string
+  subject: string
+  body: string
+  messageId?: string
+  status: 'pending' | 'sent' | 'delivered' | 'bounced' | 'failed'
+  sentAt?: Date
+  deliveredAt?: Date
+  createdAt: Date
+}
+
+/**
+ * Email Function - Transactional email with templates and tracking
+ *
+ * Relationships:
+ * - Email belongs to User (recipient)
+ * - Email tracked with delivery events (sent, delivered, opened, clicked, bounced)
+ * - Email template selected from predefined templates
+ */
+export const sendEmail: BusinessModule = $ => {
+  const { db, ai, api, send, on } = $
+
+  async function sendTransactionalEmail(params: EmailParams): Promise<Email> {
+    // Validate email address
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(params.to)) {
+      throw new Error(`Invalid email address: ${params.to}`)
+    }
+
+    // Render template if specified
+    let renderedSubject = params.subject || ''
+    let renderedBody = params.body || ''
+
+    if (params.template) {
+      const template = await db.templates.findOne({ name: params.template })
+      if (!template) {
+        throw new Error(`Template not found: ${params.template}`)
+      }
+
+      // Simple variable substitution
+      renderedSubject = template.subject.replace(/\{\{(\w+)\}\}/g, (_, key) => params.data?.[key] || '')
+      renderedBody = template.body.replace(/\{\{(\w+)\}\}/g, (_, key) => params.data?.[key] || '')
+    }
+
+    // AI-powered spam check
+    const spamCheck = await ai.classify(
+      `Subject: ${renderedSubject}\nBody: ${renderedBody.substring(0, 500)}\n\nIs this spam?`,
+      ['legitimate', 'potentially-spam', 'spam']
+    )
+
+    if (spamCheck === 'spam') {
+      throw new Error('Email flagged as spam by AI classifier')
+    }
+
+    // Create email record
+    const email = await db.emails.create({
+      to: params.to,
+      from: params.from || 'noreply@example.com',
+      subject: renderedSubject,
+      body: renderedBody,
+      status: 'pending',
+      createdAt: new Date(),
+    })
+
+    // Send via provider (with retry logic)
+    try {
+      const result = await api.post(
+        'https://api.resend.com/emails',
+        {
+          from: email.from,
+          to: email.to,
+          subject: email.subject,
+          html: email.body,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          },
+          retry: {
+            maxAttempts: 3,
+            backoff: 'exponential',
+          },
+        }
+      )
+
+      await db.emails.update(email.id, {
+        messageId: result.id,
+        status: 'sent',
+        sentAt: new Date(),
+      })
+
+      return { ...email, messageId: result.id, status: 'sent', sentAt: new Date() }
+    } catch (error: any) {
+      await db.emails.update(email.id, {
+        status: 'failed',
+      })
+
+      throw new Error(`Failed to send email: ${error.message}`)
+    }
+  }
+
+  // Event handlers for email lifecycle
+  on.email.sent(async (email: Email) => {
+    // Track analytics
+    await db.analytics.track({
+      event: 'email_sent',
+      emailId: email.id,
+      to: email.to,
+      template: email.subject,
+      timestamp: new Date(),
+    })
+  })
+
+  on.email.delivered(async (event: { messageId: string; deliveredAt: Date }) => {
+    const email = await db.emails.findOne({ messageId: event.messageId })
+    if (email) {
+      await db.emails.update(email.id, {
+        status: 'delivered',
+        deliveredAt: event.deliveredAt,
+      })
+    }
+  })
+
+  on.email.bounced(async (event: { messageId: string; reason: string }) => {
+    const email = await db.emails.findOne({ messageId: event.messageId })
+    if (email) {
+      await db.emails.update(email.id, {
+        status: 'bounced',
+      })
+
+      // Alert team for investigation
+      await send.slack('#engineering', `Email bounced: ${event.reason}`)
+    }
+  })
+
+  on.email.opened(async (event: { messageId: string; openedAt: Date }) => {
+    const email = await db.emails.findOne({ messageId: event.messageId })
+    if (email) {
+      await db.analytics.track({
+        event: 'email_opened',
+        emailId: email.id,
+        timestamp: event.openedAt,
+      })
+    }
+  })
+
+  return { sendEmail: sendTransactionalEmail }
+}
+```

@@ -1,0 +1,743 @@
+---
+title: validate-order
+$type: Function
+name: validate-order
+description: Comprehensive order validation with fraud detection and inventory verification
+
+input:
+  orderId: Order unique identifier
+  items: Array of items (SKU, quantity, price)
+  shippingAddress: Destination address object
+  billingAddress: Billing address object
+  paymentMethod: Payment method ID
+  email: Customer email address
+  phone: Customer phone number (optional)
+  ipAddress: Request IP address
+  total: Order total amount (number)
+
+output:
+  valid: Validation result (boolean)
+  errors: Array of validation errors
+  warnings: Array of validation warnings
+  fraudScore: Fraud risk score 0-100 (number)
+  inventoryStatus: Inventory availability status
+
+config:
+  strictMode: true
+  checkInventory: true
+  validateAddress: true
+  fraudDetection: true
+  timeout: 5000
+
+validationRules:
+  email:
+    regex: ^[^\s@]+@[^\s@]+\.[^\s@]+$
+    required: true
+
+  phone:
+    regex: ^\+?[1-9]\d{1,14}$
+    required: false
+
+  address:
+    requiredFields:
+      - street
+      - city
+      - state
+      - postalCode
+      - country
+    validateWithUSPS: true
+
+  items:
+    minItems: 1
+    maxItems: 100
+    validateSKU: true
+    checkPrice: true
+    checkInventory: true
+
+  payment:
+    validateMethod: true
+    checkFraud: true
+
+fraudChecks:
+  - addressMismatch
+  - firstTimeHighValue
+  - velocityCheck
+  - ipGeolocation
+  - emailReputation
+  - unusualShipping
+---
+
+# Validate Order Function
+
+Comprehensive order validation with fraud detection, inventory checking, and address verification.
+
+## Validation Process
+
+The function performs multi-stage validation in this order:
+
+```
+Input Validation
+  ↓
+Email & Phone Format Check
+  ↓
+Address Validation → USPS API
+  ↓
+SKU Existence Check
+  ↓
+Price Verification
+  ↓
+Inventory Availability
+  ↓
+Payment Method Validation
+  ↓
+Fraud Risk Scoring
+  ↓
+Return Results
+```
+
+## Input Validation
+
+### Required Fields Check
+
+```yaml
+requiredFields:
+  - orderId
+  - items (min 1)
+  - shippingAddress
+  - billingAddress
+  - paymentMethod
+  - email
+  - total
+
+errors:
+  missingOrderId: Order ID is required
+  missingItems: At least one item required
+  missingAddress: Shipping address required
+  missingPayment: Payment method required
+  missingEmail: Customer email required
+```
+
+### Data Type Validation
+
+```yaml
+typeChecks:
+  orderId: string
+  items: array
+  shippingAddress: object
+  billingAddress: object
+  total: number (positive)
+  email: string (email format)
+  phone: string (phone format) or null
+
+errors:
+  invalidTotal: Total must be a positive number
+  invalidItems: Items must be an array
+  invalidEmail: Invalid email format
+```
+
+## Email & Phone Validation
+
+### Email Format
+
+**Regex Check:**
+```javascript
+const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const isValidEmail = emailRegex.test(input.email)
+```
+
+**Domain Verification:**
+```yaml
+checks:
+  - validFormat: true
+  - domainExists: DNS lookup
+  - notDisposable: Check against disposable email list
+
+disposableProviders:
+  - mailinator.com
+  - tempmail.com
+  - guerrillamail.com
+  - 10minutemail.com
+
+errors:
+  invalidFormat: Email format is invalid
+  disposableDomain: Disposable email addresses not allowed
+```
+
+### Phone Validation
+
+**Format Check (E.164):**
+```yaml
+format: +[country code][number]
+examples:
+  - +1-555-123-4567 (US)
+  - +44-20-1234-5678 (UK)
+  - +86-10-1234-5678 (China)
+
+validation:
+  - startsWith: + or digit
+  - length: 10-15 digits
+  - format: E.164 standard
+
+warnings:
+  missingCountryCode: Phone should include country code
+  invalidFormat: Phone format invalid
+```
+
+## Address Validation
+
+### Address Completeness
+
+**Required Fields:**
+```yaml
+shippingAddress:
+  street: 123 Main St
+  city: New York
+  state: NY
+  postalCode: 10001
+  country: US
+
+errors:
+  missingStreet: Street address required
+  missingCity: City required
+  missingState: State/province required
+  missingPostalCode: Postal code required
+  missingCountry: Country required
+```
+
+### USPS Address Verification
+
+**API Integration:**
+```yaml
+uspsValidation:
+  endpoint: https://secure.shippingapis.com/ShippingAPI.dll
+  method: Verify
+  input:
+    Address1: 123 MAIN ST
+    City: NEW YORK
+    State: NY
+    Zip5: 10001
+
+  response:
+    valid: true
+    correctedAddress:
+      Address1: 123 MAIN ST APT 4B
+      City: NEW YORK
+      State: NY
+      Zip5: 10001
+      Zip4: 1234
+```
+
+**Address Correction:**
+```yaml
+suggestion:
+  original:
+    street: 123 main street
+    city: new york
+  corrected:
+    street: 123 Main St Apt 4B
+    city: New York
+  action: Suggest correction to customer
+```
+
+### Billing vs Shipping Mismatch
+
+**Fraud Indicator:**
+```yaml
+mismatch:
+  billingState: CA
+  shippingState: NY
+  fraudScore: +30 points
+
+  billingCountry: US
+  shippingCountry: NG (Nigeria)
+  fraudScore: +40 points
+```
+
+## Item Validation
+
+### SKU Existence
+
+**Check Catalog:**
+```yaml
+items:
+  - sku: PROD-123
+    exists: true
+    name: Blue Widget
+    price: $29.99
+
+  - sku: PROD-999
+    exists: false
+    error: SKU not found in catalog
+
+errors:
+  invalidSKU: Item PROD-999 does not exist
+```
+
+### Price Verification
+
+**Prevent Price Manipulation:**
+```yaml
+item:
+  sku: PROD-123
+  submittedPrice: $29.99
+  catalogPrice: $29.99
+  valid: true
+
+manipulation:
+  sku: PROD-123
+  submittedPrice: $0.01
+  catalogPrice: $29.99
+  valid: false
+  error: Price mismatch detected
+
+errors:
+  priceManipulation: Submitted price does not match catalog
+```
+
+### Quantity Validation
+
+```yaml
+item:
+  sku: PROD-123
+  quantity: 5
+  minOrder: 1
+  maxOrder: 100
+  valid: true
+
+errors:
+  quantityTooLow: Minimum order quantity is 1
+  quantityTooHigh: Maximum order quantity is 100
+  invalidQuantity: Quantity must be a positive integer
+```
+
+## Inventory Check
+
+### Stock Availability
+
+```yaml
+inventoryCheck:
+  - sku: PROD-123
+    requested: 5
+    available: 50
+    warehouse: WH-EAST
+    status: in_stock
+
+  - sku: PROD-456
+    requested: 10
+    available: 3
+    warehouse: WH-WEST
+    status: insufficient_stock
+
+warnings:
+  - PROD-456: Only 3 of 10 requested available
+  - suggestion: Reduce quantity or backorder
+```
+
+### Multi-Warehouse Search
+
+```yaml
+warehouses:
+  - id: WH-EAST
+    sku: PROD-123
+    quantity: 5
+    available: true
+
+  - id: WH-WEST
+    sku: PROD-123
+    quantity: 15
+    available: true
+
+selection:
+  preferredWarehouse: WH-EAST (closest to customer)
+  fallbackWarehouse: WH-WEST
+```
+
+## Payment Validation
+
+### Payment Method Check
+
+```yaml
+paymentMethod:
+  id: pm_1234567890
+  type: card
+  brand: visa
+  last4: 4242
+  expMonth: 12
+  expYear: 2025
+  status: active
+  valid: true
+
+errors:
+  invalidMethod: Payment method not found
+  expiredCard: Card has expired
+  inactiveMethod: Payment method is inactive
+```
+
+### 3D Secure Requirement
+
+```yaml
+check:
+  transactionAmount: $500
+  requiresAuthentication: true
+  reason: High-value transaction
+
+action:
+  return3DSChallenge: true
+  challengeUrl: https://stripe.com/3ds/challenge/xyz
+```
+
+## Fraud Detection
+
+### Fraud Scoring Algorithm
+
+**Score Components (0-100):**
+
+```yaml
+fraudScore:
+  components:
+    addressMismatch: 0-40 points
+    firstTimeHighValue: 0-30 points
+    velocityAnomaly: 0-25 points
+    ipGeolocation: 0-20 points
+    emailReputation: 0-15 points
+    unusualDestination: 0-10 points
+
+  example:
+    addressMismatch: 30 (billing CA, shipping NY)
+    firstTimeHighValue: 0 (customer has order history)
+    velocityAnomaly: 0 (normal order frequency)
+    ipGeolocation: 10 (IP in different state than billing)
+    emailReputation: 0 (reputable domain)
+    unusualDestination: 0 (domestic US)
+    totalScore: 40
+
+  classification:
+    0-30: Low risk - Auto-approve
+    31-60: Medium risk - Manual review
+    61-100: High risk - Auto-decline
+```
+
+### Address Mismatch (0-40 points)
+
+```yaml
+scenarios:
+  - sameCityState: 0 points
+  - sameState: 10 points
+  - differentState: 30 points
+  - differentCountry: 40 points
+```
+
+### First-Time High Value (0-30 points)
+
+```yaml
+scenarios:
+  - existingCustomer: 0 points
+  - newCustomerUnder100: 0 points
+  - newCustomer100to500: 15 points
+  - newCustomerOver500: 30 points
+
+example:
+  customerHistory: new
+  orderTotal: $750
+  score: 30 points
+```
+
+### Velocity Check (0-25 points)
+
+```yaml
+velocityRules:
+  normalOrders: <3 per day
+  suspiciousOrders: 3-5 per day
+  highRiskOrders: 5+ per day
+
+scoring:
+  - 1-2 orders: 0 points
+  - 3-4 orders: 15 points
+  - 5+ orders: 25 points
+
+example:
+  ordersLast24h: 6
+  score: 25 points (high risk)
+```
+
+### IP Geolocation (0-20 points)
+
+```yaml
+ipCheck:
+  ipAddress: 192.0.2.1
+  location: Los Angeles, CA
+  billingAddress: New York, NY
+  mismatch: true
+  score: 20 points
+
+scenarios:
+  - sameCity: 0 points
+  - sameState: 5 points
+  - differentState: 10 points
+  - differentCountry: 20 points
+```
+
+### Email Reputation (0-15 points)
+
+```yaml
+emailChecks:
+  domain: gmail.com
+  reputation: high
+  disposable: false
+  recentlyCreated: false
+  score: 0 points
+
+suspicious:
+  domain: tempmail.com
+  reputation: low
+  disposable: true
+  score: 15 points
+```
+
+## Validation Response
+
+### Success Response
+
+```yaml
+valid: true
+errors: []
+warnings: []
+fraudScore: 15
+inventoryStatus:
+  allAvailable: true
+  items:
+    - sku: PROD-123
+      available: true
+      warehouse: WH-EAST
+```
+
+### Error Response
+
+```yaml
+valid: false
+errors:
+  - field: email
+    message: Invalid email format
+  - field: items[1].sku
+    message: SKU not found in catalog
+  - field: shippingAddress
+    message: Incomplete address
+warnings: []
+fraudScore: 0
+inventoryStatus: null
+```
+
+### Warning Response
+
+```yaml
+valid: true
+errors: []
+warnings:
+  - field: items[0]
+    message: Only 3 of 10 units available
+    suggestion: Reduce quantity or backorder
+  - field: phone
+    message: Phone format invalid, please verify
+fraudScore: 25
+inventoryStatus:
+  allAvailable: false
+  partialAvailable: true
+```
+
+## Error Codes
+
+```yaml
+errorCodes:
+  MISSING_FIELD: Required field missing
+  INVALID_FORMAT: Data format invalid
+  INVALID_SKU: Product not found
+  PRICE_MISMATCH: Price manipulation detected
+  OUT_OF_STOCK: Insufficient inventory
+  ADDRESS_INVALID: Address cannot be verified
+  PAYMENT_INVALID: Payment method invalid
+  HIGH_FRAUD_RISK: Fraud score too high
+```
+
+## Related
+
+- [[order-processor-agent.mdx|Order Processor Agent]]
+- [[inventory-clerk-agent.mdx|Inventory Clerk Agent]]
+- [[processOrder.mdx|Process Order Workflow]]
+- [[calculateShipping.mdx|Calculate Shipping Function]]
+- [[ShopifyOrders.mdx|Shopify Integration]]
+
+## Implementation
+
+```typescript
+import type { BusinessModule } from 'graphdl'
+
+interface OrderParams {
+  orderId: string
+  items: Array<{ sku: string; quantity: number; price: number }>
+  shippingAddress: {
+    street: string
+    city: string
+    state: string
+    postalCode: string
+    country: string
+  }
+  billingAddress: {
+    street: string
+    city: string
+    state: string
+    postalCode: string
+    country: string
+  }
+  paymentMethod: string
+  email: string
+  phone?: string
+  ipAddress: string
+  total: number
+}
+
+interface ValidationError {
+  field: string
+  message: string
+  suggestion?: string
+}
+
+interface OrderValidationResult {
+  valid: boolean
+  errors: ValidationError[]
+  warnings: ValidationError[]
+  fraudScore: number
+  inventoryStatus: {
+    allAvailable: boolean
+    items: Array<{ sku: string; available: boolean; warehouse?: string }>
+  }
+}
+
+/**
+ * Validate Order Function - Comprehensive order validation with fraud detection
+ *
+ * Relationships:
+ * - Used by Order Processor Agent for order fulfillment
+ * - Used by Process Order Workflow before payment processing
+ * - Calls detectFraud function for risk assessment
+ */
+export const validateOrder: BusinessModule = $ => {
+  const { db, ai, api, send, on } = $
+
+  async function performOrderValidation(params: OrderParams): Promise<OrderValidationResult> {
+    const errors: ValidationError[] = []
+    const warnings: ValidationError[] = []
+
+    // Email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(params.email)) {
+      errors.push({ field: 'email', message: 'Invalid email format' })
+    }
+
+    // Phone validation (optional)
+    if (params.phone) {
+      const phoneRegex = /^\+?[1-9]\d{1,14}$/
+      if (!phoneRegex.test(params.phone.replace(/[^0-9+]/g, ''))) {
+        warnings.push({ field: 'phone', message: 'Phone format invalid, please verify' })
+      }
+    }
+
+    // Address validation
+    for (const [type, address] of [
+      ['shipping', params.shippingAddress],
+      ['billing', params.billingAddress],
+    ]) {
+      if (!address.street || !address.city || !address.state || !address.postalCode) {
+        errors.push({ field: `${type}Address`, message: 'Incomplete address' })
+      }
+    }
+
+    // SKU and price validation
+    for (let i = 0; i < params.items.length; i++) {
+      const item = params.items[i]
+      const product = await db.products.findOne({ sku: item.sku })
+
+      if (!product) {
+        errors.push({ field: `items[${i}].sku`, message: 'SKU not found in catalog' })
+        continue
+      }
+
+      if (Math.abs(product.price - item.price) > 0.01) {
+        errors.push({
+          field: `items[${i}].price`,
+          message: 'Price manipulation detected',
+          suggestion: `Expected $${product.price}, got $${item.price}`,
+        })
+      }
+    }
+
+    // Inventory check
+    const inventoryResults = await Promise.all(
+      params.items.map(async item => {
+        const stock = await db.inventory.findOne({ sku: item.sku })
+        return {
+          sku: item.sku,
+          available: stock ? stock.quantity >= item.quantity : false,
+          warehouse: stock?.warehouse,
+        }
+      })
+    )
+
+    const allAvailable = inventoryResults.every(r => r.available)
+    if (!allAvailable) {
+      for (const result of inventoryResults) {
+        if (!result.available) {
+          warnings.push({
+            field: `items.${result.sku}`,
+            message: 'Insufficient stock',
+            suggestion: 'Reduce quantity or backorder',
+          })
+        }
+      }
+    }
+
+    // Fraud detection
+    const userHistory = await db.orders.findMany({ email: params.email })
+    const fraudResult = await api.post('/functions/detectFraud', {
+      transaction: {
+        amount: params.total,
+        billingCountry: params.billingAddress.country,
+        shippingCountry: params.shippingAddress.country,
+        ipAddress: params.ipAddress,
+      },
+      userHistory,
+      deviceFingerprint: 'device-hash',
+    })
+
+    if (fraudResult.isFraud) {
+      errors.push({
+        field: 'fraud',
+        message: `High fraud risk detected (${fraudResult.confidence}%)`,
+        suggestion: fraudResult.recommendedAction,
+      })
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors,
+      warnings,
+      fraudScore: fraudResult.confidence,
+      inventoryStatus: {
+        allAvailable,
+        items: inventoryResults,
+      },
+    }
+  }
+
+  on.function.completed(async event => {
+    await db.analytics.track({
+      event: 'order_validated',
+      valid: event.result.valid,
+      errorsCount: event.result.errors.length,
+      fraudScore: event.result.fraudScore,
+      timestamp: new Date(),
+    })
+  })
+
+  return { validateOrder: performOrderValidation }
+}
+```

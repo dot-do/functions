@@ -1,0 +1,172 @@
+---
+title: optimizeQuery
+$type: Function
+name: optimizeQuery
+description: Optimize database queries for performance
+
+input:
+  query: SQL query to optimize
+  schema: Database schema definition (object)
+  dialect: SQL dialect (postgres, mysql, sqlite)
+
+output:
+  optimizedQuery: Improved query
+  explanation: Optimization explanation
+  estimatedImprovement: Performance improvement percentage (number)
+  indexes: Recommended indexes to create (array)
+---
+
+# Optimize Query Function
+
+Analyze and optimize SQL queries for better database performance.
+
+## Optimizations
+
+**Query Improvements:**
+- Add missing indexes
+- Eliminate N+1 queries
+- Use JOIN instead of subqueries
+- Remove unnecessary columns
+- Optimize WHERE clauses
+
+**Performance Analysis:**
+- Query execution plan
+- Table scan detection
+- Index usage analysis
+- Cost estimation
+
+## Usage
+
+```yaml
+function: optimizeQuery
+input:
+  query: |
+    SELECT *
+    FROM orders o
+    WHERE o.customer_id IN (
+      SELECT id FROM customers WHERE country = 'US'
+    )
+  schema:
+    orders:
+      columns: [id, customer_id, total, created_at]
+      indexes: [id]
+    customers:
+      columns: [id, name, country]
+      indexes: [id]
+  dialect: postgres
+output:
+  optimizedQuery: |
+    SELECT o.id, o.customer_id, o.total, o.created_at
+    FROM orders o
+    INNER JOIN customers c ON o.customer_id = c.id
+    WHERE c.country = 'US'
+  explanation: "Replaced IN subquery with JOIN, removed SELECT *"
+  estimatedImprovement: 65
+  indexes:
+    - CREATE INDEX idx_customers_country ON customers(country)
+    - CREATE INDEX idx_orders_customer_id ON orders(customer_id)
+```
+
+## Related
+
+- [[../workflows/deployApplication|Deploy Application Workflow]]
+- [[../agents/CodeReviewer|Code Reviewer Agent]]
+
+## Implementation
+
+```typescript
+import type { BusinessModule } from 'graphdl'
+
+interface QueryParams {
+  query: string
+  schema: Record<string, { columns: string[]; indexes: string[] }>
+  dialect: 'postgres' | 'mysql' | 'sqlite'
+}
+
+interface QueryResult {
+  optimizedQuery: string
+  explanation: string
+  estimatedImprovement: number
+  indexes: string[]
+}
+
+/**
+ * Optimize Query Function - SQL query performance optimization
+ *
+ * Relationships:
+ * - Used by Code Reviewer Agent during PR reviews
+ * - Used by Deploy Application Workflow for pre-deployment checks
+ * - Analyzes query plans and suggests index improvements
+ */
+export const optimizeQuery: BusinessModule = $ => {
+  const { db, ai, api, send, on } = $
+
+  async function performQueryOptimization(params: QueryParams): Promise<QueryResult> {
+    const indexes: string[] = []
+    let optimizedQuery = params.query
+    const improvements: string[] = []
+
+    // Remove SELECT *
+    if (optimizedQuery.includes('SELECT *')) {
+      const tables = Object.keys(params.schema)
+      const firstTable = tables[0]
+      const columns = params.schema[firstTable].columns.slice(0, 5).join(', ')
+      optimizedQuery = optimizedQuery.replace('SELECT *', `SELECT ${columns}`)
+      improvements.push('Replaced SELECT * with explicit columns')
+    }
+
+    // Convert IN subquery to JOIN
+    const inSubqueryRegex = /WHERE\s+(\w+)\s+IN\s+\(SELECT\s+(\w+)\s+FROM\s+(\w+)\s+WHERE\s+(.+?)\)/i
+    const match = optimizedQuery.match(inSubqueryRegex)
+    if (match) {
+      const [, column, subColumn, subTable, subWhere] = match
+      optimizedQuery = optimizedQuery.replace(
+        match[0],
+        `INNER JOIN ${subTable} ON ${column} = ${subTable}.${subColumn} WHERE ${subWhere}`
+      )
+      improvements.push('Replaced IN subquery with JOIN')
+    }
+
+    // Suggest missing indexes
+    const whereClauseRegex = /WHERE\s+(\w+)\.(\w+)\s*=/gi
+    let whereMatch
+    while ((whereMatch = whereClauseRegex.exec(optimizedQuery)) !== null) {
+      const [, table, column] = whereMatch
+      if (params.schema[table] && !params.schema[table].indexes.includes(column)) {
+        indexes.push(`CREATE INDEX idx_${table}_${column} ON ${table}(${column})`)
+      }
+    }
+
+    // AI-powered optimization suggestions
+    const aiAnalysis = await ai.analyze(
+      `Analyze this ${params.dialect} query for optimization opportunities:\n\n${params.query}\n\nSchema: ${JSON.stringify(params.schema)}`,
+      { maxTokens: 200 }
+    )
+
+    const explanation = improvements.join(', ') + '. ' + aiAnalysis
+
+    // Estimate improvement (rough heuristic)
+    let estimatedImprovement = 0
+    if (improvements.length > 0) estimatedImprovement += 30
+    if (indexes.length > 0) estimatedImprovement += 35
+
+    return {
+      optimizedQuery,
+      explanation,
+      estimatedImprovement: Math.min(100, estimatedImprovement),
+      indexes,
+    }
+  }
+
+  on.function.completed(async event => {
+    await db.analytics.track({
+      event: 'query_optimized',
+      dialect: event.params.dialect,
+      improvement: event.result.estimatedImprovement,
+      timestamp: new Date(),
+    })
+  })
+
+  return { optimizeQuery: performQueryOptimization }
+}
+```

@@ -1,0 +1,178 @@
+---
+title: parseCode
+$type: Function
+name: parseCode
+description: Parse source code and generate abstract syntax tree
+
+input:
+  code: Source code to parse
+  language: Programming language (javascript, typescript, python, etc)
+  includeComments: Include comments in AST (bool)
+
+output:
+  ast: Abstract syntax tree (object)
+  symbols: List of symbols (functions, classes, variables) (array)
+  dependencies: List of imports and dependencies (array)
+  metrics: Code metrics (lines, complexity, etc) (object)
+---
+
+# Parse Code Function
+
+Parse source code into an abstract syntax tree for analysis.
+
+## Usage
+
+```yaml
+function: parseCode
+input:
+  code: |
+    function hello(name) {
+      return `Hello, ${name}!`
+    }
+  language: javascript
+  includeComments: true
+```
+
+## Output
+
+```yaml
+ast:
+  type: Program
+  body:
+    - type: FunctionDeclaration
+      id: {name: "hello"}
+      params: [{name: "name"}]
+symbols:
+  - name: hello
+    type: function
+    line: 1
+dependencies: []
+metrics:
+  lines: 3
+  complexity: 1
+```
+
+## Related
+
+- [[../agents/CodeReviewer|Code Reviewer Agent]]
+- [[generateDocs|Generate Docs Function]]
+
+## Implementation
+
+```typescript
+import type { BusinessModule } from 'graphdl'
+
+interface ParseParams {
+  code: string
+  language: 'javascript' | 'typescript' | 'python' | 'java' | 'go'
+  includeComments?: boolean
+}
+
+interface Symbol {
+  name: string
+  type: 'function' | 'class' | 'variable' | 'import'
+  line: number
+  comment?: string
+  params?: string[]
+}
+
+interface ParseResult {
+  ast: any
+  symbols: Symbol[]
+  dependencies: string[]
+  metrics: {
+    lines: number
+    complexity: number
+    functions: number
+    classes: number
+  }
+}
+
+/**
+ * Parse Code Function - AST generation and code structure analysis
+ *
+ * Relationships:
+ * - Used by Code Reviewer Agent for PR analysis
+ * - Used by generateDocs function for documentation extraction
+ * - Used by analyzeCode function for quality metrics
+ */
+export const parseCode: BusinessModule = $ => {
+  const { db, ai, api, send, on } = $
+
+  async function performCodeParsing(params: ParseParams): Promise<ParseResult> {
+    // Use appropriate parser based on language
+    let parser: string
+    switch (params.language) {
+      case 'javascript':
+      case 'typescript':
+        parser = '@babel/parser'
+        break
+      case 'python':
+        parser = 'python-parser'
+        break
+      default:
+        parser = 'generic-parser'
+    }
+
+    // Parse code into AST (simplified - would use actual parser library)
+    const lines = params.code.split('\n')
+    const symbols: Symbol[] = []
+    const dependencies: string[] = []
+    let complexity = 1
+
+    // Extract imports/dependencies
+    const importRegex = /^import\s+(?:{[^}]+}|\w+)\s+from\s+['"]([^'"]+)['"]/gm
+    let importMatch
+    while ((importMatch = importRegex.exec(params.code)) !== null) {
+      dependencies.push(importMatch[1])
+      symbols.push({ name: importMatch[1], type: 'import', line: 0 })
+    }
+
+    // Extract functions
+    const functionRegex = /function\s+(\w+)\s*\(([^)]*)\)/g
+    let functionMatch
+    while ((functionMatch = functionRegex.exec(params.code)) !== null) {
+      const [, name, paramsStr] = functionMatch
+      const params = paramsStr.split(',').map(p => p.trim())
+      symbols.push({ name, type: 'function', line: 0, params })
+    }
+
+    // Calculate cyclomatic complexity (simplified)
+    const conditionals = (params.code.match(/\b(if|else|while|for|switch|case)\b/g) || []).length
+    complexity = 1 + conditionals
+
+    // Count metrics
+    const functions = symbols.filter(s => s.type === 'function').length
+    const classes = symbols.filter(s => s.type === 'class').length
+
+    // Simplified AST structure
+    const ast = {
+      type: 'Program',
+      body: symbols.map(s => ({ type: s.type, name: s.name })),
+    }
+
+    return {
+      ast,
+      symbols,
+      dependencies,
+      metrics: {
+        lines: lines.length,
+        complexity,
+        functions,
+        classes,
+      },
+    }
+  }
+
+  on.function.called(async event => {
+    await db.analytics.track({
+      event: 'code_parsed',
+      language: event.params.language,
+      lines: event.result.metrics.lines,
+      timestamp: new Date(),
+    })
+  })
+
+  return { parseCode: performCodeParsing }
+}
+```

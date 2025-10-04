@@ -1,0 +1,668 @@
+---
+title: calculate-shipping
+$type: Function
+name: calculate-shipping
+description: Calculate shipping costs and delivery times across multiple carriers
+
+input:
+  origin: Origin address or warehouse ID
+  destination: Destination address object
+  packages: Array of packages with dimensions and weight
+  items: Array of items (for value and insurance)
+  serviceLevel: economy | standard | express | overnight
+  insuranceRequired: Include insurance (boolean)
+  signatureRequired: Require signature (boolean)
+
+output:
+  options: Array of shipping options
+  recommended: Recommended option
+  cheapest: Cheapest option
+  fastest: Fastest option
+
+config:
+  carriers:
+    - USPS
+    - UPS
+    - FedEx
+  includeResidentialSurcharge: true
+  calculateTaxes: true
+  timeout: 5000
+
+packageLimits:
+  maxWeight: 150 # lbs
+  maxLength: 108 # inches
+  maxGirth: 165 # inches (length + 2×(width + height))
+
+rateAdjustments:
+  residentialSurcharge: 1.15 # 15%
+  remoteSurcharge: 1.25 # 25%
+  peakSeasonSurcharge: 1.10 # 10%
+---
+
+# Calculate Shipping Function
+
+Calculate shipping costs and delivery estimates across multiple carriers with real-time rate queries.
+
+## Calculation Process
+
+```
+Input Validation
+  ↓
+Package Dimension Check
+  ↓
+Dimensional Weight Calculation
+  ↓
+Query Carrier Rates (parallel)
+  ├─→ USPS API
+  ├─→ UPS API
+  └─→ FedEx API
+  ↓
+Apply Surcharges
+  ↓
+Add Insurance & Signature
+  ↓
+Calculate Delivery Dates
+  ↓
+Rank Options
+  ↓
+Return Results
+```
+
+## Package Validation
+
+### Weight Limits
+
+```yaml
+limits:
+  USPS: 70 lbs
+  UPS: 150 lbs
+  FedEx: 150 lbs
+
+errors:
+  overWeight: Package exceeds carrier weight limit
+  action: Split into multiple packages or deny
+```
+
+### Dimension Limits
+
+**Girth Calculation:**
+```yaml
+girth: length + 2 × (width + height)
+
+example:
+  length: 20 inches
+  width: 15 inches
+  height: 10 inches
+  girth: 20 + 2×(15+10) = 70 inches
+
+limits:
+  USPS: 130 inches (length + girth)
+  UPS: 165 inches
+  FedEx: 165 inches
+```
+
+**Oversized Surcharge:**
+```yaml
+oversized:
+  condition: length > 48 OR girth > 105
+  surcharge: $75 - $150 depending on carrier
+```
+
+## Dimensional Weight
+
+### DIM Weight Calculation
+
+**Formula:**
+```yaml
+dimWeight: (length × width × height) / dimDivisor
+
+dimDivisors:
+  domestic: 139
+  international: 166
+
+example:
+  dimensions: 20 × 15 × 10 inches
+  volume: 3000 cubic inches
+  dimWeight: 3000 / 139 = 21.6 lbs
+
+actualWeight: 15 lbs
+billableWeight: 21.6 lbs (higher of actual vs DIM)
+```
+
+### Multi-Package Optimization
+
+```yaml
+scenario:
+  items: 50 lbs total
+  options:
+    - singlePackage:
+        weight: 50 lbs
+        cost: $45
+
+    - twoPackages:
+        package1: 25 lbs → $25
+        package2: 25 lbs → $25
+        total: $50
+
+selection: Single package (cheaper)
+```
+
+## Carrier Rate Queries
+
+### USPS Rates
+
+**Service Levels:**
+```yaml
+services:
+  economy:
+    - Parcel Select Ground: 2-8 days, cheapest
+  standard:
+    - Priority Mail: 1-3 days, $10-30
+  express:
+    - Priority Mail Express: 1-2 days, $30-60
+```
+
+**Rate Example:**
+```yaml
+query:
+  origin: 90210
+  destination: 10001
+  weight: 10 lbs
+  dimensions: 12×10×8
+
+response:
+  - service: Priority Mail
+    cost: $15.50
+    deliveryDays: 2
+    estimatedDelivery: 2024-10-06
+```
+
+### UPS Rates
+
+**Service Levels:**
+```yaml
+services:
+  economy:
+    - Ground: 1-5 days, $12-40
+  standard:
+    - 3 Day Select: 3 days, $25-50
+    - 2nd Day Air: 2 days, $35-70
+  express:
+    - Next Day Air Saver: 1 day, $50-100
+  overnight:
+    - Next Day Air Early: 8:30 AM, $80-150
+```
+
+**Rate Query:**
+```yaml
+request:
+  origin:
+    postalCode: 90210
+    country: US
+  destination:
+    postalCode: 10001
+    country: US
+  package:
+    weight: 10
+    dimensions:
+      length: 12
+      width: 10
+      height: 8
+
+response:
+  - serviceCode: "03" # Ground
+    serviceName: UPS Ground
+    cost: $16.25
+    transitDays: 4
+    deliveryDate: 2024-10-08
+```
+
+### FedEx Rates
+
+**Service Levels:**
+```yaml
+services:
+  economy:
+    - Ground: 1-5 days, $12-45
+    - Home Delivery: 1-5 days, residential
+  standard:
+    - Express Saver: 3 days, $30-60
+    - 2Day: 2 days, $40-80
+  express:
+    - Standard Overnight: 3 PM, $60-120
+  overnight:
+    - Priority Overnight: 10:30 AM, $80-150
+    - First Overnight: 8:30 AM, $100-200
+```
+
+**Rate Example:**
+```yaml
+service: FedEx Ground
+cost: $14.85
+transitDays: 4
+deliveryDate: 2024-10-08
+```
+
+## Surcharges
+
+### Residential Surcharge
+
+```yaml
+residentialSurcharge:
+  applies: true
+  multiplier: 1.15 # 15% increase
+
+calculation:
+  baseRate: $20.00
+  residentialSurcharge: $3.00
+  total: $23.00
+```
+
+### Remote Area Surcharge
+
+```yaml
+remoteAreaSurcharge:
+  applies: true # based on ZIP code
+  multiplier: 1.25 # 25% increase
+
+remoteZIPs:
+  - Rural Alaska
+  - Remote Hawaii
+  - US Territories
+
+calculation:
+  baseRate: $20.00
+  remoteSurcharge: $5.00
+  total: $25.00
+```
+
+### Peak Season Surcharge
+
+```yaml
+peakSeasonSurcharge:
+  applies: true
+  dates: Nov 1 - Jan 15
+  multiplier: 1.10 # 10% increase
+
+calculation:
+  baseRate: $20.00
+  peakSurcharge: $2.00
+  total: $22.00
+```
+
+### Fuel Surcharge
+
+**Dynamic Rate:**
+```yaml
+fuelSurcharge:
+  currentRate: 12.5% # updated weekly by carriers
+  applies: true
+
+calculation:
+  baseRate: $20.00
+  fuelSurcharge: $2.50
+  total: $22.50
+```
+
+## Additional Services
+
+### Insurance
+
+**Calculation:**
+```yaml
+insurance:
+  required: true
+  itemValue: $500
+  coverage: $500
+  rate: $0.50 per $100 value
+  cost: $2.50
+
+included:
+  USPS: $50 included
+  UPS: $100 included
+  FedEx: $100 included
+
+additionalInsurance:
+  value: $500
+  includedCoverage: $100
+  additionalCoverage: $400
+  cost: $2.00
+```
+
+### Signature Confirmation
+
+```yaml
+signatureOptions:
+  - standard:
+      cost: $3.50
+      description: Any adult signature
+
+  - adult:
+      cost: $6.50
+      description: Adult 21+ signature
+
+  - indirect:
+      cost: $5.50
+      description: Any adult, neighbors accepted
+```
+
+### Saturday Delivery
+
+```yaml
+saturdayDelivery:
+  available: true # UPS, FedEx only
+  surcharge: $15-30
+  estimatedDelivery: 2024-10-05 (Saturday)
+```
+
+## Delivery Date Calculation
+
+### Transit Time Estimation
+
+**Business Days Only:**
+```yaml
+calculation:
+  shipDate: 2024-10-04 (Friday)
+  transitDays: 3
+  excludeWeekends: true
+  excludeHolidays: true
+
+  calendar:
+    - 2024-10-04: Ship date
+    - 2024-10-05: Weekend (skip)
+    - 2024-10-06: Weekend (skip)
+    - 2024-10-07: Day 1
+    - 2024-10-08: Day 2
+    - 2024-10-09: Day 3 (Delivery)
+
+  estimatedDelivery: 2024-10-09
+```
+
+### Holiday Handling
+
+```yaml
+holidays:
+  - 2024-11-28: Thanksgiving
+  - 2024-12-25: Christmas
+  - 2025-01-01: New Year's Day
+
+impact:
+  shipDate: 2024-11-27 (Wednesday)
+  transitDays: 2
+  holiday: 2024-11-28 (Thursday)
+  deliveryDate: 2024-12-02 (Monday, skip weekend)
+```
+
+## Rate Comparison
+
+### Returned Options
+
+```yaml
+options:
+  - carrier: USPS
+    service: Priority Mail
+    cost: $15.50
+    deliveryDays: 2
+    deliveryDate: 2024-10-06
+    tracking: true
+    insurance: $50 included
+
+  - carrier: UPS
+    service: Ground
+    cost: $16.25
+    deliveryDays: 4
+    deliveryDate: 2024-10-08
+    tracking: true
+    insurance: $100 included
+
+  - carrier: FedEx
+    service: Ground
+    cost: $14.85
+    deliveryDays: 4
+    deliveryDate: 2024-10-08
+    tracking: true
+    insurance: $100 included
+
+recommended:
+  carrier: USPS
+  service: Priority Mail
+  reason: Best balance of cost and speed
+
+cheapest:
+  carrier: FedEx
+  service: Ground
+  cost: $14.85
+
+fastest:
+  carrier: USPS
+  service: Priority Mail Express
+  cost: $42.50
+  deliveryDays: 1
+```
+
+## Service Level Mapping
+
+### Customer-Facing Options
+
+```yaml
+serviceLevels:
+  economy:
+    name: Standard Shipping
+    description: 4-8 business days
+    cost: Starting at $5.99
+    carriers: [USPS Parcel Select, FedEx Ground]
+
+  standard:
+    name: Fast Shipping
+    description: 2-3 business days
+    cost: Starting at $12.99
+    carriers: [USPS Priority, UPS 3-Day]
+
+  express:
+    name: Express Shipping
+    description: 1-2 business days
+    cost: Starting at $29.99
+    carriers: [USPS Express, UPS 2nd Day]
+
+  overnight:
+    name: Overnight Shipping
+    description: Next business day
+    cost: Starting at $49.99
+    carriers: [UPS Next Day, FedEx Priority Overnight]
+```
+
+## Free Shipping Threshold
+
+```yaml
+freeShipping:
+  threshold: $50
+  applies: economy service only
+
+calculation:
+  orderTotal: $60
+  shippingCost: $8.99
+  qualifiesForFree: true
+  customerPays: $0.00
+
+  orderTotal: $45
+  shippingCost: $8.99
+  qualifiesForFree: false
+  customerPays: $8.99
+```
+
+## International Shipping
+
+### Customs & Duties
+
+```yaml
+international:
+  origin: US
+  destination: CA (Canada)
+  itemValue: $200
+  customsFee: $15
+  dutyRate: 6.5%
+  duty: $13
+  taxes: $26 (13% HST)
+  totalDuties: $54
+
+customerNote: |
+  Recipient responsible for customs fees,
+  duties, and taxes upon delivery.
+```
+
+### Restricted Countries
+
+```yaml
+restricted:
+  - CU: Cuba
+  - IR: Iran
+  - KP: North Korea
+  - SD: Sudan
+  - SY: Syria
+
+error:
+  country: IR
+  message: Shipping to this destination is not available
+```
+
+## Error Handling
+
+```yaml
+errors:
+  INVALID_ADDRESS: Cannot validate destination
+  OVERSIZED_PACKAGE: Exceeds carrier limits
+  RESTRICTED_DESTINATION: Cannot ship to location
+  RATE_UNAVAILABLE: Carrier API unavailable
+  TIMEOUT: Rate query timed out
+
+fallback:
+  useEstimatedRates: true
+  notifyOpsTeam: true
+```
+
+## Related
+
+- [[shipping-coordinator-agent.mdx|Shipping Coordinator Agent]]
+- [[order-processor-agent.mdx|Order Processor Agent]]
+- [[processOrder.mdx|Process Order Workflow]]
+- [[trackShipment.mdx|Track Shipment Workflow]]
+- [[validateOrder.mdx|Validate Order Function]]
+- [[UPSTracking.mdx|UPS Tracking Integration]]
+
+## Implementation
+
+```typescript
+import type { BusinessModule } from 'graphdl'
+
+interface ShippingParams {
+  origin: string
+  destination: { street: string; city: string; state: string; postalCode: string; country: string }
+  packages: Array<{ weight: number; length: number; width: number; height: number }>
+  items: Array<{ name: string; value: number }>
+  serviceLevel: 'economy' | 'standard' | 'express' | 'overnight'
+  insuranceRequired?: boolean
+  signatureRequired?: boolean
+}
+
+interface ShippingOption {
+  carrier: string
+  service: string
+  cost: number
+  deliveryDays: number
+  deliveryDate: Date
+  tracking: boolean
+  insurance: number
+}
+
+interface ShippingResult {
+  options: ShippingOption[]
+  recommended: ShippingOption
+  cheapest: ShippingOption
+  fastest: ShippingOption
+}
+
+/**
+ * Calculate Shipping Function - Multi-carrier rate comparison
+ *
+ * Relationships:
+ * - Used by Order Processor Agent for order fulfillment
+ * - Used by Shipping Coordinator Agent for logistics optimization
+ * - Queries USPS, UPS, and FedEx APIs for real-time rates
+ */
+export const calculateShipping: BusinessModule = $ => {
+  const { db, ai, api, send, on } = $
+
+  async function performShippingCalculation(params: ShippingParams): Promise<ShippingResult> {
+    const options: ShippingOption[] = []
+
+    // Calculate dimensional weight
+    const dimWeight = params.packages.reduce((sum, pkg) => {
+      const volume = pkg.length * pkg.width * pkg.height
+      return sum + volume / 139 // DIM divisor for domestic
+    }, 0)
+
+    const actualWeight = params.packages.reduce((sum, pkg) => sum + pkg.weight, 0)
+    const billableWeight = Math.max(dimWeight, actualWeight)
+
+    // Query carrier APIs in parallel
+    const [uspsRates, upsRates, fedexRates] = await Promise.all([
+      api.post('https://api.usps.com/rates', {
+        origin: params.origin,
+        destination: params.destination.postalCode,
+        weight: billableWeight,
+        service: params.serviceLevel,
+      }),
+      api.post('https://api.ups.com/rates', {
+        origin: params.origin,
+        destination: params.destination,
+        weight: billableWeight,
+        dimensions: params.packages[0],
+        service: params.serviceLevel,
+      }),
+      api.post('https://api.fedex.com/rates', {
+        origin: params.origin,
+        destination: params.destination,
+        weight: billableWeight,
+        service: params.serviceLevel,
+      }),
+    ])
+
+    // Parse and normalize rates
+    for (const rate of [...uspsRates, ...upsRates, ...fedexRates]) {
+      const deliveryDate = new Date()
+      deliveryDate.setDate(deliveryDate.getDate() + rate.transitDays)
+
+      options.push({
+        carrier: rate.carrier,
+        service: rate.service,
+        cost: rate.cost,
+        deliveryDays: rate.transitDays,
+        deliveryDate,
+        tracking: true,
+        insurance: rate.includedInsurance || 0,
+      })
+    }
+
+    // Find best options
+    const cheapest = options.reduce((min, opt) => (opt.cost < min.cost ? opt : min))
+    const fastest = options.reduce((min, opt) => (opt.deliveryDays < min.deliveryDays ? opt : min))
+
+    // AI recommendation based on cost/speed balance
+    const recommended =
+      options.find(opt => opt.deliveryDays <= 3 && opt.cost < cheapest.cost * 1.5) || cheapest
+
+    return { options, recommended, cheapest, fastest }
+  }
+
+  on.function.called(async event => {
+    await db.analytics.track({
+      event: 'shipping_calculated',
+      serviceLevel: event.params.serviceLevel,
+      destination: event.params.destination.state,
+      timestamp: new Date(),
+    })
+  })
+
+  return { calculateShipping: performShippingCalculation }
+}
+```

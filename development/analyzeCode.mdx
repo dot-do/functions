@@ -1,0 +1,195 @@
+---
+title: analyzeCode
+$type: Function
+name: analyzeCode
+description: Analyze code quality, complexity, and security issues
+
+input:
+  code: Source code to analyze
+  language: Programming language
+  checkSecurity: Run security analysis (bool)
+  checkPerformance: Run performance analysis (bool)
+
+output:
+  quality: Code quality score 0-100 (number)
+  complexity: Cyclomatic complexity (number)
+  issues: Array of code issues (array)
+  recommendations: Array of improvement suggestions (array)
+  securityIssues: Array of security vulnerabilities (array)
+---
+
+# Analyze Code Function
+
+Comprehensive code analysis for quality, complexity, security, and performance.
+
+## Features
+
+**Code Quality:**
+- Style consistency
+- Best practices adherence
+- Code smells detection
+- Maintainability index
+
+**Complexity Analysis:**
+- Cyclomatic complexity
+- Cognitive complexity
+- Function length
+- Nesting depth
+
+**Security Scanning:**
+- SQL injection risks
+- XSS vulnerabilities
+- Hardcoded secrets
+- Insecure dependencies
+
+## Usage
+
+```yaml
+function: analyzeCode
+input:
+  code: |
+    function processPayment(amount, cardNumber) {
+      db.query('SELECT * FROM users WHERE id = ' + userId)
+      return fetch('http://api.stripe.com', {
+        body: JSON.stringify({amount, cardNumber})
+      })
+    }
+  language: javascript
+  checkSecurity: true
+output:
+  quality: 35
+  complexity: 8
+  issues:
+    - type: security
+      severity: critical
+      message: SQL injection vulnerability
+      line: 2
+  recommendations:
+    - Use parameterized queries
+    - Use HTTPS for API calls
+    - Don't log sensitive data
+```
+
+## Related
+
+- [[parseCode|Parse Code Function]]
+- [[../agents/CodeReviewer|Code Reviewer Agent]]
+- [[../agents/SecurityAuditor|Security Auditor Agent]]
+
+## Implementation
+
+```typescript
+import type { BusinessModule } from 'graphdl'
+
+interface CodeAnalysisParams {
+  code: string
+  language: string
+  checkSecurity?: boolean
+  checkPerformance?: boolean
+}
+
+interface CodeIssue {
+  type: 'quality' | 'security' | 'performance' | 'complexity'
+  severity: 'low' | 'medium' | 'high' | 'critical'
+  message: string
+  line?: number
+  column?: number
+}
+
+interface CodeAnalysisResult {
+  quality: number
+  complexity: number
+  issues: CodeIssue[]
+  recommendations: string[]
+  securityIssues: CodeIssue[]
+}
+
+/**
+ * Analyze Code Function - Comprehensive code quality and security analysis
+ *
+ * Relationships:
+ * - Used by Code Reviewer Agent for PR reviews
+ * - Used by Security Auditor Agent for vulnerability scanning
+ * - Calls parseCode function for AST generation
+ */
+export const analyzeCode: BusinessModule = $ => {
+  const { db, ai, api, send, on } = $
+
+  async function performCodeAnalysis(params: CodeAnalysisParams): Promise<CodeAnalysisResult> {
+    const issues: CodeIssue[] = []
+    const recommendations: string[] = []
+    const securityIssues: CodeIssue[] = []
+
+    // Parse code to AST
+    const ast = await api.post('/functions/parseCode', {
+      code: params.code,
+      language: params.language,
+      includeComments: true,
+    })
+
+    // AI-powered code quality analysis
+    const qualityAnalysis = await ai.analyze(
+      `Analyze this ${params.language} code for quality issues:\n\n${params.code}`,
+      {
+        aspectsToAnalyze: ['maintainability', 'readability', 'best-practices', 'code-smells'],
+      }
+    )
+
+    // Calculate cyclomatic complexity
+    const complexity = ast.metrics.complexity
+
+    // Security analysis if requested
+    if (params.checkSecurity) {
+      const securityPatterns = [
+        { pattern: /eval\(/, issue: 'Use of eval() is dangerous', severity: 'critical' },
+        { pattern: /exec\(/, issue: 'Command injection risk', severity: 'critical' },
+        { pattern: /innerHTML\s*=/, issue: 'XSS vulnerability via innerHTML', severity: 'high' },
+        { pattern: /password|secret|api_key/i, issue: 'Hardcoded credentials detected', severity: 'critical' },
+      ]
+
+      for (const { pattern, issue, severity } of securityPatterns) {
+        if (pattern.test(params.code)) {
+          securityIssues.push({
+            type: 'security',
+            severity: severity as CodeIssue['severity'],
+            message: issue,
+          })
+        }
+      }
+    }
+
+    // Performance analysis if requested
+    if (params.checkPerformance) {
+      if (complexity > 15) {
+        issues.push({
+          type: 'complexity',
+          severity: 'high',
+          message: `Cyclomatic complexity ${complexity} exceeds recommended threshold`,
+        })
+        recommendations.push('Consider refactoring into smaller functions')
+      }
+    }
+
+    // Calculate quality score (0-100)
+    const quality = Math.max(0, 100 - securityIssues.length * 20 - issues.length * 10 - complexity * 2)
+
+    return {
+      quality,
+      complexity,
+      issues,
+      recommendations,
+      securityIssues,
+    }
+  }
+
+  on.function.called(async event => {
+    await db.analytics.track({
+      event: 'code_analysis_requested',
+      language: event.params.language,
+      timestamp: new Date(),
+    })
+  })
+
+  return { analyzeCode: performCodeAnalysis }
+}
+```

@@ -1,0 +1,144 @@
+---
+title: assessRisk
+$type: Function
+name: assessRisk
+description: Assess risk level and generate mitigation recommendations
+
+input:
+  riskFactors: Array of identified risk factors (array)
+  context: Business or project context (object)
+  riskType: Type of risk (financial, operational, compliance, security)
+
+output:
+  riskScore: Overall risk score 0-100 (number)
+  riskLevel: Risk level (low, medium, high, critical)
+  recommendations: Array of mitigation strategies (array)
+  prioritizedRisks: Risks sorted by severity (array)
+---
+
+# Assess Risk Function
+
+Evaluate risks and generate mitigation strategies.
+
+## Usage
+
+```yaml
+function: assessRisk
+input:
+  riskFactors:
+    - type: financial
+      description: High customer concentration
+      impact: high
+      probability: medium
+  context:
+    industry: software
+    companySize: startup
+  riskType: financial
+```
+
+**Output:**
+```yaml
+riskScore: 72
+riskLevel: high
+recommendations:
+  - Diversify customer base
+  - Build cash reserves
+  - Create contingency plans
+```
+
+## Related
+
+- [[../agents/FinancialAdvisor|Financial Advisor Agent]]
+- [[../workflows/prepareAudit|Prepare Audit Workflow]]
+
+## Implementation
+
+```typescript
+import type { BusinessModule } from 'graphdl'
+
+interface RiskFactor {
+  type: 'financial' | 'operational' | 'compliance' | 'security'
+  description: string
+  impact: 'low' | 'medium' | 'high'
+  probability: 'low' | 'medium' | 'high'
+}
+
+interface RiskContext {
+  industry?: string
+  companySize?: string
+  region?: string
+  [key: string]: any
+}
+
+interface RiskAssessmentResult {
+  riskScore: number
+  riskLevel: 'low' | 'medium' | 'high' | 'critical'
+  recommendations: string[]
+  prioritizedRisks: Array<RiskFactor & { score: number }>
+}
+
+/**
+ * Assess Risk Function - Comprehensive risk analysis and mitigation
+ *
+ * Relationships:
+ * - Used by Financial Advisor Agent for investment risk assessment
+ * - Used by Audit workflows for compliance risk evaluation
+ * - Generates mitigation strategies based on risk factors
+ */
+export const assessRisk: BusinessModule = $ => {
+  const { db, ai, api, send, on } = $
+
+  async function performRiskAssessment(
+    riskFactors: RiskFactor[],
+    context: RiskContext,
+    riskType: string
+  ): Promise<RiskAssessmentResult> {
+    // Calculate individual risk scores
+    const scoredRisks = riskFactors.map(factor => {
+      const impactScore = { low: 1, medium: 3, high: 5 }[factor.impact]
+      const probabilityScore = { low: 1, medium: 3, high: 5 }[factor.probability]
+      const score = impactScore * probabilityScore
+      return { ...factor, score }
+    })
+
+    // Sort by severity
+    const prioritizedRisks = scoredRisks.sort((a, b) => b.score - a.score)
+
+    // Calculate overall risk score (0-100)
+    const totalScore = prioritizedRisks.reduce((sum, risk) => sum + risk.score, 0)
+    const maxPossibleScore = riskFactors.length * 25 // 5 * 5
+    const riskScore = Math.min(100, Math.round((totalScore / Math.max(1, maxPossibleScore)) * 100))
+
+    // Determine risk level
+    let riskLevel: RiskAssessmentResult['riskLevel']
+    if (riskScore < 30) riskLevel = 'low'
+    else if (riskScore < 60) riskLevel = 'medium'
+    else if (riskScore < 80) riskLevel = 'high'
+    else riskLevel = 'critical'
+
+    // AI-generated mitigation recommendations
+    const recommendations = await ai.generate(
+      `Based on these risk factors:\n${JSON.stringify(prioritizedRisks, null, 2)}\n\nGenerate 3-5 specific mitigation strategies for a ${context.industry} ${context.companySize}.`,
+      { maxTokens: 300 }
+    )
+
+    return {
+      riskScore,
+      riskLevel,
+      recommendations: recommendations.split('\n').filter(Boolean),
+      prioritizedRisks,
+    }
+  }
+
+  on.function.called(async event => {
+    await db.analytics.track({
+      event: 'risk_assessment_performed',
+      riskType: event.params.riskType,
+      riskLevel: event.result.riskLevel,
+      timestamp: new Date(),
+    })
+  })
+
+  return { assessRisk: performRiskAssessment }
+}
+```
