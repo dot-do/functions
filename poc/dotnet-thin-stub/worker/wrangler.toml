@@ -1,0 +1,22 @@
+name = "dotnet-thin-stub-poc"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# Durable Objects for the shared runtime
+[durable_objects]
+bindings = [
+  { name = "RUNTIME", class_name = "SharedRuntime" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["SharedRuntime"]
+
+# For local development, we'll simulate the WASM execution
+[vars]
+STUB_MODE = "simulation"
+
+# In production, you would add:
+# [wasm_modules]
+# STUB_WASM = "path/to/stub.wasm"
+# RUNTIME_WASM = "path/to/runtime.wasm"

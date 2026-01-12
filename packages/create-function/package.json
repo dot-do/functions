@@ -1,0 +1,22 @@
+{
+  "name": "create-function",
+  "version": "0.1.0",
+  "description": "Scaffold a new Functions.do serverless function",
+  "type": "module",
+  "bin": {
+    "create-function": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "templates"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

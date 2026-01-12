@@ -1,0 +1,26 @@
+{
+  "name": "func-cli",
+  "version": "0.1.0",
+  "description": "Functions.do CLI - Local development server for serverless functions",
+  "type": "module",
+  "bin": {
+    "func": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "esbuild": "^0.27.0",
+    "miniflare": "^3.20250109.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

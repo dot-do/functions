@@ -1,0 +1,36 @@
+{
+  "targets": {
+    "debug": {
+      "outFile": "build/debug.wasm",
+      "textFile": "build/debug.wat",
+      "sourceMap": true,
+      "debug": true,
+      "optimizeLevel": 0,
+      "shrinkLevel": 0
+    },
+    "release": {
+      "outFile": "build/release.wasm",
+      "textFile": "build/release.wat",
+      "sourceMap": false,
+      "optimizeLevel": 3,
+      "shrinkLevel": 2,
+      "noAssert": true
+    }
+  },
+  "options": {
+    "bindings": "esm",
+    "exportRuntime": true,
+    "runtime": "stub",
+    "exportStart": false,
+    "initialMemory": 1,
+    "maximumMemory": 256,
+    "enable": [
+      "simd",
+      "bulk-memory",
+      "sign-extension",
+      "mutable-globals",
+      "nontrapping-f2i",
+      "reference-types"
+    ]
+  }
+}

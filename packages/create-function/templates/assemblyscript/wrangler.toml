@@ -1,0 +1,6 @@
+name = "{{project_name}}"
+main = "build/release.wasm"
+compatibility_date = "{{compatibility_date}}"
+
+[build]
+command = "npm run asbuild"

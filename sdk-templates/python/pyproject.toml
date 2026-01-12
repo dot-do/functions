@@ -1,0 +1,100 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "my-function"
+version = "0.1.0"
+description = "A serverless function for Functions.do"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+keywords = ["serverless", "functions", "cloudflare", "workers"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Typing :: Typed",
+]
+dependencies = [
+    "functions-do>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+my-function = "src.handler:main"
+
+[project.entry-points."functions.do"]
+handler = "src.handler:handler"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "C4",  # flake8-comprehensions
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+strict = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+# Functions.do configuration
+[tool.functions-do]
+# Runtime configuration
+runtime = "python"
+handler = "src.handler:handler"
+
+# Memory snapshot for faster cold starts
+[tool.functions-do.snapshot]
+enabled = true
+preload_modules = [
+    "json",
+    "datetime",
+    "re",
+]
+
+# Environment variables
+[tool.functions-do.env]
+# LOG_LEVEL = "INFO"
+
+# Worker bindings
+[tool.functions-do.bindings]
+# kv_namespaces = ["MY_KV"]
+# d1_databases = ["MY_DB"]
+# r2_buckets = ["MY_BUCKET"]
+
+# Build configuration
+[tool.functions-do.build]
+minify = true
+sourcemap = true

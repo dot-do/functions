@@ -1,0 +1,3 @@
+name = "{{project_name}}"
+main = "src/index.ts"
+compatibility_date = "{{compatibility_date}}"

@@ -1,0 +1,4 @@
+name = "{{project_name}}"
+main = "src/handler.py"
+compatibility_date = "{{compatibility_date}}"
+compatibility_flags = ["python_workers"]

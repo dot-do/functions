@@ -1,0 +1,81 @@
+{
+  "name": "{{functionName}}",
+  "version": "0.1.0",
+  "description": "A Functions.do serverless function built with TypeScript",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./types": {
+      "types": "./src/types.d.ts"
+    },
+    "./bindings": {
+      "types": "./dist/bindings.d.ts",
+      "import": "./dist/bindings.js"
+    },
+    "./stub": {
+      "types": "./dist/stub.d.ts",
+      "import": "./dist/stub.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "functions-build",
+    "build:types": "tsc --declaration --emitDeclarationOnly",
+    "build:bundle": "functions-build --minify",
+    "dev": "functions-dev",
+    "deploy": "functions-deploy",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "docs": "functions-docs",
+    "clean": "rm -rf dist",
+    "generate:types": "functions-generate-types",
+    "generate:bindings": "functions-generate-bindings",
+    "generate:stub": "functions-generate-stub"
+  },
+  "dependencies": {
+    "@functions.do/sdk": "^0.1.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "functions.do",
+    "serverless",
+    "cloudflare-workers",
+    "typescript",
+    "capnweb",
+    "rpc"
+  ],
+  "functions.do": {
+    "runtime": "cloudflare-workers",
+    "language": "typescript",
+    "entryPoint": "src/index.ts",
+    "rpcTarget": "{{FunctionName}}Target",
+    "exports": {
+      "types": "src/types.d.ts",
+      "bindings": "src/bindings.ts",
+      "stub": "src/stub.ts"
+    },
+    "features": {
+      "tracing": true,
+      "metrics": true,
+      "validation": true,
+      "retry": true
+    }
+  }
+}

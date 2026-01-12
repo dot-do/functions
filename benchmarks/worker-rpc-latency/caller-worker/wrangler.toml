@@ -1,0 +1,20 @@
+# Caller Worker (Thin Stub) Configuration
+# This worker delegates function execution to the runtime worker
+
+name = "caller-worker-benchmark"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# Development settings
+[dev]
+port = 8787
+
+# Service binding to runtime worker
+# This is the key mechanism we're benchmarking
+[[services]]
+binding = "RUNTIME"
+service = "runtime-worker-benchmark"
+
+# Environment variable for raw fetch comparison
+[vars]
+RUNTIME_URL = "http://localhost:8788"

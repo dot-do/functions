@@ -1,0 +1,77 @@
+{
+  "name": "{{functionName}}",
+  "version": "0.1.0",
+  "description": "A Functions.do serverless function built with AssemblyScript",
+  "type": "module",
+  "main": "./build/release.wasm",
+  "exports": {
+    ".": {
+      "wasm": "./build/release.wasm",
+      "types": "./types.d.ts"
+    },
+    "./types": {
+      "types": "./types.d.ts"
+    },
+    "./bindings": {
+      "types": "./bindings.d.ts",
+      "import": "./bindings.js"
+    }
+  },
+  "files": [
+    "build",
+    "assembly",
+    "types.d.ts",
+    "bindings.ts",
+    "bindings.js",
+    "bindings.d.ts"
+  ],
+  "scripts": {
+    "asbuild:debug": "asc assembly/index.ts --target debug",
+    "asbuild:release": "asc assembly/index.ts --target release",
+    "asbuild": "npm run asbuild:debug && npm run asbuild:release",
+    "build": "npm run asbuild:release",
+    "build:debug": "npm run asbuild:debug",
+    "build:types": "functions-generate-types",
+    "build:bindings": "functions-generate-bindings",
+    "build:all": "npm run build && npm run build:types && npm run build:bindings",
+    "dev": "functions-dev",
+    "deploy": "functions-deploy",
+    "test": "node --test",
+    "test:wasm": "node --test tests/wasm.test.js",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf build",
+    "start": "npx serve"
+  },
+  "dependencies": {
+    "@assemblyscript/loader": "^0.27.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "@types/node": "^22.0.0",
+    "assemblyscript": "^0.27.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "functions.do",
+    "serverless",
+    "cloudflare-workers",
+    "assemblyscript",
+    "webassembly",
+    "wasm",
+    "capnweb",
+    "rpc"
+  ],
+  "functions.do": {
+    "runtime": "cloudflare-workers",
+    "language": "assemblyscript",
+    "entryPoint": "assembly/index.ts",
+    "buildOutput": "build/release.wasm",
+    "exports": {
+      "types": "types.d.ts",
+      "bindings": "bindings.ts"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "worker-rpc-latency-harness",
+  "version": "1.0.0",
+  "description": "Benchmark harness for worker-to-worker RPC latency",
+  "type": "module",
+  "scripts": {
+    "benchmark": "npx tsx run-benchmark.ts",
+    "benchmark:quick": "npx tsx run-benchmark.ts --iterations=20",
+    "benchmark:full": "npx tsx run-benchmark.ts --iterations=1000 --output=results.json"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.4"
+  }
+}

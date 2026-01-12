@@ -1,0 +1,32 @@
+# Functions.do Python SDK Dependencies
+# ==================================
+#
+# Core dependencies for Functions.do serverless functions.
+# These packages are compatible with Pyodide (Python in WebAssembly).
+#
+# For local development, install with:
+#   pip install -r requirements.txt
+#
+# For production deployment, only Pyodide-compatible packages are supported.
+# See: https://pyodide.org/en/stable/usage/packages-in-pyodide.html
+
+# Functions.do SDK (when published)
+# functions-do>=0.1.0
+
+# Data processing (Pyodide compatible)
+# numpy>=1.24.0
+# pandas>=2.0.0
+
+# JSON handling (Pyodide compatible)
+# pydantic>=2.0.0
+
+# HTTP client (limited in Workers - use fetch API)
+# httpx>=0.24.0
+
+# Date/time utilities (Pyodide compatible)
+# python-dateutil>=2.8.0
+
+# Development dependencies (not needed in production)
+# pytest>=7.0.0
+# mypy>=1.0.0
+# ruff>=0.1.0

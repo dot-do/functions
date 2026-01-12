@@ -1,0 +1,2 @@
+# Add your Python dependencies here
+# Note: Cloudflare Python Workers have limited package support

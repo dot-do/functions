@@ -1,0 +1,14 @@
+name = "{{project_name}}"
+main = "./build/worker.mjs"
+compatibility_date = "{{compatibility_date}}"
+
+[build]
+command = "go run github.com/syumai/workers/cmd/workers-assets-gen@latest && tinygo build -o ./build/app.wasm -target wasm -no-debug ./main.go"
+
+[build.upload]
+format = "modules"
+main = "./worker.mjs"
+
+[[build.upload.rules]]
+globs = ["**/*.wasm"]
+type = "CompiledWasm"

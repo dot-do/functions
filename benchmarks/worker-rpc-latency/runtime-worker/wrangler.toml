@@ -1,0 +1,14 @@
+# Runtime Worker Configuration
+# This worker acts as the shared runtime that executes functions
+
+name = "runtime-worker-benchmark"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# Development settings
+[dev]
+port = 8788
+
+# Ensure we can receive service binding calls
+[triggers]
+# Service bindings don't need external routes in production
