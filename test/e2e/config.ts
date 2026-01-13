@@ -1,3 +1,8 @@
+import { execSync } from 'child_process'
+import { mkdtempSync, writeFileSync, rmSync } from 'fs'
+import { join } from 'path'
+import { tmpdir } from 'os'
+
 /**
  * E2E Test Configuration
  *
@@ -6,16 +11,19 @@
 
 export const E2E_CONFIG = {
   /** Base URL for the functions.do API */
-  baseUrl: process.env.FUNCTIONS_E2E_URL || 'https://functions.do',
+  baseUrl: process.env.FUNCTIONS_E2E_URL || 'https://functions-do.dotdo.workers.dev',
 
   /** API key for authenticated requests (added later with oauth.do) */
   apiKey: process.env.FUNCTIONS_API_KEY,
 
-  /** Timeout for deployment operations (ms) */
-  deployTimeout: 30_000,
+  /** Timeout for deployment operations (ms) - includes wrangler dispatch upload */
+  deployTimeout: 60_000,
 
   /** Timeout for function invocation (ms) */
   invokeTimeout: 10_000,
+
+  /** Timeout for deploy + invoke operations (ms) */
+  deployInvokeTimeout: 90_000,
 
   /** Prefix for test function IDs (for cleanup) */
   testPrefix: 'e2e-test-',
@@ -150,4 +158,87 @@ export async function getFunctionLogs(
   }
 
   return response.json()
+}
+
+/**
+ * Upload a script to the dispatch namespace using wrangler CLI.
+ * This is needed for Workers for Platforms to execute the function.
+ */
+export async function uploadToDispatchNamespace(
+  functionId: string,
+  code: string,
+  language: 'typescript' | 'javascript'
+): Promise<void> {
+  // Create a temporary directory for the worker
+  const tmpDir = mkdtempSync(join(tmpdir(), 'e2e-worker-'))
+
+  try {
+    // Determine file extension
+    const ext = language === 'typescript' ? 'ts' : 'js'
+
+    // Write the worker code
+    writeFileSync(join(tmpDir, `index.${ext}`), code)
+
+    // Write wrangler.jsonc
+    writeFileSync(
+      join(tmpDir, 'wrangler.jsonc'),
+      JSON.stringify({
+        name: functionId,
+        main: `index.${ext}`,
+        compatibility_date: '2025-01-01',
+      })
+    )
+
+    // Write package.json
+    writeFileSync(
+      join(tmpDir, 'package.json'),
+      JSON.stringify({
+        name: functionId,
+        type: 'module',
+      })
+    )
+
+    // Deploy using wrangler
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID || 'b6641681fe423910342b9ffa1364c76d'
+    const namespace = process.env.DISPATCH_NAMESPACE || 'dotdo-public'
+
+    execSync(`npx wrangler deploy --dispatch-namespace=${namespace}`, {
+      cwd: tmpDir,
+      env: {
+        ...process.env,
+        CLOUDFLARE_ACCOUNT_ID: accountId,
+      },
+      stdio: 'pipe',
+    })
+  } finally {
+    // Clean up temporary directory
+    rmSync(tmpDir, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Deploy a function to functions.do AND upload to dispatch namespace.
+ * This combines the API deploy with wrangler dispatch upload for full functionality.
+ */
+export async function deployAndUploadFunction(params: {
+  id: string
+  code: string
+  language: 'typescript' | 'javascript'
+  version?: string
+  entryPoint?: string
+}): Promise<{
+  id: string
+  version: string
+  url: string
+}> {
+  // First deploy via API (stores metadata and code in KV)
+  const result = await deployFunction({
+    ...params,
+    language: params.language,
+  })
+
+  // Then upload to dispatch namespace for execution
+  await uploadToDispatchNamespace(params.id, params.code, params.language)
+
+  return result
 }

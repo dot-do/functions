@@ -5,10 +5,18 @@
   "compatibility_date": "2025-01-01",
   "compatibility_flags": ["nodejs_compat"],
 
-  // Routes
-  "routes": [
-    { "pattern": "functions.do", "custom_domain": true }
+  // Dispatch namespace for Workers for Platforms (dynamic user code execution)
+  "dispatch_namespaces": [
+    {
+      "binding": "USER_FUNCTIONS",
+      "namespace": "dotdo-public"
+    }
   ],
+
+  // Routes - custom domain configured via Cloudflare dashboard
+  // "routes": [
+  //   { "pattern": "functions.do", "custom_domain": true }
+  // ],
 
   // Static Assets for WASM binaries (free, 25MB limit, edge-cached)
   "assets": {
@@ -20,15 +28,15 @@
   "kv_namespaces": [
     {
       "binding": "FUNCTIONS_REGISTRY",
-      "id": "FUNCTIONS_REGISTRY_KV_ID"
+      "id": "0fcccd84fe1143e8a2e19ecfac9c9ba6"
     },
     {
       "binding": "FUNCTIONS_CODE",
-      "id": "FUNCTIONS_CODE_KV_ID"
+      "id": "c30015dfbc894f54b305a0518cec0713"
     },
     {
       "binding": "FUNCTIONS_API_KEYS",
-      "id": "FUNCTIONS_API_KEYS_KV_ID"
+      "id": "6457d71daddf4e24ad8c6631a1c2b380"
     }
   ],
 
@@ -61,7 +69,9 @@
   // Environment variables
   "vars": {
     "ENVIRONMENT": "production",
-    "SERVICE_NAME": "functions.do"
+    "SERVICE_NAME": "functions.do",
+    "CLOUDFLARE_ACCOUNT_ID": "b6641681fe423910342b9ffa1364c76d",
+    "DISPATCH_NAMESPACE": "dotdo-public"
   },
 
   // Production observability

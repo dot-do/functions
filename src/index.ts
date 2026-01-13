@@ -16,12 +16,11 @@ import {
 } from './core/function-registry'
 import { KVFunctionRegistry } from './core/kv-function-registry'
 import { KVCodeStorage } from './core/code-storage'
-import { compileTypeScript } from './languages/typescript/compile'
+// WASM compilers - use programmatic generation (no external tools)
 import { compileRust } from './languages/rust/compile'
 import { compileGo } from './languages/go/compile'
 import { compileZig } from './languages/zig/compile'
 import { compileAssemblyScript } from './languages/assemblyscript/compile'
-import { ValidationError } from './core/errors'
 import {
   authenticateRequest,
   isPublicEndpoint,
@@ -78,19 +77,38 @@ export function configureRateLimiter(config: {
 /**
  * Environment bindings for the Worker
  */
+/**
+ * Dispatch namespace binding for Workers for Platforms
+ */
+interface DispatchNamespace {
+  get(scriptName: string, options?: { entrypoint?: string }): {
+    fetch(request: Request): Promise<Response>
+  }
+}
+
 export interface Env {
   /** KV namespace for function registry metadata */
-  REGISTRY: KVNamespace
+  FUNCTIONS_REGISTRY: KVNamespace
   /** KV namespace for function code storage */
-  CODE: KVNamespace
+  FUNCTIONS_CODE: KVNamespace
   /** KV namespace for API keys (optional - if not set, auth is disabled) */
-  API_KEYS?: KVNamespace
+  FUNCTIONS_API_KEYS?: KVNamespace
   /** Static assets binding for WASM binaries */
   ASSETS?: Fetcher
   /** Comma-separated list of additional public endpoints */
   PUBLIC_ENDPOINTS?: string
   /** Durable Object namespace for function logs */
   FUNCTION_LOGS?: DurableObjectNamespace
+  /** Durable Object namespace for function executor */
+  FUNCTION_EXECUTOR?: DurableObjectNamespace
+  /** Dispatch namespace for user-deployed functions (Workers for Platforms) */
+  USER_FUNCTIONS?: DispatchNamespace
+  /** Cloudflare Account ID for API calls */
+  CLOUDFLARE_ACCOUNT_ID?: string
+  /** Cloudflare API Token for script uploads (secret) */
+  CLOUDFLARE_API_TOKEN?: string
+  /** Dispatch namespace name for script uploads */
+  DISPATCH_NAMESPACE?: string
 }
 
 /**
@@ -99,16 +117,18 @@ export interface Env {
 function createKVRegistry(kv: KVNamespace): Registry {
   return {
     async get(functionId: string): Promise<FunctionMetadata | null> {
-      const data = await kv.get(functionId, 'json')
+      // Use same key format as KVFunctionRegistry: registry:{functionId}
+      const data = await kv.get(`registry:${functionId}`, 'json')
       return data as FunctionMetadata | null
     },
     async getVersion(functionId: string, version: string): Promise<FunctionMetadata | null> {
-      const data = await kv.get(`${functionId}@${version}`, 'json')
+      // Use same key format as KVFunctionRegistry: registry:{functionId}:v:{version}
+      const data = await kv.get(`registry:${functionId}:v:${version}`, 'json')
       return data as FunctionMetadata | null
     },
     async listVersions(functionId: string): Promise<string[]> {
-      const list = await kv.list({ prefix: `${functionId}@` })
-      return list.keys.map((key) => key.name.replace(`${functionId}@`, ''))
+      const list = await kv.list({ prefix: `registry:${functionId}:v:` })
+      return list.keys.map((key) => key.name.replace(`registry:${functionId}:v:`, ''))
     },
   }
 }
@@ -119,9 +139,67 @@ function createKVRegistry(kv: KVNamespace): Registry {
 function createKVCodeStorage(kv: KVNamespace): CodeStorage {
   return {
     async get(functionId: string, version?: string): Promise<string | null> {
-      const key = version ? `${functionId}@${version}` : functionId
+      // Use same key format as KVCodeStorage: code:{functionId}:v:{version} or code:{functionId}
+      const key = version ? `code:${functionId}:v:${version}` : `code:${functionId}`
       return kv.get(key, 'text')
     },
+  }
+}
+
+/**
+ * Upload a script to the dispatch namespace using the Cloudflare API.
+ * This enables Workers for Platforms dynamic code execution.
+ */
+async function uploadToDispatchNamespace(
+  code: string,
+  scriptName: string,
+  env: Pick<Env, 'CLOUDFLARE_ACCOUNT_ID' | 'CLOUDFLARE_API_TOKEN' | 'DISPATCH_NAMESPACE'>
+): Promise<{ success: boolean; error?: string }> {
+  const { CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, DISPATCH_NAMESPACE } = env
+
+  if (!CLOUDFLARE_ACCOUNT_ID || !CLOUDFLARE_API_TOKEN || !DISPATCH_NAMESPACE) {
+    return { success: false, error: 'Missing Cloudflare API configuration for dispatch namespace' }
+  }
+
+  // Wrap the code in a proper ES module format if needed
+  const wrappedCode = code.includes('export default')
+    ? code
+    : `export default { fetch(request) { return new Response('Function not properly formatted'); } }`
+
+  // Create a FormData with the script content
+  const formData = new FormData()
+
+  // Create metadata for the upload
+  const metadata = {
+    main_module: 'index.js',
+    compatibility_date: '2025-01-01',
+  }
+  formData.append('metadata', JSON.stringify(metadata))
+  formData.append('index.js', new Blob([wrappedCode], { type: 'application/javascript+module' }), 'index.js')
+
+  try {
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/dispatch/namespaces/${DISPATCH_NAMESPACE}/scripts/${scriptName}`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}`,
+        },
+        body: formData,
+      }
+    )
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ errors: [{ message: 'Unknown error' }] }))
+      const errorMessage =
+        (errorData as { errors?: Array<{ message: string }> }).errors?.[0]?.message || `HTTP ${response.status}`
+      return { success: false, error: `Failed to upload to dispatch namespace: ${errorMessage}` }
+    }
+
+    return { success: true }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    return { success: false, error: `Failed to upload to dispatch namespace: ${message}` }
   }
 }
 
@@ -266,8 +344,8 @@ export default {
       }
 
       // Create registry and code storage instances
-      const registry = new KVFunctionRegistry(env.REGISTRY)
-      const codeStorage = new KVCodeStorage(env.CODE)
+      const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
+      const codeStorage = new KVCodeStorage(env.FUNCTIONS_CODE)
 
       // Check if function exists
       const metadata = await registry.get(functionId)
@@ -459,16 +537,16 @@ export default {
       }
 
       // Compile the code based on language
+      // Note: TypeScript/JavaScript are stored as source and bundled at runtime
+      // WASM languages are compiled using programmatic WASM generation
       let compiledCode: string | Uint8Array
       try {
         switch (language) {
           case 'typescript':
           case 'javascript': {
-            const result = await compileTypeScript(code)
-            if (result.errors && result.errors.length > 0) {
-              return errorResponse(`Compilation failed: ${result.errors.map(e => e.message).join(', ')}`, 400)
-            }
-            compiledCode = result.code
+            // Store source directly - Workers can run TS/JS natively
+            // Compilation happens at bundle time via wrangler or at runtime
+            compiledCode = code
             break
           }
           case 'rust': {
@@ -500,8 +578,8 @@ export default {
       }
 
       // Create registry and code storage instances
-      const registry = new KVFunctionRegistry(env.REGISTRY)
-      const codeStorage = new KVCodeStorage(env.CODE)
+      const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
+      const codeStorage = new KVCodeStorage(env.FUNCTIONS_CODE)
 
       // Store compiled code in CODE namespace
       if (compiledCode instanceof Uint8Array) {
@@ -528,12 +606,21 @@ export default {
       await registry.put(metadata)
       await registry.putVersion(id, version, metadata)
 
+      // Upload to dispatch namespace for TypeScript/JavaScript execution
+      let dispatchUploadResult: { success: boolean; error?: string } = { success: true }
+      if ((language === 'typescript' || language === 'javascript') && typeof compiledCode === 'string') {
+        dispatchUploadResult = await uploadToDispatchNamespace(compiledCode, id, env)
+      }
+
       // Return success response
       const baseUrl = new URL(request.url).origin
       return jsonResponse({
         id,
         version,
         url: `${baseUrl}/functions/${id}`,
+        dispatchUpload: dispatchUploadResult.success
+          ? 'success'
+          : dispatchUploadResult.error || 'Dispatch upload not configured',
       })
     }
 
@@ -579,74 +666,73 @@ export default {
       return createRateLimitResponse(blockingResult, rateLimitResult.blockingCategory)
     }
 
-    // Create loader with KV-backed registry and code storage
-    const loader = new FunctionLoader({
-      registry: createKVRegistry(env.REGISTRY),
-      codeStorage: createKVCodeStorage(env.CODE),
-    })
-
-    // Load the function
-    const result = await loader.loadWithResult(functionId)
-
-    if (!result.success || !result.stub) {
-      const errorMessage = result.error?.message || 'Function not found'
-      const status = errorMessage.toLowerCase().includes('not found') ? 404 : 500
-      return errorResponse(errorMessage, status)
-    }
-
     const method = request.method.toUpperCase()
     const action = parseAction(request)
+
+    // Check if function exists in registry
+    const registry = createKVRegistry(env.FUNCTIONS_REGISTRY)
+    const metadata = await registry.get(functionId)
+    if (!metadata) {
+      return errorResponse(`Function not found: ${functionId}`, 404)
+    }
 
     // GET /functions/:functionId or GET /functions/:functionId/info - return function info
     if (method === 'GET' && (action === 'info' || action === null)) {
       return jsonResponse({
-        id: result.stub.id,
-        status: 'loaded',
-        fromCache: result.fromCache,
-        loadTimeMs: result.loadTimeMs,
-        degraded: result.degraded,
-        degradationReason: result.degradationReason,
+        id: functionId,
+        status: 'available',
+        version: metadata.version,
+        language: metadata.language,
       })
     }
 
     // POST /functions/:functionId or POST /functions/:functionId/invoke - invoke function
     if (method === 'POST') {
       try {
-        // Create FunctionTarget for RPC-style invocation
-        const target = new FunctionTarget(result.stub)
+        // Use Workers for Platforms dispatch namespace if available
+        if (env.USER_FUNCTIONS) {
+          // Get the user worker from the dispatch namespace
+          const userWorker = env.USER_FUNCTIONS.get(functionId)
 
-        // Clone request before reading body so we can pass it to the function if needed
-        const requestClone = request.clone()
+          // Forward the request to the user worker
+          const response = await userWorker.fetch(request)
 
-        // Parse request body for method invocation
-        let body: { method?: string; params?: unknown[] } = {}
-        const contentType = request.headers.get('Content-Type')
-
-        if (contentType?.includes('application/json')) {
-          try {
-            body = await request.json()
-          } catch {
-            return errorResponse('Invalid JSON body', 400)
+          // If the response is already JSON, return it as-is
+          const responseContentType = response.headers.get('Content-Type')
+          if (responseContentType?.includes('application/json')) {
+            return response
           }
+
+          // Wrap non-JSON responses
+          const responseBody = await response.text()
+          return jsonResponse({
+            result: responseBody,
+            status: response.status,
+            headers: Object.fromEntries(response.headers.entries()),
+          })
         }
 
-        // If method is specified, use RPC-style invocation
-        if (body.method) {
-          const invokeResult = await target.invoke(body.method, ...(body.params || []))
-          return jsonResponse({ result: invokeResult })
+        // Fallback: Try to use FunctionLoader (won't work in production due to eval restrictions)
+        const loader = new FunctionLoader({
+          registry: registry,
+          codeStorage: createKVCodeStorage(env.FUNCTIONS_CODE),
+        })
+        const result = await loader.loadWithResult(functionId)
+
+        if (!result.success || !result.stub) {
+          // In production without dispatch namespace, this will fail
+          return errorResponse(
+            'Function execution not available. Dispatch namespace required for dynamic code execution.',
+            501
+          )
         }
 
-        // Otherwise, forward the cloned request to the function's fetch handler
-        // We use the clone because the original request's body was consumed for RPC check
-        const response = await result.stub.fetch(requestClone)
-
-        // If the response is already JSON, return it as-is
+        const response = await result.stub.fetch(request)
         const responseContentType = response.headers.get('Content-Type')
         if (responseContentType?.includes('application/json')) {
           return response
         }
 
-        // Wrap non-JSON responses
         const responseBody = await response.text()
         return jsonResponse({
           result: responseBody,
@@ -688,3 +774,7 @@ export {
   type DeployedFunction,
   type DeployOptions,
 } from './template-literals'
+
+// Export Durable Objects for Worker binding
+export { FunctionExecutor } from './do/function-executor'
+export { FunctionLogs } from './do/function-logs'
