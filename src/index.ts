@@ -353,3 +353,19 @@ export * from './core/rate-limiter'
 export * from './core/errors'
 export { KVCodeStorage } from './core/code-storage'
 export type { CodeStorage } from './core/function-loader'
+
+// Re-export template literals for inline function definitions
+export {
+  typescript,
+  javascript,
+  rust,
+  go,
+  python,
+  csharp,
+  zig,
+  assemblyscript,
+  type InlineFunction,
+  type CompiledFunction,
+  type DeployedFunction,
+  type DeployOptions,
+} from './template-literals'

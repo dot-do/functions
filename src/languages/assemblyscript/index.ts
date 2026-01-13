@@ -5,4 +5,8 @@
  * TypeScript-like syntax with native WASM output
  */
 
-export { compileAssemblyScript, type AssemblyScriptCompileOptions, type AssemblyScriptCompileResult } from './compile'
+export {
+  compileAssemblyScript,
+  type CompileOptions as AssemblyScriptCompileOptions,
+  type CompileResult as AssemblyScriptCompileResult,
+} from './compile'

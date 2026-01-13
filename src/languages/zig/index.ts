@@ -5,4 +5,4 @@
  * Minimal runtime with excellent WASM output
  */
 
-export { compileZig, type ZigCompileOptions, type ZigCompileResult } from './compile'
+export { compileZig, type CompileZigOptions, type CompileZigResult } from './compile'

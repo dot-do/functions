@@ -53,6 +53,10 @@
     "./assemblyscript": {
       "types": "./dist/languages/assemblyscript/index.d.ts",
       "import": "./dist/languages/assemblyscript/index.js"
+    },
+    "./literals": {
+      "types": "./dist/template-literals.d.ts",
+      "import": "./dist/template-literals.js"
     }
   },
   "files": [
