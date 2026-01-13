@@ -1,67 +1,42 @@
 {
-  "name": "@functions.do/sdk",
+  "name": "@dotdo/functions-sdk",
   "version": "0.1.0",
-  "description": "SDK for building serverless functions on Functions.do",
+  "description": "Official SDK for Functions.do - Multi-language serverless platform",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
-    "./capnweb": {
-      "types": "./dist/capnweb.d.ts",
-      "import": "./dist/capnweb.js"
-    },
-    "./compiler": {
-      "types": "./dist/compiler.d.ts",
-      "import": "./dist/compiler.js"
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
     }
   },
   "files": [
-    "dist",
-    "src"
+    "dist"
   ],
   "scripts": {
     "build": "tsc",
-    "build:bundle": "node scripts/build.js",
-    "prepublishOnly": "npm run build",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "esbuild": "^0.27.2"
-  },
-  "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250109.0",
-    "@types/node": "^22.0.0",
-    "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
-  },
-  "peerDependencies": {
-    "@cloudflare/workers-types": ">=4.0.0"
-  },
-  "peerDependenciesMeta": {
-    "@cloudflare/workers-types": {
-      "optional": true
-    }
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "test:watch": "vitest --watch",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "functions.do",
     "serverless",
-    "cloudflare-workers",
-    "typescript",
-    "sdk"
+    "sdk",
+    "cloudflare",
+    "workers"
   ],
+  "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/functions-do/functions.git",
-    "directory": "packages/functions-sdk"
+    "url": "https://github.com/dotdo-ai/functions.do"
   },
-  "license": "MIT"
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260113.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
 }

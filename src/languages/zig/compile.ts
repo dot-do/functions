@@ -13,6 +13,7 @@
  */
 
 import { WASM_TYPES, WASM_SECTIONS, WASM_OPCODES, WASM_HEADER } from '../../core/wasm-types'
+import { encodeULEB128, encodeSLEB128, encodeSLEB128_64, encodeName, createSection, encodeF32, encodeF64 } from '../../core/wasm-encoding'
 
 // ============================================================================
 // Types
@@ -181,98 +182,6 @@ interface ParsedFunction {
   body: string
 }
 
-// ============================================================================
-// LEB128 Encoding
-// ============================================================================
-
-/**
- * Encode an unsigned LEB128 integer
- */
-function encodeULEB128(value: number): number[] {
-  const result: number[] = []
-  do {
-    let byte = value & 0x7f
-    value >>>= 7
-    if (value !== 0) {
-      byte |= 0x80
-    }
-    result.push(byte)
-  } while (value !== 0)
-  return result
-}
-
-/**
- * Encode a signed LEB128 integer
- */
-function encodeSLEB128(value: number): number[] {
-  const result: number[] = []
-  let more = true
-  while (more) {
-    let byte = value & 0x7f
-    value >>= 7
-    if ((value === 0 && (byte & 0x40) === 0) || (value === -1 && (byte & 0x40) !== 0)) {
-      more = false
-    } else {
-      byte |= 0x80
-    }
-    result.push(byte)
-  }
-  return result
-}
-
-/**
- * Encode a 64-bit signed LEB128 integer
- */
-function encodeSLEB128_64(value: bigint): number[] {
-  const result: number[] = []
-  let more = true
-  while (more) {
-    let byte = Number(value & 0x7fn)
-    value >>= 7n
-    if ((value === 0n && (byte & 0x40) === 0) || (value === -1n && (byte & 0x40) !== 0)) {
-      more = false
-    } else {
-      byte |= 0x80
-    }
-    result.push(byte)
-  }
-  return result
-}
-
-/**
- * Encode a 32-bit floating point number
- */
-function encodeF32(value: number): number[] {
-  const buffer = new ArrayBuffer(4)
-  const view = new DataView(buffer)
-  view.setFloat32(0, value, true) // little-endian
-  return Array.from(new Uint8Array(buffer))
-}
-
-/**
- * Encode a 64-bit floating point number
- */
-function encodeF64(value: number): number[] {
-  const buffer = new ArrayBuffer(8)
-  const view = new DataView(buffer)
-  view.setFloat64(0, value, true) // little-endian
-  return Array.from(new Uint8Array(buffer))
-}
-
-/**
- * Encode a string as WASM name
- */
-function encodeName(name: string): number[] {
-  const bytes = new TextEncoder().encode(name)
-  return [...encodeULEB128(bytes.length), ...Array.from(bytes)]
-}
-
-/**
- * Create a WASM section
- */
-function createSection(id: WasmSection, content: number[]): number[] {
-  return [id, ...encodeULEB128(content.length), ...content]
-}
 
 // ============================================================================
 // Zig Parsing

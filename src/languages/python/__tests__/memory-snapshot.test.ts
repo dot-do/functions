@@ -352,11 +352,14 @@ preload_modules = []
     })
 
     it('warns when close to max size', () => {
+      // numpy (~5MB) + pyodide_base (~6MB) = ~11MB estimated
+      // To trigger "close to max" warning, estimated must be > 80% of maxSize
+      // Setting maxSize to ~13MB means 80% threshold is ~10.4MB, so 11MB > 10.4MB triggers warning
       const config: SnapshotConfig = {
         enabled: true,
         preloadModules: [],
         preinstallPackages: ['numpy'],
-        maxSize: 15 * 1024 * 1024, // Slightly above numpy estimated size
+        maxSize: 13 * 1024 * 1024, // Close to but above estimated size (~11MB)
       }
       const result = validateSnapshotConfig(config)
 

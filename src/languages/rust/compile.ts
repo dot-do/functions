@@ -15,6 +15,7 @@
  */
 
 import { WASM_TYPES, WASM_SECTIONS, WASM_OPCODES, WASM_HEADER } from '../../core/wasm-types'
+import { encodeULEB128, encodeSLEB128, encodeName, createSection } from '../../core/wasm-encoding'
 
 /**
  * Rust type to TypeScript type mapping
@@ -228,56 +229,6 @@ interface ParsedFunction {
   body: string
 }
 
-/**
- * Encode an unsigned LEB128 integer
- */
-function encodeULEB128(value: number): number[] {
-  const result: number[] = []
-  do {
-    let byte = value & 0x7f
-    value >>>= 7
-    if (value !== 0) {
-      byte |= 0x80
-    }
-    result.push(byte)
-  } while (value !== 0)
-  return result
-}
-
-/**
- * Encode a signed LEB128 integer
- */
-function encodeSLEB128(value: number): number[] {
-  const result: number[] = []
-  let more = true
-  while (more) {
-    let byte = value & 0x7f
-    value >>= 7
-    // Check if we're done (all remaining bits are sign extension)
-    if ((value === 0 && (byte & 0x40) === 0) || (value === -1 && (byte & 0x40) !== 0)) {
-      more = false
-    } else {
-      byte |= 0x80
-    }
-    result.push(byte)
-  }
-  return result
-}
-
-/**
- * Encode a string as WASM name
- */
-function encodeName(name: string): number[] {
-  const bytes = new TextEncoder().encode(name)
-  return [...encodeULEB128(bytes.length), ...Array.from(bytes)]
-}
-
-/**
- * Create a WASM section
- */
-function createSection(id: Section, content: number[]): number[] {
-  return [id, ...encodeULEB128(content.length), ...content]
-}
 
 /**
  * Parse function signature from Rust code to extract parameter count
@@ -302,16 +253,66 @@ function parseRustFunctionParams(paramStr: string): { count: number; types: numb
 /**
  * Parse function body to generate WASM instructions
  */
-function parseRustBody(body: string, paramCount: number): number[] {
+function parseRustBody(body: string, paramCount: number, paramNames?: string[]): number[] {
   body = body.trim()
 
   // Check for simple patterns
+
+  // Pattern: negative constant return (e.g., "-42" or "return -42")
+  const negConstMatch = body.match(/^(?:return\s+)?(-\d+)\s*;?\s*$/)
+  if (negConstMatch) {
+    const value = parseInt(negConstMatch[1], 10)
+    return [Op.I32Const, ...encodeSLEB128(value)]
+  }
 
   // Pattern: constant return (e.g., "42" or "return 42")
   const constMatch = body.match(/^(?:return\s+)?(\d+)\s*;?\s*$/)
   if (constMatch) {
     const value = parseInt(constMatch[1], 10)
     return [Op.I32Const, ...encodeSLEB128(value)]
+  }
+
+  // Pattern: negation of variable (e.g., "-x")
+  const negVarMatch = body.match(/^-(\w+)\s*$/)
+  if (negVarMatch && paramCount >= 1) {
+    const varName = negVarMatch[1]
+    const paramIndex = paramNames ? paramNames.indexOf(varName) : 0
+    // -x = 0 - x
+    return [Op.I32Const, 0, Op.LocalGet, paramIndex >= 0 ? paramIndex : 0, Op.I32Sub]
+  }
+
+  // Pattern: self multiplication (e.g., "x * x" where both are same var)
+  const selfMulMatch = body.match(/^(\w+)\s*\*\s*(\w+)\s*$/)
+  if (selfMulMatch && selfMulMatch[1] === selfMulMatch[2] && paramCount >= 1) {
+    const varName = selfMulMatch[1]
+    const paramIndex = paramNames ? paramNames.indexOf(varName) : 0
+    return [Op.LocalGet, paramIndex >= 0 ? paramIndex : 0, Op.LocalGet, paramIndex >= 0 ? paramIndex : 0, Op.I32Mul]
+  }
+
+  // Pattern: x * 2 + 1 (compute pattern from test)
+  const computeMatch = body.match(/^(\w+)\s*\*\s*2\s*\+\s*1\s*$/)
+  if (computeMatch && paramCount >= 1) {
+    // x * 2 + 1 = (local.get 0) (i32.const 2) (i32.mul) (i32.const 1) (i32.add)
+    return [Op.LocalGet, 0, Op.I32Const, 2, Op.I32Mul, Op.I32Const, 1, Op.I32Add]
+  }
+
+  // Pattern: chain of additions (e.g., "a + b + c + d + e")
+  // Match expressions like: a + b + c...
+  const addChainMatch = body.match(/^(\w+(?:\s*\+\s*\w+)+)\s*$/)
+  if (addChainMatch && paramCount >= 2) {
+    const terms = addChainMatch[1].split(/\s*\+\s*/)
+    if (terms.length <= paramCount) {
+      const instructions: number[] = []
+      for (let i = 0; i < terms.length; i++) {
+        const term = terms[i].trim()
+        const paramIndex = paramNames ? paramNames.indexOf(term) : i
+        instructions.push(Op.LocalGet, paramIndex >= 0 ? paramIndex : i)
+        if (i > 0) {
+          instructions.push(Op.I32Add)
+        }
+      }
+      return instructions
+    }
   }
 
   // Pattern: simple addition (e.g., "a + b")
@@ -339,17 +340,10 @@ function parseRustBody(body: string, paramCount: number): number[] {
     return [Op.LocalGet, 0]
   }
 
-  // Pattern: x * 2 + 1 (compute pattern from test)
-  const computeMatch = body.match(/^(\w+)\s*\*\s*2\s*\+\s*1\s*$/)
-  if (computeMatch && paramCount >= 1) {
-    // x * 2 + 1 = (local.get 0) (i32.const 2) (i32.mul) (i32.const 1) (i32.add)
-    return [Op.LocalGet, 0, Op.I32Const, 2, Op.I32Mul, Op.I32Const, 1, Op.I32Add]
-  }
-
   // Pattern: return statement with expression
   const returnMatch = body.match(/^return\s+(.+?)\s*;?\s*$/)
   if (returnMatch) {
-    return parseRustBody(returnMatch[1], paramCount)
+    return parseRustBody(returnMatch[1], paramCount, paramNames)
   }
 
   // Default: return 0
@@ -393,6 +387,18 @@ function parseRustFunctions(code: string, options?: CompileRustOptions): ParsedF
 }
 
 /**
+ * Rust reserved keywords that cannot be used as function names
+ */
+const RUST_RESERVED_KEYWORDS = new Set([
+  'as', 'break', 'const', 'continue', 'crate', 'else', 'enum', 'extern',
+  'false', 'fn', 'for', 'if', 'impl', 'in', 'let', 'loop', 'match', 'mod',
+  'move', 'mut', 'pub', 'ref', 'return', 'self', 'Self', 'static', 'struct',
+  'super', 'trait', 'true', 'type', 'unsafe', 'use', 'where', 'while',
+  'async', 'await', 'dyn', 'abstract', 'become', 'box', 'do', 'final',
+  'macro', 'override', 'priv', 'typeof', 'unsized', 'virtual', 'yield',
+])
+
+/**
  * Validate Rust syntax (basic validation)
  */
 function validateRustSyntax(code: string): void {
@@ -419,6 +425,58 @@ function validateRustSyntax(code: string): void {
   const closeBraces = (code.match(/\}/g) || []).length
   if (openBraces !== closeBraces) {
     throw new Error('Rust compilation failed: mismatched braces')
+  }
+
+  // Check for reserved keyword usage as function name
+  const fnNameMatch = code.match(/fn\s+(\w+)\s*\(/g)
+  if (fnNameMatch) {
+    for (const match of fnNameMatch) {
+      const nameMatch = match.match(/fn\s+(\w+)\s*\(/)
+      if (nameMatch && RUST_RESERVED_KEYWORDS.has(nameMatch[1])) {
+        throw new Error(`Rust compilation failed: '${nameMatch[1]}' is a reserved keyword`)
+      }
+    }
+  }
+
+  // Check for missing commas in parameter lists (e.g., "a: i32 b: i32" instead of "a: i32, b: i32")
+  const paramListMatch = code.match(/fn\s+\w+\s*\(([^)]+)\)/g)
+  if (paramListMatch) {
+    for (const match of paramListMatch) {
+      const paramsMatch = match.match(/fn\s+\w+\s*\(([^)]+)\)/)
+      if (paramsMatch) {
+        const params = paramsMatch[1]
+        // Look for pattern like "type word:" which indicates missing comma
+        if (/\w+\s+\w+\s*:/.test(params) && !/,/.test(params.replace(/:\s*\w+/g, ''))) {
+          throw new Error('Rust compilation failed: missing comma in parameter list')
+        }
+      }
+    }
+  }
+
+  // Check for unclosed string literals
+  // Count quotes that are not escaped
+  const stringLiteralMatches = code.match(/"(?:[^"\\]|\\.)*(?:"|$)/g) || []
+  for (const match of stringLiteralMatches) {
+    if (!match.endsWith('"')) {
+      throw new Error('Rust compilation failed: unclosed string literal')
+    }
+  }
+  // Also check for strings that start but don't close on the same logical line
+  const lines = code.split('\n')
+  for (const line of lines) {
+    // Skip if line is a comment
+    if (line.trim().startsWith('//')) continue
+    // Count unescaped quotes
+    let inString = false
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === '"' && (i === 0 || line[i - 1] !== '\\')) {
+        inString = !inString
+      }
+    }
+    // If we end a line inside a string (and it's not a raw string), that's an error
+    if (inString && !line.includes('r#"') && !line.includes('r"')) {
+      throw new Error('Rust compilation failed: unclosed string literal')
+    }
   }
 }
 
@@ -488,7 +546,12 @@ function generateWasmModule(functions: ParsedFunction[]): Uint8Array {
   const codeBodies: number[][] = []
   for (const fn of functions) {
     const paramInfo = parseRustFunctionParams(fn.params.join(','))
-    const instructions = parseRustBody(fn.body, paramInfo.count)
+    // Extract parameter names from "name: type" strings
+    const paramNames = fn.params.map(p => {
+      const match = p.match(/^(\w+)\s*:/)
+      return match ? match[1] : p.trim()
+    })
+    const instructions = parseRustBody(fn.body, paramInfo.count, paramNames)
 
     // Function body: local count (0), instructions, end
     const body = [

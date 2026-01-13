@@ -8,11 +8,19 @@
  * 3. Handling async responses and error propagation
  * 4. Managing worker pool connections
  *
- * Architecture:
+ * Architecture (based on spike: docs/spikes/dotnet-shared-runtime.md):
  * - The stub acts as a lightweight proxy between JS and .NET workers
  * - Uses Cap'n Proto RPC for efficient cross-process communication
  * - Workers are pooled and reused across multiple function invocations
+ * - Service bindings enable zero-latency RPC to shared runtime DO
+ *
+ * Thin Stub Pattern:
+ * - Stub receives request, forwards to shared runtime DO
+ * - Runtime DO compiles and executes C# via Roslyn
+ * - Results returned via capnweb RPC
  */
+
+import type { RpcRequest, RpcResponse, DotNetRuntime, HealthCheckResult } from '../../do/csharp-runtime'
 
 /**
  * Configuration options for the C# stub
@@ -43,6 +51,14 @@ export interface CSharpStubOptions {
    * Custom worker endpoint URL
    */
   workerEndpoint?: string
+  /**
+   * Service binding to shared runtime DO (for Cloudflare Workers)
+   */
+  runtimeBinding?: DotNetRuntime
+  /**
+   * Enable distributed mode (uses service bindings instead of local pool)
+   */
+  distributed?: boolean
 }
 
 /**
@@ -564,3 +580,244 @@ export interface WorkerPool {
    */
   shutdown(): Promise<void>
 }
+
+// ============================================================================
+// DISTRIBUTED STUB IMPLEMENTATION (Service Binding Mode)
+// ============================================================================
+
+/**
+ * Create a distributed C# stub that uses service bindings to communicate
+ * with the shared runtime DO.
+ *
+ * This implements the thin stub pattern from the spike document:
+ * - Stub receives request, forwards to shared runtime DO
+ * - Runtime DO compiles and executes C# via Roslyn
+ * - Results returned via capnweb RPC
+ *
+ * @param runtimeBinding - The service binding to the DotNetRuntime
+ * @param options - Configuration options
+ */
+export function createDistributedCSharpStub(
+  runtimeBinding: DotNetRuntime,
+  options?: Omit<CSharpStubOptions, 'runtimeBinding'>
+): CSharpStub {
+  const registeredFunctions = new Map<string, {
+    code: string
+    metadata: CSharpFunctionMetadata
+    loaded: boolean
+  }>()
+  let isShutdown = false
+  let requestCounter = 0
+
+  const stub: CSharpStub = {
+    async invoke<T = unknown>(functionName: string, args: unknown[]): Promise<CSharpInvocationResult<T>> {
+      if (isShutdown) {
+        throw new Error('Stub has been shut down')
+      }
+
+      const func = registeredFunctions.get(functionName)
+      if (!func) {
+        throw new Error(`Function not found: ${functionName}`)
+      }
+
+      // Ensure the function is loaded in the runtime
+      if (!func.loaded) {
+        const [className] = functionName.split('.')
+        const success = await runtimeBinding.loadAssembly(functionName, func.code, className)
+        if (!success) {
+          throw new Error(`Failed to load function: ${functionName}`)
+        }
+        func.loaded = true
+      }
+
+      const startTime = Date.now()
+      const requestId = `req-${++requestCounter}-${Date.now()}`
+
+      // Build the RPC request
+      const rpcRequest: RpcRequest = {
+        requestId,
+        functionId: functionName,
+        method: 'POST',
+        url: `http://runtime/invoke/${functionName}`,
+        headers: { 'Content-Type': 'application/json' },
+        body: Array.from(serializeForRpc({ args })),
+      }
+
+      // Call the runtime via service binding
+      const responseBuffer = await runtimeBinding.execute(
+        functionName,
+        new TextEncoder().encode(JSON.stringify(rpcRequest)).buffer
+      )
+
+      // Parse the response
+      const responseText = new TextDecoder().decode(responseBuffer)
+      const response = JSON.parse(responseText) as RpcResponse
+
+      if (response.error) {
+        throw new Error(response.error)
+      }
+
+      // Deserialize the result
+      const resultBody = new Uint8Array(response.body)
+      const resultJson = new TextDecoder().decode(resultBody)
+      const result = JSON.parse(resultJson) as T
+
+      const executionTimeMs = Date.now() - startTime
+
+      return {
+        result,
+        executionTimeMs,
+        workerId: 'runtime-do',
+      }
+    },
+
+    async getFunctionMetadata(functionName: string): Promise<CSharpFunctionMetadata | null> {
+      const func = registeredFunctions.get(functionName)
+      return func?.metadata ?? null
+    },
+
+    async registerCode(code: string): Promise<string[]> {
+      const parsed = parseCSharpCode(code)
+      const functionNames: string[] = []
+
+      for (const func of parsed) {
+        const fullName = `${func.className}.${func.methodName}`
+        functionNames.push(fullName)
+
+        registeredFunctions.set(fullName, {
+          code,
+          metadata: {
+            name: fullName,
+            parameterTypes: func.parameters.map(p => p.type),
+            returnType: func.returnType,
+            isAsync: func.isAsync,
+          },
+          loaded: false,
+        })
+
+        // Pre-load the assembly in the runtime DO
+        const success = await runtimeBinding.loadAssembly(fullName, code, func.className)
+        if (success) {
+          registeredFunctions.get(fullName)!.loaded = true
+        }
+      }
+
+      return functionNames
+    },
+
+    async getWorkerStatus(): Promise<WorkerStatus[]> {
+      // In distributed mode, we report the health of the runtime DO
+      try {
+        const health = await runtimeBinding.healthCheck()
+        return [{
+          id: 'runtime-do',
+          healthy: health.status === 'healthy',
+          activeInvocations: 0,
+          lastHeartbeat: new Date(),
+          runtimeVersion: 'net8.0',
+        }]
+      } catch {
+        return [{
+          id: 'runtime-do',
+          healthy: false,
+          activeInvocations: 0,
+          lastHeartbeat: new Date(),
+          runtimeVersion: 'net8.0',
+        }]
+      }
+    },
+
+    async warmup(): Promise<void> {
+      // In distributed mode, warmup just verifies the runtime is healthy
+      await runtimeBinding.healthCheck()
+    },
+
+    async shutdown(): Promise<void> {
+      isShutdown = true
+      // Unload all registered functions from the runtime
+      for (const [functionName] of registeredFunctions) {
+        await runtimeBinding.unloadAssembly(functionName)
+      }
+      registeredFunctions.clear()
+    },
+  }
+
+  return stub
+}
+
+/**
+ * Create a request handler for thin stub workers
+ *
+ * This function creates a fetch handler that routes requests to the shared
+ * runtime DO via service bindings. It implements the thin stub pattern from
+ * the spike document.
+ *
+ * Usage in wrangler.toml:
+ * ```toml
+ * [[services]]
+ * binding = "DOTNET_RUNTIME"
+ * service = "dotnet-shared-runtime"
+ * entrypoint = "DotNetRuntime"
+ * ```
+ *
+ * @param env - Environment with DOTNET_RUNTIME service binding and FUNCTION_ID
+ */
+export function createThinStubHandler(env: {
+  DOTNET_RUNTIME: DotNetRuntime
+  FUNCTION_ID: string
+}): (request: Request) => Promise<Response> {
+  return async (request: Request): Promise<Response> => {
+    try {
+      // Serialize the incoming request
+      const body = await request.arrayBuffer()
+      const headers: Record<string, string> = {}
+      request.headers.forEach((value, key) => {
+        headers[key] = value
+      })
+
+      const rpcRequest: RpcRequest = {
+        requestId: crypto.randomUUID(),
+        functionId: env.FUNCTION_ID,
+        method: request.method,
+        url: request.url,
+        headers,
+        body: Array.from(new Uint8Array(body)),
+      }
+
+      // Call the shared runtime via service binding (zero-latency RPC)
+      const responseBuffer = await env.DOTNET_RUNTIME.execute(
+        env.FUNCTION_ID,
+        new TextEncoder().encode(JSON.stringify(rpcRequest)).buffer
+      )
+
+      // Parse and return the response
+      const responseText = new TextDecoder().decode(responseBuffer)
+      const response = JSON.parse(responseText) as RpcResponse
+
+      return new Response(
+        response.body ? new Uint8Array(response.body) : null,
+        {
+          status: response.statusCode,
+          headers: response.headers,
+        }
+      )
+    } catch (error) {
+      return new Response(
+        JSON.stringify({
+          error: error instanceof Error ? error.message : 'Unknown error',
+        }),
+        {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
+    }
+  }
+}
+
+// Re-export types from csharp-runtime for convenience
+export type { RpcRequest, RpcResponse, HealthCheckResult } from '../../do/csharp-runtime'
+
+// ============================================================================
+// END DISTRIBUTED STUB IMPLEMENTATION
+// ============================================================================

@@ -8,11 +8,19 @@
  * 3. Providing isolation between function invocations
  * 4. Managing memory and resource limits
  *
- * Architecture:
+ * Architecture (based on spike: docs/spikes/dotnet-shared-runtime.md):
  * - Each worker runs a .NET process with the Functions.do runtime
  * - Workers communicate via Cap'n Proto RPC over Unix sockets
  * - Assembly loading is cached for performance
  * - Memory snapshots enable fast cold starts
+ *
+ * Distributed Mode:
+ * When running on Cloudflare Workers, this module integrates with
+ * CSharpRuntimeDO for:
+ * - Shared CLR instance across multiple function invocations
+ * - JIT cache shared across functions
+ * - Zero-latency inter-worker RPC via service bindings
+ * - Hot reload via AssemblyLoadContext unload/reload
  */
 
 import { spawn, ChildProcess } from 'node:child_process'
@@ -1167,4 +1175,241 @@ export interface DotNetWorkerPool {
    * Shutdown the pool
    */
   shutdown(): Promise<void>
+}
+
+// ============================================================================
+// DISTRIBUTED RUNTIME INTEGRATION (Durable Object Mode)
+// ============================================================================
+
+// Import types for distributed mode
+import type { DotNetRuntime, HealthCheckResult } from '../../do/csharp-runtime'
+
+/**
+ * Configuration for distributed .NET runtime
+ */
+export interface DistributedDotNetRuntimeConfig extends DotNetRuntimeConfig {
+  /**
+   * Service binding to the shared runtime DO
+   */
+  runtimeBinding: DotNetRuntime
+}
+
+/**
+ * Create a distributed .NET runtime that uses the shared runtime DO
+ *
+ * This runtime implementation forwards all operations to the CSharpRuntimeDO
+ * via service bindings, enabling:
+ * - Shared CLR instance across multiple function invocations
+ * - JIT cache shared across functions
+ * - Zero-latency inter-worker RPC
+ * - Hot reload via AssemblyLoadContext
+ *
+ * @param config - Configuration including the runtime binding
+ */
+export function createDistributedDotNetRuntime(
+  config: DistributedDotNetRuntimeConfig
+): DotNetRuntime {
+  const loadedAssemblies: AssemblyMetadata[] = []
+  let isRunning = false
+
+  return {
+    async start(): Promise<void> {
+      if (isRunning) return
+
+      // Verify the runtime DO is healthy
+      const health = await config.runtimeBinding.healthCheck()
+      if (health.status !== 'healthy') {
+        throw new Error(`Runtime DO is not healthy: ${health.status}`)
+      }
+
+      isRunning = true
+    },
+
+    async invoke<T = unknown>(request: DotNetInvocationRequest): Promise<DotNetInvocationResponse<T>> {
+      const startTime = performance.now()
+
+      // Build RPC request
+      const rpcPayload = JSON.stringify({
+        assembly: request.assembly,
+        typeName: request.typeName,
+        methodName: request.methodName,
+        args: request.args,
+      })
+
+      // Execute via service binding
+      const responseBuffer = await config.runtimeBinding.execute(
+        request.assembly,
+        new TextEncoder().encode(rpcPayload).buffer
+      )
+
+      const executionTimeMs = performance.now() - startTime
+
+      // Parse response
+      const responseText = new TextDecoder().decode(responseBuffer)
+      const response = JSON.parse(responseText)
+
+      if (response.error) {
+        throw new Error(response.error)
+      }
+
+      // Parse result body
+      const resultBody = new Uint8Array(response.body)
+      const resultJson = new TextDecoder().decode(resultBody)
+      const result = JSON.parse(resultJson) as T
+
+      return {
+        result,
+        executionTimeMs,
+        workerId: 'runtime-do',
+      }
+    },
+
+    async loadAssembly(assemblyPath: string): Promise<AssemblyMetadata> {
+      // In distributed mode, we load source code directly
+      // The assemblyPath is treated as a function ID
+      const assemblyName = path.basename(assemblyPath, '.dll')
+
+      // Check if already loaded
+      const existing = loadedAssemblies.find(a => a.name === assemblyName)
+      if (existing) {
+        return existing
+      }
+
+      // Create metadata
+      const metadata: AssemblyMetadata = {
+        name: assemblyName,
+        version: '1.0.0',
+        targetFramework: config.runtimeVersion ?? 'net8.0',
+        exportedTypes: [],
+        dependencies: [],
+        path: assemblyPath,
+        hash: randomUUID(),
+      }
+
+      loadedAssemblies.push(metadata)
+      return metadata
+    },
+
+    getLoadedAssemblies(): AssemblyMetadata[] {
+      return [...loadedAssemblies]
+    },
+
+    getWorkers(): DotNetWorker[] {
+      // In distributed mode, we report a virtual worker representing the DO
+      return [{
+        id: 'runtime-do',
+        pid: 0,
+        state: 'ready',
+        runtimeVersion: (config.runtimeVersion ?? 'net8.0').replace('net', ''),
+        loadedAssemblies: loadedAssemblies.map(a => a.name),
+        memoryUsage: 0,
+        invocationCount: 0,
+        createdAt: new Date(),
+        lastActivityAt: new Date(),
+      }]
+    },
+
+    async createSnapshot(assembly: string): Promise<MemorySnapshot> {
+      // Snapshots are managed by the runtime DO
+      return {
+        id: randomUUID(),
+        assembly,
+        data: new Uint8Array(0),
+        size: 0,
+        createdAt: new Date(),
+        version: '1.0.0',
+      }
+    },
+
+    async restoreSnapshot(_snapshot: MemorySnapshot): Promise<string> {
+      // Snapshots are managed by the runtime DO
+      return 'runtime-do'
+    },
+
+    async shutdown(): Promise<void> {
+      isRunning = false
+      // Unload all assemblies from the runtime DO
+      for (const assembly of loadedAssemblies) {
+        await config.runtimeBinding.unloadAssembly(assembly.name)
+      }
+      loadedAssemblies.length = 0
+    },
+  }
+}
+
+/**
+ * Check if the distributed runtime DO is healthy
+ *
+ * @param runtimeBinding - The service binding to the runtime DO
+ */
+export async function checkDistributedRuntimeHealth(
+  runtimeBinding: DotNetRuntime
+): Promise<HealthCheckResult> {
+  return runtimeBinding.healthCheck()
+}
+
+/**
+ * Load a C# source file into the distributed runtime
+ *
+ * @param runtimeBinding - The service binding to the runtime DO
+ * @param functionId - Unique identifier for the function
+ * @param sourceCode - C# source code to load
+ * @param entryTypeName - Name of the entry class
+ * @param entryMethodName - Name of the entry method
+ */
+export async function loadSourceIntoDistributedRuntime(
+  runtimeBinding: DotNetRuntime,
+  functionId: string,
+  sourceCode: string,
+  entryTypeName?: string,
+  entryMethodName?: string
+): Promise<boolean> {
+  return runtimeBinding.loadAssembly(functionId, sourceCode, entryTypeName, entryMethodName)
+}
+
+/**
+ * Execute a function in the distributed runtime
+ *
+ * @param runtimeBinding - The service binding to the runtime DO
+ * @param functionId - Function identifier
+ * @param request - HTTP request to pass to the function
+ */
+export async function executeInDistributedRuntime(
+  runtimeBinding: DotNetRuntime,
+  functionId: string,
+  request: Request
+): Promise<Response> {
+  // Serialize the request
+  const body = await request.arrayBuffer()
+  const headers: Record<string, string> = {}
+  request.headers.forEach((value, key) => {
+    headers[key] = value
+  })
+
+  const rpcPayload = JSON.stringify({
+    requestId: randomUUID(),
+    functionId,
+    method: request.method,
+    url: request.url,
+    headers,
+    body: Array.from(new Uint8Array(body)),
+  })
+
+  // Execute
+  const responseBuffer = await runtimeBinding.execute(
+    functionId,
+    new TextEncoder().encode(rpcPayload).buffer
+  )
+
+  // Parse response
+  const responseText = new TextDecoder().decode(responseBuffer)
+  const response = JSON.parse(responseText)
+
+  return new Response(
+    response.body ? new Uint8Array(response.body) : null,
+    {
+      status: response.statusCode ?? 200,
+      headers: response.headers ?? {},
+    }
+  )
 }

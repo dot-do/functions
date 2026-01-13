@@ -8,7 +8,7 @@
  * @module {{functionName}}
  */
 
-import { RpcTarget, createFunction, type FunctionContext, type FunctionEnv } from '@functions.do/sdk'
+import { RpcTarget, createFunction, type FunctionContext, type FunctionEnv } from '@dotdo/functions-sdk'
 
 // ============================================================================
 // Types
@@ -256,7 +256,7 @@ export class MyFunctionTarget extends RpcTarget implements MyFunctionTargetMetho
    * } // target is automatically disposed here
    * ```
    */
-  [Symbol.dispose](): void {
+  override [Symbol.dispose](): void {
     // Clean up any resources
     // Log final metrics if needed
     console.log(`[RPC] Target disposed. Total requests: ${this._requestCount}, errors: ${this._errorCount}`)
@@ -442,7 +442,7 @@ async function handleRpc(request: Request, env: Env, _ctx: FunctionContext): Pro
 
   try {
     // Get the method from the target
-    const method = (target as Record<string, unknown>)[body.method]
+    const method = (target as unknown as Record<string, unknown>)[body.method]
 
     if (typeof method !== 'function') {
       return Response.json(
@@ -557,8 +557,4 @@ export default createFunction<Env>({
   // queue: handleQueue,
 })
 
-// Export the RPC target for direct imports and service bindings
-export { MyFunctionTarget }
-
-// Export types for consumers
-export type { GreetRequest, GreetResponse, MathResult, MyFunctionTargetMethods }
+// Types are already exported above where they are defined

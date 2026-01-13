@@ -11,28 +11,24 @@ package main
 import _ "unsafe"
 
 // Add adds two integers and returns the result
-//
 //go:wasmexport add
 func add(a, b int32) int32 {
 	return a + b
 }
 
 // Subtract subtracts b from a and returns the result
-//
 //go:wasmexport subtract
 func subtract(a, b int32) int32 {
 	return a - b
 }
 
 // Multiply multiplies two integers and returns the result
-//
 //go:wasmexport multiply
 func multiply(a, b int32) int32 {
 	return a * b
 }
 
 // GetAnswer returns the answer to life, the universe, and everything
-//
 //go:wasmexport get_answer
 func getAnswer() int32 {
 	return 42

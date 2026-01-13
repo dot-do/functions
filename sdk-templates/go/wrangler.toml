@@ -1,0 +1,43 @@
+# Cloudflare Workers configuration for Go WASM (TinyGo)
+# https://developers.cloudflare.com/workers/wrangler/configuration/
+
+name = "{{functionName}}"
+main = "dist/example.wasm"
+compatibility_date = "2024-01-01"
+
+# Build configuration for Go -> WASM via TinyGo
+[build]
+command = "make build"
+
+# Uncomment to enable Node.js compatibility
+# node_compat = true
+
+# Uncomment to configure environment variables
+# [vars]
+# ENVIRONMENT = "production"
+
+# Uncomment to configure KV namespaces
+# [[kv_namespaces]]
+# binding = "MY_KV"
+# id = "your-kv-namespace-id"
+
+# Uncomment to configure Durable Objects
+# [[durable_objects.bindings]]
+# name = "MY_DO"
+# class_name = "MyDurableObject"
+
+# Uncomment to configure R2 buckets
+# [[r2_buckets]]
+# binding = "MY_BUCKET"
+# bucket_name = "my-bucket"
+
+# Uncomment to configure D1 databases
+# [[d1_databases]]
+# binding = "MY_DB"
+# database_name = "my-database"
+# database_id = "your-database-id"
+
+# Uncomment to configure service bindings
+# [[services]]
+# binding = "OTHER_FUNCTION"
+# service = "other-function-name"

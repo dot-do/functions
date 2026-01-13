@@ -144,8 +144,9 @@ const UNSAFE_PRELOAD_MODULES = new Set([
  */
 export function parseSnapshotConfig(pyprojectContent: string): SnapshotConfig | null {
   // Look for [tool.functions-do.snapshot] section
+  // Match until the next TOML section header (start of line followed by [) or end of file
   const snapshotMatch = pyprojectContent.match(
-    /\[tool\.functions-do\.snapshot\]([\s\S]*?)(?=\[|$)/
+    /\[tool\.functions-do\.snapshot\]([\s\S]*?)(?=\n\s*\[|$)/
   )
 
   if (!snapshotMatch) {

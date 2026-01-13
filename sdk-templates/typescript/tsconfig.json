@@ -1,46 +1,30 @@
 {
-  "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
-    // Target ES2022 for Cloudflare Workers compatibility
     "target": "ES2022",
-    "lib": ["ES2022"],
-
-    // Use ESM module system
+    "lib": ["ES2022", "ESNext.Disposable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
-
-    // Output configuration
     "outDir": "./dist",
     "rootDir": "./src",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-
-    // Strict type checking for better code quality
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noPropertyAccessFromIndexSignature": true,
-
-    // Module handling
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-
-    // Build optimizations
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-
-    // Cloudflare Workers types
     "types": ["@cloudflare/workers-types"],
-
-    // Functions.do SDK paths
     "paths": {
-      "@functions.do/sdk": ["./node_modules/@functions.do/sdk"],
-      "capnweb": ["./node_modules/@functions.do/sdk/capnweb"]
+      "@dotdo/functions-sdk": ["../../packages/functions-sdk/dist"],
+      "@dotdo/functions-sdk/*": ["../../packages/functions-sdk/dist/*"]
     }
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts"]
+  "include": ["src/index.ts"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts", "src/stub.ts", "src/bindings.ts", "src/types.d.ts"]
 }

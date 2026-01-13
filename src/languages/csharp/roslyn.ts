@@ -13,7 +13,18 @@
  * - Support for `#r` directives to reference assemblies
  * - Script state preservation across invocations
  * - Async/await support in scripts
+ *
+ * Distributed Runtime Integration:
+ * When running in distributed mode (Cloudflare Workers), this module
+ * communicates with the CSharpRuntimeDO via capnweb RPC for:
+ * - Remote compilation via Roslyn in the .NET process
+ * - Assembly caching in R2/KV
+ * - JIT-optimized execution in the shared runtime
+ *
+ * See: docs/spikes/dotnet-shared-runtime.md
  */
+
+import type { DotNetRuntime, RpcRequest, RpcResponse } from '../../do/csharp-runtime'
 
 /**
  * Options for Roslyn script execution
@@ -1060,4 +1071,250 @@ export interface RoslynContext {
    * Dispose of context resources
    */
   dispose(): void
+}
+
+// ============================================================================
+// DISTRIBUTED ROSLYN EXECUTION (Service Binding Mode)
+// ============================================================================
+
+/**
+ * Options for distributed Roslyn execution
+ */
+export interface DistributedRoslynOptions extends RoslynScriptOptions {
+  /**
+   * Service binding to the shared runtime DO
+   */
+  runtimeBinding: DotNetRuntime
+  /**
+   * Function ID for assembly identification
+   */
+  functionId?: string
+}
+
+/**
+ * Execute C# code via the distributed runtime DO
+ *
+ * This function sends the code to the shared runtime DO for compilation
+ * and execution via Roslyn. The runtime DO maintains JIT cache and
+ * AssemblyLoadContext for optimal performance.
+ *
+ * @param code - C# source code to execute
+ * @param options - Execution options including runtime binding
+ */
+export async function executeDistributedRoslynScript<T = unknown>(
+  code: string,
+  options: DistributedRoslynOptions
+): Promise<RoslynScriptResult<T>> {
+  const startTime = Date.now()
+  const functionId = options.functionId || `script-${Date.now()}`
+
+  // Load the assembly in the runtime
+  const loadSuccess = await options.runtimeBinding.loadAssembly(functionId, code)
+  if (!loadSuccess) {
+    throw new Error('Failed to compile C# code in runtime')
+  }
+
+  const compilationTimeMs = Date.now() - startTime
+  const executionStart = Date.now()
+
+  // Build RPC request
+  const rpcRequest: RpcRequest = {
+    requestId: `exec-${Date.now()}`,
+    functionId,
+    method: 'POST',
+    url: `http://runtime/execute/${functionId}`,
+    headers: { 'Content-Type': 'application/json' },
+    body: Array.from(new TextEncoder().encode(JSON.stringify({
+      globals: options.globals,
+    }))),
+  }
+
+  // Execute via service binding
+  const responseBuffer = await options.runtimeBinding.execute(
+    functionId,
+    new TextEncoder().encode(JSON.stringify(rpcRequest)).buffer
+  )
+
+  const executionTimeMs = Date.now() - executionStart
+
+  // Parse response
+  const responseText = new TextDecoder().decode(responseBuffer)
+  const response = JSON.parse(responseText) as RpcResponse
+
+  if (response.error) {
+    throw new Error(response.error)
+  }
+
+  // Deserialize result
+  const resultBody = new Uint8Array(response.body)
+  const resultJson = new TextDecoder().decode(resultBody)
+  const result = JSON.parse(resultJson) as T
+
+  return {
+    value: result,
+    compilationTimeMs,
+    executionTimeMs,
+    diagnostics: [],
+    state: {
+      id: functionId,
+      variables: {},
+      capturedAt: new Date(),
+    },
+  }
+}
+
+/**
+ * Create a distributed Roslyn context that uses the shared runtime DO
+ *
+ * @param options - Options including the runtime binding
+ */
+export function createDistributedRoslynContext(
+  options: DistributedRoslynOptions
+): RoslynContext {
+  const functionId = options.functionId || `context-${Date.now()}`
+  let disposed = false
+  const variables: Record<string, { name: string; type: string; value: unknown }> = {}
+
+  // Initialize with globals
+  if (options.globals) {
+    for (const [key, val] of Object.entries(options.globals)) {
+      variables[key] = { name: key, type: typeof val, value: val }
+    }
+  }
+
+  const context: RoslynContext = {
+    async execute<T = unknown>(code: string): Promise<RoslynScriptResult<T>> {
+      if (disposed) {
+        throw new Error('Context has been disposed')
+      }
+
+      return executeDistributedRoslynScript<T>(code, {
+        ...options,
+        functionId,
+        globals: Object.fromEntries(
+          Object.entries(variables).map(([k, v]) => [k, v.value])
+        ),
+      })
+    },
+
+    setVariable(name: string, value: unknown): void {
+      if (disposed) {
+        throw new Error('Context has been disposed')
+      }
+      variables[name] = {
+        name,
+        type: typeof value === 'number' ? (Number.isInteger(value) ? 'int' : 'double') :
+          typeof value === 'string' ? 'string' :
+            typeof value === 'boolean' ? 'bool' : 'object',
+        value,
+      }
+    },
+
+    getVariable<T = unknown>(name: string): T | undefined {
+      if (disposed) {
+        throw new Error('Context has been disposed')
+      }
+      return variables[name]?.value as T | undefined
+    },
+
+    addReference(_assembly: string): void {
+      if (disposed) {
+        throw new Error('Context has been disposed')
+      }
+      // References are handled by the runtime DO
+    },
+
+    addImport(_namespace: string): void {
+      if (disposed) {
+        throw new Error('Context has been disposed')
+      }
+      // Imports are handled by the runtime DO
+    },
+
+    getState(): RoslynScriptState {
+      if (disposed) {
+        throw new Error('Context has been disposed')
+      }
+      return {
+        id: functionId,
+        variables: { ...variables },
+        capturedAt: new Date(),
+      }
+    },
+
+    reset(): void {
+      if (disposed) {
+        throw new Error('Context has been disposed')
+      }
+      for (const key of Object.keys(variables)) {
+        delete variables[key]
+      }
+      // Re-initialize with original globals
+      if (options.globals) {
+        for (const [key, val] of Object.entries(options.globals)) {
+          variables[key] = { name: key, type: typeof val, value: val }
+        }
+      }
+    },
+
+    dispose(): void {
+      disposed = true
+      // Unload the assembly from the runtime
+      options.runtimeBinding.unloadAssembly(functionId)
+    },
+  }
+
+  return context
+}
+
+/**
+ * Invoke a C# handler via the distributed runtime
+ *
+ * @param code - C# source code containing the handler
+ * @param handlerName - Name of the handler method (e.g., "Calculator.Add")
+ * @param args - Arguments to pass to the handler
+ * @param options - Execution options including runtime binding
+ */
+export async function invokeDistributedRoslynHandler<T = unknown>(
+  code: string,
+  handlerName: string,
+  args: unknown[],
+  options: DistributedRoslynOptions
+): Promise<T> {
+  const functionId = options.functionId || handlerName
+
+  // Load the assembly
+  const [className] = handlerName.split('.')
+  const loadSuccess = await options.runtimeBinding.loadAssembly(functionId, code, className)
+  if (!loadSuccess) {
+    throw new Error(`Failed to load handler: ${handlerName}`)
+  }
+
+  // Build RPC request with args
+  const rpcRequest: RpcRequest = {
+    requestId: `invoke-${Date.now()}`,
+    functionId,
+    method: 'POST',
+    url: `http://runtime/invoke/${handlerName}`,
+    headers: { 'Content-Type': 'application/json' },
+    body: Array.from(new TextEncoder().encode(JSON.stringify({ args }))),
+  }
+
+  // Execute
+  const responseBuffer = await options.runtimeBinding.execute(
+    functionId,
+    new TextEncoder().encode(JSON.stringify(rpcRequest)).buffer
+  )
+
+  // Parse response
+  const responseText = new TextDecoder().decode(responseBuffer)
+  const response = JSON.parse(responseText) as RpcResponse
+
+  if (response.error) {
+    throw new Error(response.error)
+  }
+
+  const resultBody = new Uint8Array(response.body)
+  const resultJson = new TextDecoder().decode(resultBody)
+  return JSON.parse(resultJson) as T
 }
