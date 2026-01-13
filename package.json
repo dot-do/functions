@@ -97,11 +97,9 @@
     "pyodide": "^0.29.1",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0",
-    "wrangler": "^3.105.0"
+    "wrangler": "^4.58.0"
   },
   "dependencies": {
-    "ai-evaluate": "^2.1.1",
-    "cac": "^6.7.14",
-    "esbuild": "^0.27.2"
+    "cac": "^6.7.14"
   }
 }

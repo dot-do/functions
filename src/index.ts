@@ -4,7 +4,8 @@
  * Main entry point for the Cloudflare Worker
  */
 
-import { createEvaluator, type EvaluateResult, type SandboxEnv } from 'ai-evaluate'
+// Note: Not using ai-evaluate directly since it has outdated worker_loaders API
+// We use worker_loaders directly via the LOADER binding
 import { FunctionLoader, type Registry, type CodeStorage } from './core/function-loader'
 import { FunctionTarget } from './core/function-target'
 import type { FunctionMetadata } from './core/types'
@@ -40,6 +41,39 @@ import {
 
 // Global rate limiter instance (persists across requests in the same worker)
 let rateLimiter: CompositeRateLimiter | null = null
+
+/**
+ * Simple TypeScript to JavaScript transpiler for worker_loaders.
+ * Strips type annotations without needing esbuild (which has node:sqlite issues).
+ */
+function stripTypeScript(code: string): string {
+  // Remove interface/type declarations (non-exported and exported)
+  let result = code.replace(/^(export\s+)?(interface|type)\s+\w+[^{]*\{[^}]*\}/gm, '')
+
+  // Remove import type statements
+  result = result.replace(/^import\s+type\s+.*$/gm, '')
+
+  // Remove type-only exports
+  result = result.replace(/^export\s+type\s+\{[^}]*\}\s*;?\s*$/gm, '')
+
+  // Remove type annotations from function parameters: (param: Type) -> (param)
+  // Handle complex types like Promise<Response>
+  result = result.replace(/:\s*(?:Promise<[^>]+>|[A-Z][a-zA-Z0-9<>,\s|&\[\]]*)/g, '')
+
+  // Remove return type annotations: ): Type { -> ) {
+  result = result.replace(/\)\s*:\s*(?:Promise<[^>]+>|[A-Z][a-zA-Z0-9<>,\s|&\[\]]*)\s*(\{|=>)/g, ')$1')
+
+  // Remove 'as Type' assertions
+  result = result.replace(/\s+as\s+[A-Z][a-zA-Z0-9<>,\s|&\[\]]*/g, '')
+
+  // Remove generic type parameters from function definitions
+  result = result.replace(/<[A-Z][a-zA-Z0-9<>,\s|&\[\]]*>\s*\(/g, '(')
+
+  // Clean up any double spaces
+  result = result.replace(/  +/g, ' ')
+
+  return result
+}
 
 /**
  * Get or create the global rate limiter instance
@@ -718,63 +752,78 @@ export default {
 
         // Primary: Use ai-evaluate sandbox with worker loaders
         // Requires both LOADER (worker_loaders) and TEST (ai-tests service) bindings
-        // Note: worker_loaders are in CLOSED BETA - disabled until generally available
-        // See: https://developers.cloudflare.com/workers/runtime-apis/bindings/worker-loader/
-        const useAiEvaluate = false // Disabled: worker_loaders in closed beta
+        if (env.LOADER && env.TEST) {
+          console.log('=== ai-evaluate: checking LOADER binding ===')
+          const loader = env.LOADER as { get?: (id: string, fn: () => Promise<unknown>) => unknown }
+          console.log('LOADER:', loader)
+          console.log('LOADER.get type:', typeof loader?.get)
 
-        if (useAiEvaluate && env.LOADER && env.TEST) {
-          console.log('=== Using ai-evaluate sandbox ===')
+          if (typeof loader?.get !== 'function') {
+            console.log('LOADER.get is not a function, falling back to dispatch namespace')
+          } else {
+            console.log('=== Using ai-evaluate sandbox ===')
 
-          try {
-            const sandbox = createEvaluator(env as SandboxEnv)
+            // Use worker_loaders directly (bypassing ai-evaluate which has outdated API)
+            try {
+              // Strip TypeScript annotations if needed (simple regex-based approach)
+              let jsCode = code
+              const isTypeScript = metadata.language === 'typescript' || code.includes(': Request') || code.includes(': Response') || code.includes(': Promise')
+              console.log('Language:', metadata.language, 'isTypeScript:', isTypeScript)
 
-            // Create a wrapper script that invokes the module's fetch handler
-            const wrapperScript = `
-              const mod = (function() {
-                ${code}
-                return typeof exports !== 'undefined' ? exports :
-                       typeof module !== 'undefined' ? module.exports : {};
-              })();
-
-              // Check for default export with fetch handler
-              const handler = mod.default?.fetch || mod.fetch || mod.handler || mod.default;
-
-              if (typeof handler === 'function') {
-                const request = new Request('http://internal/invoke', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(${JSON.stringify(requestData)})
-                });
-                const response = await handler(request);
-                const body = await response.text();
-                try {
-                  return JSON.parse(body);
-                } catch {
-                  return { result: body, status: response.status };
-                }
+              if (isTypeScript) {
+                console.log('=== Stripping TypeScript annotations ===')
+                console.log('Original code length:', code.length)
+                jsCode = stripTypeScript(code)
+                console.log('Stripped JS length:', jsCode.length)
+                console.log('Stripped JS preview:', jsCode.substring(0, 300))
               }
 
-              return { error: 'No handler function found in module' };
-            `
+              const workerId = `fn-${functionId}-${Date.now()}`
+              const workerStub = loader.get(workerId, async () => ({
+                mainModule: 'worker.js',
+                modules: {
+                  'worker.js': jsCode
+                },
+                compatibilityDate: '2024-01-01',
+              })) as { getEntrypoint: () => { fetch: (req: Request) => Promise<Response> } }
 
-            const evalResult = await sandbox({
-              script: wrapperScript,
-              timeout: 30000,
-            })
+              // Get the entrypoint and call fetch
+              const entrypoint = workerStub.getEntrypoint()
 
-            if (!evalResult.success) {
-              return errorResponse(evalResult.error || 'Execution failed', 500)
+              // Create request with the user's data
+              const sandboxRequest = new Request('http://sandbox/invoke', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: requestData ? JSON.stringify(requestData) : undefined,
+              })
+
+              const start = Date.now()
+              const response = await entrypoint.fetch(sandboxRequest)
+              const duration = Date.now() - start
+
+              // Return the response
+              const responseContentType = response.headers.get('Content-Type')
+              if (responseContentType?.includes('application/json')) {
+                const result = await response.json()
+                return jsonResponse({
+                  ...result as object,
+                  _meta: { duration, executedWith: 'worker_loaders' }
+                })
+              }
+
+              const body = await response.text()
+              return jsonResponse({
+                result: body,
+                status: response.status,
+                _meta: { duration, executedWith: 'worker_loaders' }
+              })
+
+            } catch (loaderError) {
+              console.error('Worker loader error:', loaderError)
+              const msg = loaderError instanceof Error ? loaderError.message : String(loaderError)
+              // Fall through to dispatch namespace on error
+              console.log('Falling back to dispatch namespace due to loader error:', msg)
             }
-
-            return jsonResponse({
-              ...evalResult.value as object,
-              logs: evalResult.logs,
-              duration: evalResult.duration,
-            })
-          } catch (sandboxError) {
-            console.error('Sandbox error:', sandboxError)
-            const msg = sandboxError instanceof Error ? sandboxError.message : String(sandboxError)
-            return errorResponse(`Sandbox error: ${msg}`, 500)
           }
         }
 
