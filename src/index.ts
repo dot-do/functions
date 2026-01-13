@@ -71,6 +71,8 @@ export interface Env {
   CODE: KVNamespace
   /** KV namespace for API keys (optional - if not set, auth is disabled) */
   API_KEYS?: KVNamespace
+  /** Static assets binding for WASM binaries */
+  ASSETS?: Fetcher
   /** Comma-separated list of additional public endpoints */
   PUBLIC_ENDPOINTS?: string
 }

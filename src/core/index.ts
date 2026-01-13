@@ -23,6 +23,7 @@ export { FunctionRegistry, validateFunctionId, validateLanguage, validateEntryPo
 export { KVCodeStorage } from './code-storage'
 export { KVFunctionRegistry } from './kv-function-registry'
 export { KVApiKeyStore } from './kv-api-keys'
+export { AssetStorage, AssetUploader, type AssetsBinding, type StoreWasmResult } from './asset-storage'
 
 // Auth & Rate Limiting
 export { authenticateRequest, isPublicEndpoint, DEFAULT_PUBLIC_ENDPOINTS, type AuthConfig, type AuthResult } from './auth'

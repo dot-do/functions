@@ -10,6 +10,12 @@
     { "pattern": "functions.do", "custom_domain": true }
   ],
 
+  // Static Assets for WASM binaries (free, 25MB limit, edge-cached)
+  "assets": {
+    "directory": "./assets",
+    "binding": "ASSETS"
+  },
+
   // KV Namespaces
   "kv_namespaces": [
     {
