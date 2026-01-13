@@ -1,32 +1,33 @@
 /**
  * Functions.do Languages Module
  *
- * Multi-language compilation and execution support:
- * - TypeScript/JavaScript: ESM compilation via esbuild
- * - Rust: WASM compilation via wasm-pack
- * - Go: WASM compilation via TinyGo
- * - Python: Pyodide runtime with memory snapshots
- * - C#: Distributed runtime with thin stubs
- * - Zig: WASM compilation
- * - AssemblyScript: WASM compilation
+ * Multi-language compilation and execution support.
+ *
+ * For tree-shaking, prefer individual language imports:
+ *   import { compileRust } from 'functions.do/rust'
+ *   import { compileGo } from 'functions.do/go'
+ *   import { PyodideExecutor } from 'functions.do/python'
+ *
+ * This module re-exports all languages for convenience.
  */
 
 // TypeScript
-export { compileTypeScript, type TypeScriptCompileOptions, type TypeScriptCompileResult } from './typescript/compile'
+export * from './typescript'
 
 // Rust
-export { compileRust, type RustCompileOptions, type RustCompileResult } from './rust/compile'
+export * from './rust'
 
 // Go
-export { compileGo, type GoCompileOptions, type GoCompileResult } from './go/compile'
+export * from './go'
 
 // Python
-export { PyodideExecutor, type PyodideExecutorOptions } from './python/pyodide-executor'
-export { parseSnapshotConfig, generatePreloadList, generateSnapshotInitCode, estimateSnapshotSize, validateSnapshotConfig } from './python/memory-snapshot'
+export * from './python'
 
 // C#
-export { generateCSharpStub, type CSharpStubOptions } from './csharp/stub'
-export { compileCSharp, type CSharpCompileOptions } from './csharp/roslyn'
+export * from './csharp'
 
 // Zig
-export { compileZig, type ZigCompileOptions, type ZigCompileResult } from './zig/compile'
+export * from './zig'
+
+// AssemblyScript
+export * from './assemblyscript'

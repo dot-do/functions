@@ -26,9 +26,33 @@
       "types": "./dist/sdk/index.d.ts",
       "import": "./dist/sdk/index.js"
     },
-    "./languages": {
-      "types": "./dist/languages/index.d.ts",
-      "import": "./dist/languages/index.js"
+    "./typescript": {
+      "types": "./dist/languages/typescript/index.d.ts",
+      "import": "./dist/languages/typescript/index.js"
+    },
+    "./rust": {
+      "types": "./dist/languages/rust/index.d.ts",
+      "import": "./dist/languages/rust/index.js"
+    },
+    "./go": {
+      "types": "./dist/languages/go/index.d.ts",
+      "import": "./dist/languages/go/index.js"
+    },
+    "./python": {
+      "types": "./dist/languages/python/index.d.ts",
+      "import": "./dist/languages/python/index.js"
+    },
+    "./csharp": {
+      "types": "./dist/languages/csharp/index.d.ts",
+      "import": "./dist/languages/csharp/index.js"
+    },
+    "./zig": {
+      "types": "./dist/languages/zig/index.d.ts",
+      "import": "./dist/languages/zig/index.js"
+    },
+    "./assemblyscript": {
+      "types": "./dist/languages/assemblyscript/index.d.ts",
+      "import": "./dist/languages/assemblyscript/index.js"
     }
   },
   "files": [
