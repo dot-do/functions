@@ -1,10 +1,43 @@
 {
-  "name": "functions-do",
+  "name": "functions.do",
   "version": "0.1.0",
   "description": "Functions.do - Multi-language serverless platform on Cloudflare Workers",
-  "private": true,
   "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "dotdo": "./dist/cli/index.js",
+    "functions": "./dist/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js"
+    },
+    "./do": {
+      "types": "./dist/do/index.d.ts",
+      "import": "./dist/do/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
+    },
+    "./languages": {
+      "types": "./dist/languages/index.d.ts",
+      "import": "./dist/languages/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
+    "build": "tsc",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "test": "vitest",
@@ -13,6 +46,20 @@
     "test:cli": "vitest run --config vitest.node.config.ts",
     "test:all": "vitest run && vitest run --config vitest.node.config.ts",
     "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "functions.do",
+    "serverless",
+    "cloudflare",
+    "workers",
+    "wasm",
+    "multi-language",
+    "edge"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dot-do/functions"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.8.0",
@@ -25,6 +72,7 @@
   },
   "dependencies": {
     "ai-evaluate": "^2.1.1",
+    "cac": "^6.7.14",
     "esbuild": "^0.27.2"
   }
 }

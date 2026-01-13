@@ -1,0 +1,37 @@
+/**
+ * Functions.do Core Module
+ *
+ * Core functionality for the Functions.do platform including:
+ * - Function loading and caching
+ * - Function registry and metadata storage
+ * - Authentication and rate limiting
+ * - Error handling
+ * - Observability
+ */
+
+// Types
+export * from './types'
+export * from './errors'
+
+// Function Loading
+export { FunctionLoader, type IFunctionLoader, type LoadResult } from './function-loader'
+export { WorkerLoader, type WorkerLoaderOptions, type WorkerStub } from './worker-loader'
+export { FunctionTarget, type FunctionTargetOptions } from './function-target'
+
+// Registry & Storage
+export { FunctionRegistry, validateFunctionId, validateLanguage, validateEntryPoint, validateVersion, validateDependencies, validateMetadata } from './function-registry'
+export { KVCodeStorage } from './code-storage'
+export { KVFunctionRegistry } from './kv-function-registry'
+export { KVApiKeyStore } from './kv-api-keys'
+
+// Auth & Rate Limiting
+export { authenticateRequest, isPublicEndpoint, DEFAULT_PUBLIC_ENDPOINTS, type AuthConfig, type AuthResult } from './auth'
+export { CompositeRateLimiter, InMemoryRateLimiter, createDefaultRateLimiter, getClientIP, createRateLimitResponse, type RateLimitConfig, type RateLimiter, type RateLimitInfo } from './rate-limiter'
+
+// Observability
+export { MetricsCollector, MetricsExporter } from './metrics'
+export { LogAggregator } from './log-aggregator'
+export { DistributedTracer, TraceContext, W3CTraceContextPropagator, OpenTelemetryExporter, TraceExporter, SamplingConfig } from './distributed-tracing'
+
+// Utilities
+export { encodeULEB128, encodeSLEB128, encodeName, createSection } from './wasm-encoding'
