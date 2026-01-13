@@ -7,7 +7,21 @@
 import { FunctionLoader, type Registry, type CodeStorage } from './core/function-loader'
 import { FunctionTarget } from './core/function-target'
 import type { FunctionMetadata } from './core/types'
-import { validateFunctionId } from './core/function-registry'
+import { isValidVersion } from './core/types'
+import {
+  validateFunctionId,
+  validateEntryPoint,
+  validateLanguage,
+  validateDependencies,
+} from './core/function-registry'
+import { KVFunctionRegistry } from './core/kv-function-registry'
+import { KVCodeStorage } from './core/code-storage'
+import { compileTypeScript } from './languages/typescript/compile'
+import { compileRust } from './languages/rust/compile'
+import { compileGo } from './languages/go/compile'
+import { compileZig } from './languages/zig/compile'
+import { compileAssemblyScript } from './languages/assemblyscript/compile'
+import { ValidationError } from './core/errors'
 import {
   authenticateRequest,
   isPublicEndpoint,
@@ -75,6 +89,8 @@ export interface Env {
   ASSETS?: Fetcher
   /** Comma-separated list of additional public endpoints */
   PUBLIC_ENDPOINTS?: string
+  /** Durable Object namespace for function logs */
+  FUNCTION_LOGS?: DurableObjectNamespace
 }
 
 /**
@@ -224,6 +240,303 @@ export default {
       return jsonResponse({ status: 'ok', service: 'Functions.do' })
     }
 
+    // Handle DELETE /api/functions/{functionId} endpoint
+    const apiMatch = url.pathname.match(/^\/api\/functions\/([^\/]+)$/)
+    if (apiMatch && request.method === 'DELETE') {
+      const functionId = apiMatch[1]
+
+      // Validate function ID format
+      try {
+        validateFunctionId(functionId)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Invalid function ID format'
+        return errorResponse(message, 400)
+      }
+
+      // Authentication check for API endpoints (if API_KEYS KV is configured)
+      if (env.API_KEYS) {
+        const publicEndpoints = parsePublicEndpoints(env.PUBLIC_ENDPOINTS)
+        if (!isPublicEndpoint(url.pathname, publicEndpoints)) {
+          const authConfig = createKVAuthConfig(env.API_KEYS, publicEndpoints)
+          const authResult = await authenticateRequest(request, authConfig)
+          if (!authResult.authenticated) {
+            return errorResponse(authResult.error || 'Unauthorized', 401)
+          }
+        }
+      }
+
+      // Create registry and code storage instances
+      const registry = new KVFunctionRegistry(env.REGISTRY)
+      const codeStorage = new KVCodeStorage(env.CODE)
+
+      // Check if function exists
+      const metadata = await registry.get(functionId)
+      if (!metadata) {
+        return errorResponse('Function not found', 404)
+      }
+
+      // Delete all code entries (including all versions)
+      await codeStorage.deleteAll(functionId)
+
+      // Delete function metadata (including all version metadata)
+      await registry.delete(functionId)
+
+      return jsonResponse({ success: true, id: functionId, message: 'Function deleted' })
+    }
+
+    // Handle GET /api/functions/{functionId}/logs endpoint
+    const logsMatch = url.pathname.match(/^\/api\/functions\/([^\/]+)\/logs$/)
+    if (logsMatch && request.method === 'GET') {
+      const functionId = logsMatch[1]
+
+      // Validate function ID format
+      try {
+        validateFunctionId(functionId)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Invalid function ID format'
+        return errorResponse(message, 400)
+      }
+
+      // Authentication check for API endpoints (if API_KEYS KV is configured)
+      if (env.API_KEYS) {
+        const publicEndpoints = parsePublicEndpoints(env.PUBLIC_ENDPOINTS)
+        if (!isPublicEndpoint(url.pathname, publicEndpoints)) {
+          const authConfig = createKVAuthConfig(env.API_KEYS, publicEndpoints)
+          const authResult = await authenticateRequest(request, authConfig)
+          if (!authResult.authenticated) {
+            return errorResponse(authResult.error || 'Unauthorized', 401)
+          }
+        }
+      }
+
+      // Check if FUNCTION_LOGS Durable Object is configured
+      if (!env.FUNCTION_LOGS) {
+        return errorResponse('Function logs not configured', 503)
+      }
+
+      // Parse query parameters
+      const limitParam = url.searchParams.get('limit')
+      const sinceParam = url.searchParams.get('since')
+
+      const limit = limitParam ? parseInt(limitParam, 10) : 100
+      if (isNaN(limit) || limit < 1 || limit > 1000) {
+        return errorResponse('Invalid limit parameter. Must be between 1 and 1000.', 400)
+      }
+
+      let startTime: number | undefined
+      if (sinceParam) {
+        const parsedDate = Date.parse(sinceParam)
+        if (isNaN(parsedDate)) {
+          return errorResponse('Invalid since parameter. Must be an ISO 8601 timestamp.', 400)
+        }
+        startTime = parsedDate
+      }
+
+      // Get a stub for the FunctionLogs Durable Object (using functionId as the DO instance ID)
+      const doId = env.FUNCTION_LOGS.idFromName(functionId)
+      const stub = env.FUNCTION_LOGS.get(doId)
+
+      // Build the query URL for the Durable Object
+      const doUrl = new URL('/logs', 'https://function-logs.internal')
+      doUrl.searchParams.set('functionId', functionId)
+      doUrl.searchParams.set('limit', String(limit))
+
+      // Forward request to the Durable Object
+      const doResponse = await stub.fetch(doUrl.toString(), {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      })
+
+      if (!doResponse.ok) {
+        const errorText = await doResponse.text()
+        return errorResponse(`Failed to retrieve logs: ${errorText}`, doResponse.status)
+      }
+
+      // Parse the DO response and transform to expected format
+      const doResult = await doResponse.json() as {
+        entries: Array<{
+          timestamp: number
+          level: string
+          message: string
+        }>
+      }
+
+      // Filter by startTime if provided and transform timestamps to ISO strings
+      let entries = doResult.entries || []
+      if (startTime !== undefined) {
+        entries = entries.filter(entry => entry.timestamp >= startTime!)
+      }
+
+      // Transform to the expected response format with ISO timestamps
+      const logs = entries.map(entry => ({
+        timestamp: new Date(entry.timestamp).toISOString(),
+        level: entry.level,
+        message: entry.message,
+      }))
+
+      return jsonResponse(logs)
+    }
+
+    // Handle POST /api/functions endpoint for deploying functions
+    if (url.pathname === '/api/functions' && request.method === 'POST') {
+      // Authentication check for API endpoints (if API_KEYS KV is configured)
+      if (env.API_KEYS) {
+        const publicEndpoints = parsePublicEndpoints(env.PUBLIC_ENDPOINTS)
+        if (!isPublicEndpoint(url.pathname, publicEndpoints)) {
+          const authConfig = createKVAuthConfig(env.API_KEYS, publicEndpoints)
+          const authResult = await authenticateRequest(request, authConfig)
+          if (!authResult.authenticated) {
+            return errorResponse(authResult.error || 'Unauthorized', 401)
+          }
+        }
+      }
+
+      // Parse request body
+      let body: {
+        id?: string
+        version?: string
+        language?: string
+        code?: string
+        entryPoint?: string
+        dependencies?: Record<string, string>
+      }
+      try {
+        body = await request.json()
+      } catch {
+        return errorResponse('Invalid JSON body', 400)
+      }
+
+      // Validate required fields
+      const { id, version, language, code, entryPoint, dependencies } = body
+
+      if (!id) {
+        return errorResponse('Missing required field: id', 400)
+      }
+      if (!version) {
+        return errorResponse('Missing required field: version', 400)
+      }
+      if (!language) {
+        return errorResponse('Missing required field: language', 400)
+      }
+      if (!code) {
+        return errorResponse('Missing required field: code', 400)
+      }
+
+      // Validate function metadata
+      try {
+        validateFunctionId(id)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Invalid function ID'
+        return errorResponse(message, 400)
+      }
+
+      if (!isValidVersion(version)) {
+        return errorResponse(`Invalid semantic version: ${version}`, 400)
+      }
+
+      try {
+        validateLanguage(language)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Invalid language'
+        return errorResponse(message, 400)
+      }
+
+      // Validate entry point if provided, otherwise use defaults
+      const resolvedEntryPoint = entryPoint || (language === 'typescript' || language === 'javascript' ? 'index.ts' : 'main')
+      try {
+        validateEntryPoint(resolvedEntryPoint)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Invalid entry point'
+        return errorResponse(message, 400)
+      }
+
+      // Validate dependencies if provided
+      try {
+        validateDependencies(dependencies)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Invalid dependencies'
+        return errorResponse(message, 400)
+      }
+
+      // Compile the code based on language
+      let compiledCode: string | Uint8Array
+      try {
+        switch (language) {
+          case 'typescript':
+          case 'javascript': {
+            const result = await compileTypeScript(code)
+            if (result.errors && result.errors.length > 0) {
+              return errorResponse(`Compilation failed: ${result.errors.map(e => e.message).join(', ')}`, 400)
+            }
+            compiledCode = result.code
+            break
+          }
+          case 'rust': {
+            const result = await compileRust(code)
+            compiledCode = result.wasm
+            break
+          }
+          case 'go': {
+            const result = await compileGo(code)
+            compiledCode = result.wasm
+            break
+          }
+          case 'zig': {
+            const result = await compileZig(code)
+            compiledCode = result.wasm
+            break
+          }
+          case 'assemblyscript': {
+            const result = await compileAssemblyScript(code)
+            compiledCode = result.wasm
+            break
+          }
+          default:
+            return errorResponse(`Compilation not yet supported for language: ${language}`, 400)
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Compilation failed'
+        return errorResponse(message, 400)
+      }
+
+      // Create registry and code storage instances
+      const registry = new KVFunctionRegistry(env.REGISTRY)
+      const codeStorage = new KVCodeStorage(env.CODE)
+
+      // Store compiled code in CODE namespace
+      if (compiledCode instanceof Uint8Array) {
+        // For WASM binaries, store as base64
+        const base64Code = btoa(String.fromCharCode(...compiledCode))
+        await codeStorage.put(id, base64Code, version)
+        // Also store as latest
+        await codeStorage.put(id, base64Code)
+      } else {
+        // For text-based code (TypeScript/JavaScript)
+        await codeStorage.put(id, compiledCode, version)
+        // Also store as latest
+        await codeStorage.put(id, compiledCode)
+      }
+
+      // Store metadata in REGISTRY namespace
+      const metadata: FunctionMetadata = {
+        id,
+        version,
+        language: language as FunctionMetadata['language'],
+        entryPoint: resolvedEntryPoint,
+        dependencies: dependencies || {},
+      }
+      await registry.put(metadata)
+      await registry.putVersion(id, version, metadata)
+
+      // Return success response
+      const baseUrl = new URL(request.url).origin
+      return jsonResponse({
+        id,
+        version,
+        url: `${baseUrl}/functions/${id}`,
+      })
+    }
+
     // Authentication check (if API_KEYS KV is configured)
     if (env.API_KEYS) {
       const publicEndpoints = parsePublicEndpoints(env.PUBLIC_ENDPOINTS)
@@ -302,6 +615,9 @@ export default {
         // Create FunctionTarget for RPC-style invocation
         const target = new FunctionTarget(result.stub)
 
+        // Clone request before reading body so we can pass it to the function if needed
+        const requestClone = request.clone()
+
         // Parse request body for method invocation
         let body: { method?: string; params?: unknown[] } = {}
         const contentType = request.headers.get('Content-Type')
@@ -320,8 +636,9 @@ export default {
           return jsonResponse({ result: invokeResult })
         }
 
-        // Otherwise, forward the request directly to the function's fetch handler
-        const response = await result.stub.fetch(request)
+        // Otherwise, forward the cloned request to the function's fetch handler
+        // We use the clone because the original request's body was consumed for RPC check
+        const response = await result.stub.fetch(requestClone)
 
         // If the response is already JSON, return it as-is
         const responseContentType = response.headers.get('Content-Type')
