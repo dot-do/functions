@@ -21,8 +21,8 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["@cloudflare/workers-types"],
     "paths": {
-      "@dotdo/functions-sdk": ["../../packages/functions-sdk/dist"],
-      "@dotdo/functions-sdk/*": ["../../packages/functions-sdk/dist/*"]
+      "@dotdo/functions": ["../../packages/functions-sdk/dist"],
+      "@dotdo/functions/*": ["../../packages/functions-sdk/dist/*"]
     }
   },
   "include": ["src/index.ts"],

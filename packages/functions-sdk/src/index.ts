@@ -1,5 +1,5 @@
 /**
- * @dotdo/functions-sdk
+ * @dotdo/functions
  * Official SDK for Functions.do - Multi-language serverless platform
  */
 

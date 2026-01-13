@@ -42,7 +42,7 @@
     "generate:stub": "functions-generate-stub"
   },
   "dependencies": {
-    "@dotdo/functions-sdk": "^0.1.0"
+    "@dotdo/functions": "^0.1.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260113.0",

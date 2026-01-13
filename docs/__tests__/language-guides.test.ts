@@ -175,7 +175,7 @@ describe('Language Guides Documentation', () => {
       expect(guideContent.toLowerCase()).toMatch(/getting\s*started|quick\s*start/)
     })
 
-    it('should document @dotdo/functions-sdk usage', () => {
+    it('should document @dotdo/functions usage', () => {
       expect(guideContent).toMatch(/@dotdo\/functions-sdk/)
     })
 

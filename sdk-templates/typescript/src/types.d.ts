@@ -8,7 +8,7 @@
  * @module my-function/types
  */
 
-import { RpcTarget } from '@dotdo/functions-sdk'
+import { RpcTarget } from '@dotdo/functions'
 
 // ============================================================================
 // Request/Response Types

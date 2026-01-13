@@ -1,5 +1,5 @@
 {
-  "name": "@dotdo/functions-sdk",
+  "name": "@dotdo/functions",
   "version": "0.1.0",
   "description": "Official SDK for Functions.do - Multi-language serverless platform",
   "type": "module",

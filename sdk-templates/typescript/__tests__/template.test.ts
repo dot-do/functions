@@ -49,11 +49,11 @@ describe('TypeScript Template', () => {
       expect(scripts.typecheck).toBeDefined()
     })
 
-    it('should include @dotdo/functions-sdk as a dependency', () => {
+    it('should include @dotdo/functions as a dependency', () => {
       const dependencies = packageJson.dependencies as Record<string, string>
       expect(dependencies).toBeDefined()
-      expect(dependencies['@dotdo/functions-sdk']).toBeDefined()
-      expect(typeof dependencies['@dotdo/functions-sdk']).toBe('string')
+      expect(dependencies['@dotdo/functions']).toBeDefined()
+      expect(typeof dependencies['@dotdo/functions']).toBe('string')
     })
 
     it('should have typescript as a devDependency', () => {
@@ -220,7 +220,7 @@ describe('TypeScript Template', () => {
       expect(fs.existsSync(indexPath)).toBe(true)
     })
 
-    it('should import from @dotdo/functions-sdk', () => {
+    it('should import from @dotdo/functions', () => {
       expect(indexContent).toMatch(/@dotdo\/functions-sdk/)
     })
 

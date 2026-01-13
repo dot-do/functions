@@ -17,19 +17,19 @@ npm install
 Install the Functions.do SDK and required dependencies:
 
 ```bash
-npm install @dotdo/functions-sdk
+npm install @dotdo/functions
 npm install -D typescript @cloudflare/workers-types wrangler
 ```
 
 Or with other package managers:
 
 ```bash
-pnpm add @dotdo/functions-sdk
+pnpm add @dotdo/functions
 pnpm add -D typescript @cloudflare/workers-types wrangler
 ```
 
 ```bash
-yarn add @dotdo/functions-sdk
+yarn add @dotdo/functions
 yarn add -D typescript @cloudflare/workers-types wrangler
 ```
 
@@ -120,7 +120,7 @@ export default {
 Handle JSON requests and responses:
 
 ```typescript
-import { FunctionsSDK } from '@dotdo/functions-sdk'
+import { FunctionsSDK } from '@dotdo/functions'
 
 interface Env {
   API_KEY: string
@@ -165,7 +165,7 @@ export default {
 Use the Functions.do SDK for advanced functionality:
 
 ```typescript
-import { FunctionsSDK, createHandler } from '@dotdo/functions-sdk'
+import { FunctionsSDK, createHandler } from '@dotdo/functions'
 
 interface Env {
   FUNCTIONS_API_KEY: string
@@ -208,7 +208,7 @@ export default {
 Advanced handler with middleware pattern:
 
 ```typescript
-import { FunctionsSDK } from '@dotdo/functions-sdk'
+import { FunctionsSDK } from '@dotdo/functions'
 
 interface Env {
   API_KEY: string
@@ -243,10 +243,10 @@ export default {
 
 ## SDK Configuration
 
-The @dotdo/functions-sdk provides configuration options for your Functions.do integration:
+The @dotdo/functions provides configuration options for your Functions.do integration:
 
 ```typescript
-import { FunctionsSDK } from '@dotdo/functions-sdk'
+import { FunctionsSDK } from '@dotdo/functions'
 
 const sdk = new FunctionsSDK({
   // Required: Your Functions.do API key
@@ -266,7 +266,7 @@ const sdk = new FunctionsSDK({
 ### SDK API Methods
 
 ```typescript
-import { FunctionsSDK } from '@dotdo/functions-sdk'
+import { FunctionsSDK } from '@dotdo/functions'
 
 // Example SDK API usage
 export async function useSdkMethods(sdk: FunctionsSDK) {

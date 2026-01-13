@@ -8,7 +8,7 @@
  * @module {{functionName}}
  */
 
-import { RpcTarget, createFunction, type FunctionContext, type FunctionEnv } from '@dotdo/functions-sdk'
+import { RpcTarget, createFunction, type FunctionContext, type FunctionEnv } from '@dotdo/functions'
 
 // ============================================================================
 // Types

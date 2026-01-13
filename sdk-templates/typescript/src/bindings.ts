@@ -9,7 +9,7 @@
  * @module my-function/bindings
  */
 
-import { RpcTarget } from '@dotdo/functions-sdk'
+import { RpcTarget } from '@dotdo/functions'
 import type { GreetResponse, MathResult, MyFunctionTargetMethods, Env, RpcRequest, RpcResponse } from './types'
 
 // ============================================================================
