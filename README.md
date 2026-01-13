@@ -133,7 +133,7 @@ npm run deploy # Deploy globally
 npx create-function hello --lang rust
 cd hello
 cargo build --target wasm32-unknown-unknown
-npx func deploy
+npx dotdo deploy
 ```
 
 ### Python
@@ -141,8 +141,40 @@ npx func deploy
 ```bash
 npx create-function hello --lang python
 cd hello
-pywrangler dev    # Local development
-pywrangler deploy # Deploy globally
+npx dotdo dev    # Local development
+npx dotdo deploy # Deploy globally
+```
+
+---
+
+## SDK
+
+Install the official SDK to invoke functions programmatically:
+
+```bash
+npm install @dotdo/functions
+```
+
+```typescript
+import { FunctionClient } from '@dotdo/functions'
+
+const client = new FunctionClient({
+  baseUrl: 'https://functions.do',
+  apiKey: process.env.FUNCTIONS_API_KEY
+})
+
+// Invoke a function
+const result = await client.invoke('my-function', { name: 'World' })
+console.log(result.data) // { message: 'Hello, World!' }
+
+// Deploy a function
+await client.deploy('export default () => ({ hello: "world" })', {
+  id: 'my-function',
+  language: 'typescript'
+})
+
+// List all functions
+const functions = await client.list()
 ```
 
 ---
@@ -202,10 +234,10 @@ No cold start penalties. No duration charges for waiting on I/O. Pay only for co
 - [x] TypeScript → ESM compilation
 - [x] Rust → WASM compilation
 - [x] Python via Pyodide (with memory snapshots)
-- [ ] Go → WASM (TinyGo + Go 1.24)
-- [ ] AssemblyScript → WASM
-- [ ] C# distributed runtime
-- [ ] Zig → WASM
+- [x] Go → WASM (TinyGo)
+- [x] AssemblyScript → WASM
+- [x] C# distributed runtime
+- [x] Zig → WASM
 - [ ] JVM distributed runtime
 
 ---
