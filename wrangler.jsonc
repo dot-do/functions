@@ -5,7 +5,14 @@
   "compatibility_date": "2025-01-01",
   "compatibility_flags": ["nodejs_compat"],
 
-  // Dispatch namespace for Workers for Platforms (dynamic user code execution)
+  // Worker Loaders for ai-evaluate sandbox execution
+  "worker_loaders": [
+    {
+      "binding": "LOADER"
+    }
+  ],
+
+  // Dispatch namespace for Workers for Platforms (fallback for complex cases)
   "dispatch_namespaces": [
     {
       "binding": "USER_FUNCTIONS",
@@ -63,6 +70,10 @@
       "binding": "BASHX",
       "service": "bashx-do",
       "environment": "production"
+    },
+    {
+      "binding": "TEST",
+      "service": "ai-tests"
     }
   ],
 

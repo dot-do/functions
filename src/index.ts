@@ -4,6 +4,7 @@
  * Main entry point for the Cloudflare Worker
  */
 
+import { createEvaluator, type EvaluateResult, type SandboxEnv } from 'ai-evaluate'
 import { FunctionLoader, type Registry, type CodeStorage } from './core/function-loader'
 import { FunctionTarget } from './core/function-target'
 import type { FunctionMetadata } from './core/types'
@@ -101,7 +102,11 @@ export interface Env {
   FUNCTION_LOGS?: DurableObjectNamespace
   /** Durable Object namespace for function executor */
   FUNCTION_EXECUTOR?: DurableObjectNamespace
-  /** Dispatch namespace for user-deployed functions (Workers for Platforms) */
+  /** Worker Loader for ai-evaluate sandbox execution */
+  LOADER?: unknown
+  /** Test service binding for ai-evaluate (from ai-tests Worker) */
+  TEST?: unknown
+  /** Dispatch namespace for user-deployed functions (Workers for Platforms fallback) */
   USER_FUNCTIONS?: DispatchNamespace
   /** Cloudflare Account ID for API calls */
   CLOUDFLARE_ACCOUNT_ID?: string
@@ -689,56 +694,134 @@ export default {
     // POST /functions/:functionId or POST /functions/:functionId/invoke - invoke function
     if (method === 'POST') {
       try {
-        // Use Workers for Platforms dispatch namespace if available
-        if (env.USER_FUNCTIONS) {
-          // Get the user worker from the dispatch namespace
-          const userWorker = env.USER_FUNCTIONS.get(functionId)
+        // Get the function code from KV
+        const codeStorage = createKVCodeStorage(env.FUNCTIONS_CODE)
+        const code = await codeStorage.get(functionId)
 
-          // Forward the request to the user worker
-          const response = await userWorker.fetch(request)
+        if (!code) {
+          return errorResponse(`Function code not found: ${functionId}`, 404)
+        }
 
-          // If the response is already JSON, return it as-is
-          const responseContentType = response.headers.get('Content-Type')
-          if (responseContentType?.includes('application/json')) {
-            return response
+        // Parse request body if present
+        let requestData: unknown = {}
+        const contentType = request.headers.get('Content-Type')
+        if (contentType?.includes('application/json')) {
+          const bodyText = await request.text()
+          if (bodyText.trim()) {
+            try {
+              requestData = JSON.parse(bodyText)
+            } catch {
+              return errorResponse('Invalid JSON body', 400)
+            }
           }
-
-          // Wrap non-JSON responses
-          const responseBody = await response.text()
-          return jsonResponse({
-            result: responseBody,
-            status: response.status,
-            headers: Object.fromEntries(response.headers.entries()),
-          })
         }
 
-        // Fallback: Try to use FunctionLoader (won't work in production due to eval restrictions)
-        const loader = new FunctionLoader({
-          registry: registry,
-          codeStorage: createKVCodeStorage(env.FUNCTIONS_CODE),
-        })
-        const result = await loader.loadWithResult(functionId)
+        // Primary: Use ai-evaluate sandbox with worker loaders
+        // Requires both LOADER (worker_loaders) and TEST (ai-tests service) bindings
+        // Note: worker_loaders are in CLOSED BETA - disabled until generally available
+        // See: https://developers.cloudflare.com/workers/runtime-apis/bindings/worker-loader/
+        const useAiEvaluate = false // Disabled: worker_loaders in closed beta
 
-        if (!result.success || !result.stub) {
-          // In production without dispatch namespace, this will fail
-          return errorResponse(
-            'Function execution not available. Dispatch namespace required for dynamic code execution.',
-            501
-          )
+        if (useAiEvaluate && env.LOADER && env.TEST) {
+          console.log('=== Using ai-evaluate sandbox ===')
+
+          try {
+            const sandbox = createEvaluator(env as SandboxEnv)
+
+            // Create a wrapper script that invokes the module's fetch handler
+            const wrapperScript = `
+              const mod = (function() {
+                ${code}
+                return typeof exports !== 'undefined' ? exports :
+                       typeof module !== 'undefined' ? module.exports : {};
+              })();
+
+              // Check for default export with fetch handler
+              const handler = mod.default?.fetch || mod.fetch || mod.handler || mod.default;
+
+              if (typeof handler === 'function') {
+                const request = new Request('http://internal/invoke', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(${JSON.stringify(requestData)})
+                });
+                const response = await handler(request);
+                const body = await response.text();
+                try {
+                  return JSON.parse(body);
+                } catch {
+                  return { result: body, status: response.status };
+                }
+              }
+
+              return { error: 'No handler function found in module' };
+            `
+
+            const evalResult = await sandbox({
+              script: wrapperScript,
+              timeout: 30000,
+            })
+
+            if (!evalResult.success) {
+              return errorResponse(evalResult.error || 'Execution failed', 500)
+            }
+
+            return jsonResponse({
+              ...evalResult.value as object,
+              logs: evalResult.logs,
+              duration: evalResult.duration,
+            })
+          } catch (sandboxError) {
+            console.error('Sandbox error:', sandboxError)
+            const msg = sandboxError instanceof Error ? sandboxError.message : String(sandboxError)
+            return errorResponse(`Sandbox error: ${msg}`, 500)
+          }
         }
 
-        const response = await result.stub.fetch(request)
-        const responseContentType = response.headers.get('Content-Type')
-        if (responseContentType?.includes('application/json')) {
-          return response
+        // Fallback: Use Workers for Platforms dispatch namespace
+        if (env.USER_FUNCTIONS) {
+          try {
+            const userWorker = env.USER_FUNCTIONS.get(functionId)
+
+            // Check if the worker was returned correctly
+            if (!userWorker || typeof userWorker.fetch !== 'function') {
+              return errorResponse(
+                `Function ${functionId} not available in dispatch namespace. userWorker type: ${typeof userWorker}. Upload the function with: wrangler deploy --dispatch-namespace=dotdo-public`,
+                404
+              )
+            }
+
+            // Create a new request since the original body was already consumed
+            const dispatchRequest = new Request(request.url, {
+              method: request.method,
+              headers: request.headers,
+              body: requestData ? JSON.stringify(requestData) : undefined,
+            })
+
+            const response = await userWorker.fetch(dispatchRequest)
+
+            const responseContentType = response.headers.get('Content-Type')
+            if (responseContentType?.includes('application/json')) {
+              return response
+            }
+
+            const responseBody = await response.text()
+            return jsonResponse({
+              result: responseBody,
+              status: response.status,
+              headers: Object.fromEntries(response.headers.entries()),
+            })
+          } catch (dispatchError) {
+            const msg = dispatchError instanceof Error ? dispatchError.message : 'Dispatch error'
+            return errorResponse(`Dispatch namespace error: ${msg}`, 500)
+          }
         }
 
-        const responseBody = await response.text()
-        return jsonResponse({
-          result: responseBody,
-          status: response.status,
-          headers: Object.fromEntries(response.headers.entries()),
-        })
+        // No execution method available
+        return errorResponse(
+          'Function execution not available. LOADER or dispatch namespace required.',
+          501
+        )
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Invocation failed'
         return errorResponse(message, 500)
