@@ -4,8 +4,7 @@
  * Main entry point for the Cloudflare Worker
  */
 
-// Note: Not using ai-evaluate directly since it has outdated worker_loaders API
-// We use worker_loaders directly via the LOADER binding
+import type { WorkerLoader, WorkerStub, SandboxEnv } from 'ai-evaluate'
 import { FunctionLoader, type Registry, type CodeStorage } from './core/function-loader'
 import { FunctionTarget } from './core/function-target'
 import type { FunctionMetadata } from './core/types'
@@ -43,8 +42,9 @@ import {
 let rateLimiter: CompositeRateLimiter | null = null
 
 /**
- * Simple TypeScript to JavaScript transpiler for worker_loaders.
- * Strips type annotations without needing esbuild (which has node:sqlite issues).
+ * Simple TypeScript to JavaScript transpiler for runtime execution.
+ * Uses regex to strip type annotations - works in Cloudflare Workers.
+ * For complex JSX/TSX, use ai-evaluate's esbuild transformation.
  */
 function stripTypeScript(code: string): string {
   // Remove interface/type declarations (non-exported and exported)
@@ -750,80 +750,63 @@ export default {
           }
         }
 
-        // Primary: Use ai-evaluate sandbox with worker loaders
-        // Requires both LOADER (worker_loaders) and TEST (ai-tests service) bindings
-        if (env.LOADER && env.TEST) {
-          console.log('=== ai-evaluate: checking LOADER binding ===')
-          const loader = env.LOADER as { get?: (id: string, fn: () => Promise<unknown>) => unknown }
-          console.log('LOADER:', loader)
-          console.log('LOADER.get type:', typeof loader?.get)
+        // Primary: Use worker_loaders via ai-evaluate types
+        // Requires LOADER (worker_loaders) binding
+        if (env.LOADER) {
+          const loader = env.LOADER as WorkerLoader
 
-          if (typeof loader?.get !== 'function') {
-            console.log('LOADER.get is not a function, falling back to dispatch namespace')
-          } else {
-            console.log('=== Using ai-evaluate sandbox ===')
+          try {
+            // Strip TypeScript annotations if needed
+            let jsCode = code
+            const isTypeScript = metadata.language === 'typescript' ||
+              code.includes(': Request') ||
+              code.includes(': Response') ||
+              code.includes(': Promise')
 
-            // Use worker_loaders directly (bypassing ai-evaluate which has outdated API)
-            try {
-              // Strip TypeScript annotations if needed (simple regex-based approach)
-              let jsCode = code
-              const isTypeScript = metadata.language === 'typescript' || code.includes(': Request') || code.includes(': Response') || code.includes(': Promise')
-              console.log('Language:', metadata.language, 'isTypeScript:', isTypeScript)
+            if (isTypeScript) {
+              jsCode = stripTypeScript(code)
+            }
 
-              if (isTypeScript) {
-                console.log('=== Stripping TypeScript annotations ===')
-                console.log('Original code length:', code.length)
-                jsCode = stripTypeScript(code)
-                console.log('Stripped JS length:', jsCode.length)
-                console.log('Stripped JS preview:', jsCode.substring(0, 300))
-              }
+            const workerId = `fn-${functionId}-${Date.now()}`
+            const workerStub: WorkerStub = loader.get(workerId, async () => ({
+              mainModule: 'worker.js',
+              modules: { 'worker.js': jsCode },
+              compatibilityDate: '2024-01-01',
+            }))
 
-              const workerId = `fn-${functionId}-${Date.now()}`
-              const workerStub = loader.get(workerId, async () => ({
-                mainModule: 'worker.js',
-                modules: {
-                  'worker.js': jsCode
-                },
-                compatibilityDate: '2024-01-01',
-              })) as { getEntrypoint: () => { fetch: (req: Request) => Promise<Response> } }
+            // Get the entrypoint and call fetch (ai-evaluate WorkerStub API)
+            const entrypoint = workerStub.getEntrypoint()
 
-              // Get the entrypoint and call fetch
-              const entrypoint = workerStub.getEntrypoint()
+            const sandboxRequest = new Request('http://sandbox/invoke', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: requestData ? JSON.stringify(requestData) : undefined,
+            })
 
-              // Create request with the user's data
-              const sandboxRequest = new Request('http://sandbox/invoke', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: requestData ? JSON.stringify(requestData) : undefined,
-              })
+            const start = Date.now()
+            const response = await entrypoint.fetch(sandboxRequest)
+            const duration = Date.now() - start
 
-              const start = Date.now()
-              const response = await entrypoint.fetch(sandboxRequest)
-              const duration = Date.now() - start
-
-              // Return the response
-              const responseContentType = response.headers.get('Content-Type')
-              if (responseContentType?.includes('application/json')) {
-                const result = await response.json()
-                return jsonResponse({
-                  ...result as object,
-                  _meta: { duration, executedWith: 'worker_loaders' }
-                })
-              }
-
-              const body = await response.text()
+            const responseContentType = response.headers.get('Content-Type')
+            if (responseContentType?.includes('application/json')) {
+              const result = await response.json()
               return jsonResponse({
-                result: body,
-                status: response.status,
+                ...result as object,
                 _meta: { duration, executedWith: 'worker_loaders' }
               })
-
-            } catch (loaderError) {
-              console.error('Worker loader error:', loaderError)
-              const msg = loaderError instanceof Error ? loaderError.message : String(loaderError)
-              // Fall through to dispatch namespace on error
-              console.log('Falling back to dispatch namespace due to loader error:', msg)
             }
+
+            const body = await response.text()
+            return jsonResponse({
+              result: body,
+              status: response.status,
+              _meta: { duration, executedWith: 'worker_loaders' }
+            })
+
+          } catch (loaderError) {
+            console.error('Worker loader error:', loaderError)
+            const msg = loaderError instanceof Error ? loaderError.message : String(loaderError)
+            console.log('Falling back to dispatch namespace due to loader error:', msg)
           }
         }
 
