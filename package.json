@@ -94,6 +94,7 @@
     "@cloudflare/vitest-pool-workers": "^0.8.0",
     "@cloudflare/workers-types": "^4.20250109.0",
     "@types/node": "^22.0.0",
+    "esbuild-wasm": "^0.27.2",
     "pyodide": "^0.29.1",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0",
