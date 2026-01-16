@@ -42,37 +42,100 @@ import {
 let rateLimiter: CompositeRateLimiter | null = null
 
 /**
- * Simple TypeScript to JavaScript transpiler for runtime execution.
- * Uses regex to strip type annotations - works in Cloudflare Workers.
- * For complex JSX/TSX, use ai-evaluate's esbuild transformation.
+ * Strip TypeScript type annotations using regex-based parsing.
+ *
+ * This is a lightweight runtime solution for Cloudflare Workers where
+ * WASM-based transpilers (esbuild, swc) cannot be used due to
+ * "Wasm code generation disallowed" restrictions.
+ *
+ * Supports common TypeScript patterns:
+ * - Type annotations on parameters and return types
+ * - Interface and type declarations
+ * - Import/export type statements
+ * - Type assertions (as Type)
+ * - Generic type parameters
+ * - Access modifiers (public, private, protected, readonly)
+ *
+ * Limitations (not supported):
+ * - Enums (require code generation)
+ * - Decorators (require transformation)
+ * - Namespace declarations
+ * - Complex mapped/conditional types in expressions
+ *
+ * For full TypeScript support, pre-compile code before deployment.
  */
 function stripTypeScript(code: string): string {
-  // Remove interface/type declarations (non-exported and exported)
-  let result = code.replace(/^(export\s+)?(interface|type)\s+\w+[^{]*\{[^}]*\}/gm, '')
+  let result = code
 
-  // Remove import type statements
-  result = result.replace(/^import\s+type\s+.*$/gm, '')
+  // Remove single-line interface declarations: interface Foo { ... }
+  result = result.replace(/^\s*(export\s+)?interface\s+\w+[^{]*\{[^}]*\}\s*$/gm, '')
 
-  // Remove type-only exports
-  result = result.replace(/^export\s+type\s+\{[^}]*\}\s*;?\s*$/gm, '')
+  // Remove multi-line interface declarations
+  result = result.replace(/^\s*(export\s+)?interface\s+\w+[^{]*\{[\s\S]*?\n\}\s*$/gm, '')
 
-  // Remove type annotations from function parameters: (param: Type) -> (param)
-  // Handle complex types like Promise<Response>
-  result = result.replace(/:\s*(?:Promise<[^>]+>|[A-Z][a-zA-Z0-9<>,\s|&\[\]]*)/g, '')
+  // Remove type alias declarations: type Foo = ...
+  result = result.replace(/^\s*(export\s+)?type\s+\w+\s*(<[^>]+>)?\s*=\s*[^;]+;?\s*$/gm, '')
 
-  // Remove return type annotations: ): Type { -> ) {
-  result = result.replace(/\)\s*:\s*(?:Promise<[^>]+>|[A-Z][a-zA-Z0-9<>,\s|&\[\]]*)\s*(\{|=>)/g, ')$1')
+  // Remove import type statements: import type { ... } from '...'
+  result = result.replace(/^\s*import\s+type\s+.*$/gm, '')
 
-  // Remove 'as Type' assertions
-  result = result.replace(/\s+as\s+[A-Z][a-zA-Z0-9<>,\s|&\[\]]*/g, '')
+  // Remove type-only imports: import { type Foo, Bar } -> import { Bar }
+  result = result.replace(/,\s*type\s+\w+/g, '')
+  result = result.replace(/{\s*type\s+\w+\s*,/g, '{')
+  result = result.replace(/{\s*type\s+\w+\s*}/g, '{ }')
 
-  // Remove generic type parameters from function definitions
-  result = result.replace(/<[A-Z][a-zA-Z0-9<>,\s|&\[\]]*>\s*\(/g, '(')
+  // Remove export type statements: export type { ... }
+  result = result.replace(/^\s*export\s+type\s+\{[^}]*\}[^;]*;?\s*$/gm, '')
 
-  // Clean up any double spaces
+  // Remove declare statements
+  result = result.replace(/^\s*declare\s+(const|let|var|function|class|module|namespace|global|type|interface)\s+[^;]+;?\s*$/gm, '')
+
+  // Remove access modifiers: public, private, protected, readonly
+  result = result.replace(/\b(public|private|protected)\s+(?=\w)/g, '')
+  result = result.replace(/\breadonly\s+(?=\w)/g, '')
+
+  // Remove type assertions with inline object types: as { key: Type }
+  // Must come before simpler as Type removal
+  result = result.replace(/\s+as\s+\{[^}]+\}/g, '')
+
+  // Remove type assertions: as Type (handles primitives and named types)
+  // Negative lookahead for 'as const' which is valid JS-like syntax
+  result = result.replace(/\s+as\s+(?!const\b)[A-Z][\w<>[\],\s|&.?]*/g, '')
+  result = result.replace(/\s+as\s+(?!const\b)(string|number|boolean|any|unknown|void|never|null|undefined)\b/g, '')
+
+  // Remove angle bracket type assertions: <Type>expression
+  result = result.replace(/<([A-Z][\w<>[\],\s|&.?]*)>(?=\s*[\w({[])/g, '')
+
+  // Remove type annotations from parameters: (param: Type) -> (param)
+  // Only match after ( , or whitespace to avoid matching object properties like obj.name
+  result = result.replace(/([(,\s])(\w+)\s*\??\s*:\s*([A-Z][\w<>[\],\s|&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint)(?=\s*[,)=])/gi, '$1$2')
+
+  // Remove return type annotations: ): Type { or ): Type =>
+  result = result.replace(/\)\s*:\s*([A-Z][\w<>[\],\s|&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint|Promise<[^>]+>)\s*(?=[{=])/gi, ') ')
+
+  // Remove generic type parameters from functions: function foo<T>(...) -> function foo(...)
+  result = result.replace(/(<[A-Z][\w,\s]*(?:\s+extends\s+[^>]+)?>)(?=\s*\()/gi, '')
+
+  // Remove generic type parameters from classes: class Foo<T> -> class Foo
+  result = result.replace(/(class\s+\w+)\s*<[A-Z][\w,\s]*(?:\s+extends\s+[^>]+)?>/gi, '$1')
+
+  // Remove non-null assertions: expression! -> expression
+  // Be careful not to match !== or !=
+  result = result.replace(/(\w+)!(?!=)/g, '$1')
+
+  // Remove satisfies expressions: expression satisfies Type
+  result = result.replace(/\s+satisfies\s+[A-Z][\w<>[\],\s|&.?]*/gi, '')
+
+  // Clean up empty imports: import { } from '...'
+  result = result.replace(/^\s*import\s*\{\s*\}\s*from\s*['"][^'"]+['"];?\s*$/gm, '')
+
+  // Clean up multiple consecutive newlines
+  result = result.replace(/\n{3,}/g, '\n\n')
+
+  // Clean up multiple spaces (but preserve single spaces)
   result = result.replace(/  +/g, ' ')
 
-  return result
+  return result.trim()
 }
 
 /**
