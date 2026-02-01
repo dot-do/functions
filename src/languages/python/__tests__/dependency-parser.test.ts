@@ -229,8 +229,9 @@ test = [
       const result = parsePyprojectToml(content)
 
       expect(result.dependencies).toHaveLength(3)
+      // Both 'dev' and 'test' groups are marked as isDev (since they're not production deps)
       const devDeps = result.dependencies.filter((d) => d.isDev)
-      expect(devDeps).toHaveLength(2)
+      expect(devDeps).toHaveLength(3)
     })
 
     it('parses Poetry style dependencies', () => {

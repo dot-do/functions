@@ -262,8 +262,9 @@ export function extractFunctionSignatures(code: string): FunctionSignature[] {
     /(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?::\s*([^{]+))?\s*\{/g
 
   // Pattern for arrow functions with export (handles both single-line and block body)
+  // Note: The type annotation after : can include Promise<...> so we use .+? (non-greedy any)
   const arrowPattern =
-    /(?:export\s+)?(?:const|let)\s+(\w+)\s*(?::\s*[^=]+)?\s*=\s*(async\s+)?\(([^)]*)\)\s*(?::\s*([^=>{]+))?\s*=>/g
+    /(?:export\s+)?(?:const|let)\s+(\w+)\s*=\s*(async\s+)?\(([^)]*)\)\s*(?::\s*(.+?))?\s*=>/g
 
   // Pattern for class methods
   const methodPattern = /(?:async\s+)?(\w+)\s*\(([^)]*)\)\s*(?::\s*([^{]+))?\s*\{/g
