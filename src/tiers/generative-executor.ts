@@ -1069,9 +1069,9 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
       generativeExecution: {
         model: modelResult.model,
         tokens: {
-          input: modelResult.inputTokens,
-          output: modelResult.outputTokens,
-          total: modelResult.inputTokens + modelResult.outputTokens,
+          inputTokens: modelResult.inputTokens,
+          outputTokens: modelResult.outputTokens,
+          totalTokens: modelResult.inputTokens + modelResult.outputTokens,
         },
         prompt: {
           system: systemPrompt,

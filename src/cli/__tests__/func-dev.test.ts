@@ -325,7 +325,7 @@ export default {
       const response = await makeRequest(DEFAULT_PORT, '/api/test')
       const body = (await response.json()) as JsonBody
 
-      expect(body.path).toBe('/api/test')
+      expect(body['path']).toBe('/api/test')
     })
 
     it('should pass request method and headers to the function', async () => {
@@ -358,8 +358,8 @@ export default {
       })
       const body = (await response.json()) as JsonBody
 
-      expect(body.method).toBe('POST')
-      expect(body.hasAuth).toBe(true)
+      expect(body['method']).toBe('POST')
+      expect(body['hasAuth']).toBe(true)
     })
   })
 
@@ -396,8 +396,8 @@ export default {
       expect(response.ok).toBe(true)
 
       const body = (await response.json()) as JsonBody
-      expect(body.message).toBe('TypeScript works!')
-      expect(typeof body.timestamp).toBe('number')
+      expect(body['message']).toBe('TypeScript works!')
+      expect(typeof body['timestamp']).toBe('number')
     })
 
     it('should report TypeScript compilation errors', async () => {

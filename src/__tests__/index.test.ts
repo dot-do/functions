@@ -96,7 +96,7 @@ describe('Worker Fetch Handler', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('test-func')
+      expect(body['id']).toBe('test-func')
     })
 
     it('should parse function ID from X-Function-Id header', async () => {
@@ -108,7 +108,7 @@ describe('Worker Fetch Handler', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('test-func')
+      expect(body['id']).toBe('test-func')
     })
 
     it('should prefer URL path over header when both are present', async () => {
@@ -120,7 +120,7 @@ describe('Worker Fetch Handler', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('test-func')
+      expect(body['id']).toBe('test-func')
     })
 
     it('should return 400 when no function ID is provided', async () => {
@@ -131,7 +131,7 @@ describe('Worker Fetch Handler', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('Function ID required')
+      expect(body['error']).toContain('Function ID required')
     })
   })
 
@@ -146,8 +146,8 @@ describe('Worker Fetch Handler', () => {
       expect(response.headers.get('Content-Type')).toBe('application/json')
 
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('test-func')
-      expect(body.status).toBe('loaded')
+      expect(body['id']).toBe('test-func')
+      expect(body['status']).toBe('loaded')
       expect(body).toHaveProperty('fromCache')
       expect(body).toHaveProperty('loadTimeMs')
     })
@@ -160,8 +160,8 @@ describe('Worker Fetch Handler', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('test-func')
-      expect(body.status).toBe('loaded')
+      expect(body['id']).toBe('test-func')
+      expect(body['status']).toBe('loaded')
     })
   })
 
@@ -178,7 +178,7 @@ describe('Worker Fetch Handler', () => {
       expect(response.headers.get('Content-Type')).toBe('application/json')
 
       const body = (await response.json()) as JsonBody
-      expect(body.message).toBe('Hello from test-func')
+      expect(body['message']).toBe('Hello from test-func')
     })
 
     it('should invoke function via POST /functions/:functionId/invoke', async () => {
@@ -202,7 +202,7 @@ describe('Worker Fetch Handler', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('Invalid JSON')
+      expect(body['error']).toContain('Invalid JSON')
     })
   })
 
@@ -215,7 +215,7 @@ describe('Worker Fetch Handler', () => {
 
       expect(response.status).toBe(404)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBeTruthy()
+      expect(body['error']).toBeTruthy()
     })
 
     it('should return 404 when function metadata exists but code is missing', async () => {
@@ -237,7 +237,7 @@ describe('Worker Fetch Handler', () => {
 
       expect(response.status).toBe(404)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('not found')
+      expect(body['error']).toContain('not found')
     })
   })
 
@@ -250,7 +250,7 @@ describe('Worker Fetch Handler', () => {
 
       expect(response.status).toBe(405)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('not allowed')
+      expect(body['error']).toContain('not allowed')
     })
 
     it('should return 405 for PUT requests', async () => {
@@ -361,8 +361,8 @@ describe('Worker Fetch Handler', () => {
       expect(response.headers.get('Content-Type')).toBe('application/json')
 
       const body = (await response.json()) as JsonBody
-      expect(body.result).toBe('Hello, plain text!')
-      expect(body.status).toBe(200)
+      expect(body['result']).toBe('Hello, plain text!')
+      expect(body['status']).toBe(200)
     })
   })
 
@@ -418,7 +418,7 @@ describe('Worker Fetch Handler', () => {
 
         expect(response.status).toBe(401)
         const body = (await response.json()) as JsonBody
-        expect(body.error).toBe('Missing API key')
+        expect(body['error']).toBe('Missing API key')
       })
 
       it('should return 401 for invalid API key', async () => {
@@ -430,7 +430,7 @@ describe('Worker Fetch Handler', () => {
 
         expect(response.status).toBe(401)
         const body = (await response.json()) as JsonBody
-        expect(body.error).toBe('Invalid API key')
+        expect(body['error']).toBe('Invalid API key')
       })
 
       it('should return 401 for inactive API key', async () => {
@@ -442,7 +442,7 @@ describe('Worker Fetch Handler', () => {
 
         expect(response.status).toBe(401)
         const body = (await response.json()) as JsonBody
-        expect(body.error).toBe('Invalid API key')
+        expect(body['error']).toBe('Invalid API key')
       })
 
       it('should return 401 for expired API key', async () => {
@@ -454,7 +454,7 @@ describe('Worker Fetch Handler', () => {
 
         expect(response.status).toBe(401)
         const body = (await response.json()) as JsonBody
-        expect(body.error).toBe('Invalid API key')
+        expect(body['error']).toBe('Invalid API key')
       })
 
       it('should allow request with valid API key', async () => {
@@ -466,7 +466,7 @@ describe('Worker Fetch Handler', () => {
 
         expect(response.status).toBe(200)
         const body = (await response.json()) as JsonBody
-        expect(body.id).toBe('test-func')
+        expect(body['id']).toBe('test-func')
       })
 
       it('should allow health endpoint without authentication', async () => {
@@ -517,7 +517,7 @@ describe('Worker Fetch Handler', () => {
         // Should get 400 (function ID required) not 401 (unauthorized)
         expect(response.status).toBe(400)
         const body = (await response.json()) as JsonBody
-        expect(body.error).toContain('Function ID required')
+        expect(body['error']).toContain('Function ID required')
       })
 
       it('should still require auth for non-public endpoints', async () => {
@@ -545,7 +545,7 @@ describe('Worker Fetch Handler', () => {
 
         expect(response.status).toBe(200)
         const body = (await response.json()) as JsonBody
-        expect(body.id).toBe('test-func')
+        expect(body['id']).toBe('test-func')
       })
     })
   })
@@ -596,8 +596,8 @@ describe('Worker Fetch Handler', () => {
       expect(response.headers.get('X-RateLimit-Remaining')).toBe('0')
 
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBe('Too Many Requests')
-      expect(body.message).toContain('ip')
+      expect(body['error']).toBe('Too Many Requests')
+      expect(body['message']).toContain('ip')
     })
 
     it('should rate limit by function ID', async () => {
@@ -627,7 +627,7 @@ describe('Worker Fetch Handler', () => {
 
       expect(response.status).toBe(429)
       const body = (await response.json()) as JsonBody
-      expect(body.message).toContain('function')
+      expect(body['message']).toContain('function')
     })
 
     it('should allow requests from different IPs independently', async () => {
@@ -709,8 +709,8 @@ describe('Worker Fetch Handler', () => {
       expect(body).toHaveProperty('message')
       expect(body).toHaveProperty('retryAfter')
       expect(body).toHaveProperty('resetAt')
-      expect(typeof body.retryAfter).toBe('number')
-      expect(typeof body.resetAt).toBe('number')
+      expect(typeof body['retryAfter']).toBe('number')
+      expect(typeof body['resetAt']).toBe('number')
     })
 
     it('should extract IP from X-Forwarded-For when CF-Connecting-IP is not present', async () => {

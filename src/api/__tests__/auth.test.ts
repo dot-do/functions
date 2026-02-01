@@ -226,7 +226,7 @@ describe('Auth Middleware', () => {
       expect(result.response?.status).toBe(401)
 
       const body = (await result.response?.json()) as JsonBody
-      expect(body.error).toBe('Missing API key')
+      expect(body['error']).toBe('Missing API key')
     })
 
     it('returns 401 for invalid API key', async () => {
@@ -250,7 +250,7 @@ describe('Auth Middleware', () => {
       expect(result.response?.status).toBe(401)
 
       const body = (await result.response?.json()) as JsonBody
-      expect(body.error).toBe('Invalid API key')
+      expect(body['error']).toBe('Invalid API key')
     })
 
     it('returns 401 for expired API key', async () => {
@@ -274,7 +274,7 @@ describe('Auth Middleware', () => {
       expect(result.response?.status).toBe(401)
 
       const body = (await result.response?.json()) as JsonBody
-      expect(body.error).toContain('expired')
+      expect(body['error']).toContain('expired')
     })
 
     it('returns 401 for inactive API key', async () => {
@@ -546,7 +546,7 @@ describe('API key security in AuthContext', () => {
       // The full API key should NOT be accessible
       // Using type assertion to check the old field doesn't exist
       const ctx = result.authContext as Record<string, unknown>
-      expect(ctx.apiKey).toBeUndefined()
+      expect(ctx['apiKey']).toBeUndefined()
     })
 
     it('should contain keyHint with last 4 characters only', async () => {
@@ -765,7 +765,7 @@ describe('API key security in AuthContext', () => {
 
       // Internal context should also not expose any secret
       const ctx = result.authContext as Record<string, unknown>
-      expect(ctx.apiKey).toBeUndefined()
+      expect(ctx['apiKey']).toBeUndefined()
 
       // Should have safe identifiers
       expect(result.authContext?.keyHint).toBe('internal')

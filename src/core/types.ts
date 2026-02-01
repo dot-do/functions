@@ -87,6 +87,28 @@ export interface WorkerLoaderOptions {
 }
 
 /**
+ * Function permission configuration for access control.
+ * Used with oauth.do integration for fine-grained permissions.
+ */
+export interface FunctionPermissions {
+  /** Whether the function is public (no auth required) */
+  public?: boolean
+  /** Required scopes to invoke the function */
+  requiredScopes?: string[]
+  /** Allowed user IDs (if not public) */
+  allowedUsers?: string[]
+  /** Allowed organization IDs (if not public) */
+  allowedOrgs?: string[]
+  /** Allowed roles within organizations */
+  allowedRoles?: ('owner' | 'admin' | 'member' | 'viewer')[]
+  /** Rate limit overrides per user/org */
+  rateLimits?: {
+    perUser?: number
+    perOrg?: number
+  }
+}
+
+/**
  * Function metadata stored in the registry
  */
 export interface FunctionMetadata {
@@ -124,6 +146,21 @@ export interface FunctionMetadata {
    * Timestamp when the function was last updated
    */
   updatedAt?: string
+
+  /**
+   * Owner user ID (from OAuth)
+   */
+  ownerId?: string
+
+  /**
+   * Owning organization ID (from OAuth)
+   */
+  orgId?: string
+
+  /**
+   * Access control permissions for the function
+   */
+  permissions?: FunctionPermissions
 }
 
 /**

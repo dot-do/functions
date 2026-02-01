@@ -47,7 +47,7 @@ function isBrowser(): boolean {
 function isCloudflareWorker(): boolean {
   return typeof globalThis !== 'undefined' &&
     'caches' in globalThis &&
-    typeof (globalThis as Record<string, unknown>).WebSocketPair !== 'undefined'
+    typeof (globalThis as Record<string, unknown>)['WebSocketPair'] !== 'undefined'
 }
 
 /**

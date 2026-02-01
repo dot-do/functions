@@ -32,8 +32,8 @@ describe('Python Subprocess Environment Isolation', () => {
     // Reset process.env before each test by creating a new object
     // with only the essential variables needed for Python to run
     process.env = {
-      PATH: originalEnv.PATH,
-      HOME: originalEnv.HOME,
+      PATH: originalEnv['PATH'],
+      HOME: originalEnv['HOME'],
       // Add mock sensitive values that should NOT leak
       SECRET_KEY: 'super-secret-key-12345',
       DATABASE_URL: 'postgres://user:password@localhost:5432/db',
@@ -264,7 +264,7 @@ def handler():
   describe('Dynamic Sensitive Variable Injection Prevention', () => {
     it('should not pass dynamically added secrets', async () => {
       // Simulate a scenario where secrets are added to process.env at runtime
-      process.env.DYNAMIC_SECRET = 'dynamic-secret-value'
+      process.env['DYNAMIC_SECRET'] = 'dynamic-secret-value'
 
       const code = `
 import os
@@ -278,11 +278,11 @@ def handler():
 
     it('should not pass variables with common secret naming patterns', async () => {
       // Add various common secret naming patterns
-      process.env.MY_APP_SECRET = 'secret1'
-      process.env.DB_PASSWORD = 'secret2'
-      process.env.PRIVATE_KEY = 'secret3'
-      process.env.ACCESS_TOKEN = 'secret4'
-      process.env.REFRESH_TOKEN = 'secret5'
+      process.env['MY_APP_SECRET'] = 'secret1'
+      process.env['DB_PASSWORD'] = 'secret2'
+      process.env['PRIVATE_KEY'] = 'secret3'
+      process.env['ACCESS_TOKEN'] = 'secret4'
+      process.env['REFRESH_TOKEN'] = 'secret5'
 
       const code = `
 import os

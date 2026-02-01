@@ -515,7 +515,7 @@ export default {
         expect(response.ok).toBe(true)
 
         const body = (await response.json()) as JsonBody
-        expect(body.status).toBe('deployed')
+        expect(body['status']).toBe('deployed')
       }
     })
 

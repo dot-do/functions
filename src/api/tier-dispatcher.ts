@@ -450,8 +450,8 @@ export class TierDispatcher {
               generativeExecution: {
                 model: result.generativeExecution?.model || definition.model || 'unknown',
                 tokens: {
-                  inputTokens: result.generativeExecution?.tokens?.input || 0,
-                  outputTokens: result.generativeExecution?.tokens?.output || 0,
+                  inputTokens: result.generativeExecution?.tokens?.inputTokens || 0,
+                  outputTokens: result.generativeExecution?.tokens?.outputTokens || 0,
                 },
               },
             },
@@ -471,8 +471,8 @@ export class TierDispatcher {
               generativeExecution: {
                 model: result.generativeExecution?.model || definition.model || 'unknown',
                 tokens: {
-                  inputTokens: result.generativeExecution?.tokens?.input || 0,
-                  outputTokens: result.generativeExecution?.tokens?.output || 0,
+                  inputTokens: result.generativeExecution?.tokens?.inputTokens || 0,
+                  outputTokens: result.generativeExecution?.tokens?.outputTokens || 0,
                 },
               },
             },
@@ -491,8 +491,8 @@ export class TierDispatcher {
             generativeExecution: {
               model: result.generativeExecution?.model || definition.model || 'unknown',
               tokens: {
-                inputTokens: result.generativeExecution?.tokens?.input || 0,
-                outputTokens: result.generativeExecution?.tokens?.output || 0,
+                inputTokens: result.generativeExecution?.tokens?.inputTokens || 0,
+                outputTokens: result.generativeExecution?.tokens?.outputTokens || 0,
               },
               cached: result.generativeExecution?.cached,
               stopReason: result.generativeExecution?.stopReason,

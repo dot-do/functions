@@ -20,7 +20,7 @@
     "noEmit": true,
     "exactOptionalPropertyTypes": true,
     "noFallthroughCasesInSwitch": true,
-    "noPropertyAccessFromIndexSignature": false,
+    "noPropertyAccessFromIndexSignature": true,
     "useDefineForClassFields": true
   },
   "include": ["src/**/*"],

@@ -2,8 +2,16 @@
  * CLI Types for dotdo
  *
  * This file defines the types used by the CLI commands.
- * Part of TDD RED phase - types are defined but implementation doesn't exist yet.
  */
+
+/**
+ * Result of executing a CLI command
+ */
+export interface CommandResult {
+  exitCode: number
+  output?: string
+  error?: string
+}
 
 /**
  * Mock filesystem interface for dependency injection
@@ -34,15 +42,6 @@ export interface CLIContext {
   stderr: (text: string) => void
   exit: (code: number) => void
   cwd: string
-}
-
-/**
- * Result of executing a CLI command
- */
-export interface CommandResult {
-  exitCode: number
-  output?: string
-  error?: string
 }
 
 /**

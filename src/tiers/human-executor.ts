@@ -21,10 +21,10 @@ import type {
   ReminderConfig,
   SkipCondition,
   FormField,
-} from '../../core/src/human/index.js'
+} from '@dotdo/functions/human'
 
-import { parseDuration } from '../../core/src/types.js'
-import type { FunctionResult, ExecutionContext } from '../../core/src/types.js'
+import { parseDuration } from '@dotdo/functions'
+import type { FunctionResult, ExecutionContext } from '@dotdo/functions'
 
 // =============================================================================
 // INTERNAL TYPES
@@ -514,7 +514,7 @@ export class HumanExecutor implements HumanFunctionExecutor {
   ): HumanFunctionResult {
     const now = Date.now()
     const output = condition.output as Record<string, unknown>
-    const skipReason = output.reason as string | undefined
+    const skipReason = output['reason'] as string | undefined
 
     return {
       executionId: this.generateTaskId(),
@@ -882,7 +882,7 @@ export class HumanExecutor implements HumanFunctionExecutor {
 
   private validateOutputSchema(schema: Record<string, unknown>, response: unknown): void {
     // Simple validation for email format
-    const schemaProps = schema.properties as Record<string, { type: string; format?: string }> | undefined
+    const schemaProps = schema['properties'] as Record<string, { type: string; format?: string }> | undefined
     if (!schemaProps) return
 
     const responseObj = response as Record<string, unknown>
@@ -1007,7 +1007,7 @@ export class HumanExecutor implements HumanFunctionExecutor {
 
   private isRejectionResponse(response: unknown): boolean {
     const responseObj = response as Record<string, unknown>
-    return responseObj.approved === false || responseObj.verified === false
+    return responseObj['approved'] === false || responseObj['verified'] === false
   }
 
   private async scheduleAlarm(task: StoredTask): Promise<void> {

@@ -7,6 +7,7 @@
  * @module core/cascade-executor
  */
 
+// Import types from core cascade module (not @dotdo/functions to avoid circular dependency)
 import type {
   CascadeDefinition,
   CascadeTiers,

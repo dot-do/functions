@@ -370,8 +370,8 @@ describe('HumanExecutor', () => {
       const task = await executor.createTask(definition, input)
 
       const storedTask = mockState.storage.getData(`task:${task.id}`) as Record<string, unknown>
-      expect(storedTask.definition).toMatchObject({ id: definition.id })
-      expect(storedTask.input).toEqual(input)
+      expect(storedTask['definition']).toMatchObject({ id: definition.id })
+      expect(storedTask['input']).toEqual(input)
     })
   })
 
@@ -612,7 +612,7 @@ describe('HumanExecutor', () => {
 
       const task = await executor.createTask(definition, {})
       const taskData = mockState.storage.getData(`task:${task.id}`) as Record<string, unknown>
-      const ui = (taskData.definition as HumanFunctionDefinition).ui
+      const ui = (taskData['definition'] as HumanFunctionDefinition).ui
 
       expect(ui.title).toBe('Approve Purchase Order')
       expect(ui.description).toBe('Review and approve the following purchase order')
@@ -838,7 +838,7 @@ describe('HumanExecutor', () => {
       const task = await executor.createTask(definition, {})
       const taskData = mockState.storage.getData(`task:${task.id}`) as Record<string, unknown>
 
-      expect(taskData.assignees).toEqual(['user-1', 'user-2'])
+      expect(taskData['assignees']).toEqual(['user-1', 'user-2'])
     })
 
     it('should route to teams', async () => {

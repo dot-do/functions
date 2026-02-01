@@ -133,7 +133,7 @@ describe('Human-in-the-Loop Integration', () => {
 
       const options = adaptDefinitionToOptions(definition, platformConfig) as Record<string, unknown>
 
-      expect(options.options).toEqual([
+      expect(options['options']).toEqual([
         { value: 'approve', label: 'Approve' },
         { value: 'reject', label: 'Reject' },
       ])
@@ -175,7 +175,7 @@ describe('Human-in-the-Loop Integration', () => {
 
       const options = adaptDefinitionToOptions(definition, platformConfig) as Record<string, unknown>
 
-      expect(options.freeText).toBe(true)
+      expect(options['freeText']).toBe(true)
     })
   })
 

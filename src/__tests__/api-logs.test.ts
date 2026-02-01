@@ -217,7 +217,7 @@ describe('Function Logs API - GET /api/functions/:id/logs', () => {
       expect(result.entries.length).toBe(1)
       const entry = result.entries[0]
       expect(entry.metadata).toBeDefined()
-      expect(entry.metadata?.duration).toBe(150)
+      expect(entry.metadata?.['duration']).toBe(150)
       expect(entry.durationMs).toBe(150)
     })
   })

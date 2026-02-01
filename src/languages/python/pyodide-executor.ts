@@ -1219,3 +1219,310 @@ export async function restoreFromSnapshot(
   runtime._snapshot = snapshot
   return runtime
 }
+
+// =============================================================================
+// PYODIDE EXECUTOR CLASS
+// =============================================================================
+
+/**
+ * Options for the PyodideExecutor class
+ */
+export interface PyodideExecutorOptions extends PyodideRuntimeOptions {
+  /** Default timeout in milliseconds for Python execution */
+  defaultTimeoutMs?: number
+  /** Whether to reuse the runtime between executions */
+  reuseRuntime?: boolean
+  /** Whether to use native Python support (Cloudflare Workers) */
+  useNativePython?: boolean
+}
+
+/**
+ * Result from PyodideExecutor execution
+ */
+export interface PyodideExecutorResult<T = unknown> {
+  /** Whether the execution was successful */
+  success: boolean
+  /** The output value (if successful) */
+  output?: T
+  /** Error message (if failed) */
+  error?: string
+  /** Python error type (e.g., 'ValueError', 'TypeError') */
+  errorType?: string
+  /** Line number where error occurred */
+  errorLine?: number
+  /** Full stack trace */
+  stackTrace?: string
+  /** Whether execution timed out */
+  timedOut?: boolean
+  /** Execution time in milliseconds */
+  executionTimeMs?: number
+  /** Memory used in bytes */
+  memoryUsedBytes?: number
+  /** Detailed metrics */
+  metrics?: ExecutionMetrics
+}
+
+/**
+ * High-level Pyodide executor for Python code execution.
+ *
+ * This class provides a convenient interface for executing Python code
+ * with proper lifecycle management, error handling, and resource cleanup.
+ *
+ * In Cloudflare Workers, Python is now natively supported via Pyodide
+ * with WASM snapshots for fast cold starts.
+ *
+ * @example
+ * ```typescript
+ * const executor = new PyodideExecutor({
+ *   reuseRuntime: true,
+ *   defaultTimeoutMs: 30000,
+ * })
+ *
+ * await executor.initialize()
+ *
+ * const result = await executor.execute(
+ *   'def handler(x): return x * 2',
+ *   'handler',
+ *   [21]
+ * )
+ *
+ * console.log(result.output) // 42
+ *
+ * await executor.dispose()
+ * ```
+ */
+export class PyodideExecutor {
+  private runtime: PyodideRuntime | null = null
+  private readonly options: PyodideExecutorOptions
+  private initialized = false
+
+  constructor(options: PyodideExecutorOptions = {}) {
+    this.options = {
+      reuseRuntime: true,
+      defaultTimeoutMs: 30000,
+      ...options,
+    }
+  }
+
+  /**
+   * Initialize the Pyodide runtime.
+   * Must be called before executing Python code.
+   */
+  async initialize(): Promise<void> {
+    if (this.initialized && this.runtime) {
+      return
+    }
+
+    this.runtime = await loadPyodideRuntime({
+      maxMemoryMB: this.options.maxMemoryMB,
+      preloadPackages: this.options.preloadPackages,
+      preloadModules: this.options.preloadModules,
+      indexURL: this.options.indexURL,
+    })
+    this.initialized = true
+  }
+
+  /**
+   * Check if the executor is initialized
+   */
+  isInitialized(): boolean {
+    return this.initialized && this.runtime !== null
+  }
+
+  /**
+   * Execute Python code with a specified handler function.
+   *
+   * @param code - Python source code containing the handler function
+   * @param handlerName - Name of the handler function to call
+   * @param args - Arguments to pass to the handler
+   * @param options - Execution options (timeout, packages, etc.)
+   * @returns Execution result with output or error information
+   */
+  async execute<T = unknown>(
+    code: string,
+    handlerName: string,
+    args: unknown[] = [],
+    options: PyodideExecutionOptions = {}
+  ): Promise<PyodideExecutorResult<T>> {
+    const startTime = Date.now()
+
+    try {
+      // Initialize runtime if needed
+      if (!this.runtime) {
+        await this.initialize()
+      }
+
+      if (!this.runtime) {
+        return {
+          success: false,
+          error: 'Failed to initialize Pyodide runtime',
+          errorType: 'RuntimeError',
+        }
+      }
+
+      // Execute the code
+      const result = await executePyodide(this.runtime, code, handlerName, args, {
+        ...options,
+        timeoutMs: options.timeoutMs ?? this.options.defaultTimeoutMs,
+      })
+
+      const executionTimeMs = Date.now() - startTime
+
+      if (result.success) {
+        return {
+          success: true,
+          output: result.output as T,
+          executionTimeMs,
+          memoryUsedBytes: result.memoryUsedBytes,
+          metrics: result.metrics,
+        }
+      }
+
+      return {
+        success: false,
+        error: result.error,
+        errorType: result.errorType,
+        errorLine: result.errorLine,
+        stackTrace: result.stackTrace,
+        timedOut: result.timedOut,
+        executionTimeMs,
+        memoryUsedBytes: result.memoryUsedBytes,
+        metrics: result.metrics,
+      }
+    } catch (error) {
+      const executionTimeMs = Date.now() - startTime
+      const message = error instanceof Error ? error.message : String(error)
+
+      return {
+        success: false,
+        error: message,
+        errorType: error instanceof Error ? error.name : 'Error',
+        executionTimeMs,
+      }
+    } finally {
+      // Clean up runtime if not reusing
+      if (!this.options.reuseRuntime && this.runtime) {
+        await this.runtime.dispose()
+        this.runtime = null
+        this.initialized = false
+      }
+    }
+  }
+
+  /**
+   * Execute Python code and return just the result (throws on error).
+   *
+   * @param code - Python source code
+   * @param handlerName - Handler function name
+   * @param args - Arguments for the handler
+   * @param options - Execution options
+   * @returns The handler's return value
+   * @throws Error if execution fails
+   */
+  async run<T = unknown>(
+    code: string,
+    handlerName: string,
+    args: unknown[] = [],
+    options: PyodideExecutionOptions = {}
+  ): Promise<T> {
+    const result = await this.execute<T>(code, handlerName, args, options)
+
+    if (!result.success) {
+      const error = new Error(result.error || 'Python execution failed')
+      error.name = result.errorType || 'PythonError'
+      throw error
+    }
+
+    return result.output as T
+  }
+
+  /**
+   * Install Python packages.
+   *
+   * @param packages - Package names to install
+   */
+  async installPackages(packages: string[]): Promise<void> {
+    if (!this.runtime) {
+      await this.initialize()
+    }
+
+    if (this.runtime) {
+      await this.runtime.micropip.install(packages)
+    }
+  }
+
+  /**
+   * List handler functions in Python code.
+   *
+   * @param code - Python source code
+   * @returns Array of function names that could be handlers
+   */
+  async listHandlers(code: string): Promise<string[]> {
+    if (!this.runtime) {
+      await this.initialize()
+    }
+
+    if (!this.runtime) {
+      return []
+    }
+
+    // Execute code to define functions, then list them
+    const listCode = `
+${code}
+
+# Get all function names defined in the code
+import types
+[name for name, obj in locals().items()
+ if isinstance(obj, types.FunctionType) and not name.startswith('_')]
+`
+
+    try {
+      const result = await executePyodide(this.runtime, listCode, '__builtins__', [], {
+        timeoutMs: 5000,
+      })
+
+      if (result.success && Array.isArray(result.output)) {
+        return result.output as string[]
+      }
+    } catch {
+      // Ignore errors, return empty list
+    }
+
+    return []
+  }
+
+  /**
+   * Create a memory snapshot for faster cold starts.
+   *
+   * @returns Memory snapshot that can be used to restore state
+   */
+  async createSnapshot(): Promise<MemorySnapshot> {
+    if (!this.runtime) {
+      await this.initialize()
+    }
+
+    if (!this.runtime) {
+      throw new Error('Runtime not initialized')
+    }
+
+    return createMemorySnapshot(this.runtime)
+  }
+
+  /**
+   * Dispose of the executor and free resources.
+   */
+  async dispose(): Promise<void> {
+    if (this.runtime) {
+      await this.runtime.dispose()
+      this.runtime = null
+      this.initialized = false
+    }
+  }
+
+  /**
+   * Get the underlying Pyodide runtime (for advanced use cases).
+   */
+  getRuntime(): PyodideRuntime | null {
+    return this.runtime
+  }
+}

@@ -12,30 +12,79 @@
  * 2. GenerativeFunctions - Single AI call (structured output)
  * 3. AgenticFunctions - Multi-step AI with tools (autonomous agents)
  * 4. HumanFunctions - Human-in-the-loop (approval, review, input)
+ *
+ * TYPE UNIFICATION:
+ * Simple types (enums, basic interfaces) are defined in schemas.ts using Zod
+ * and re-exported here. Types requiring branded types, generics, or runtime
+ * features like AbortSignal are defined here with compatibility assertions.
  */
 
 import { assertNever } from './utils.js'
 import type { FunctionId, ExecutionId, WorkflowId } from './branded-types.js'
 
+// =============================================================================
+// TYPES FROM SCHEMAS (Single Source of Truth)
+// =============================================================================
+
+// Re-export types that are derived from Zod schemas
+export {
+  // Enum types - use the Zod-derived versions
+  type FunctionType,
+  type FunctionResultStatus,
+  type CodeLanguage,
+  // Simple interface types - use the Zod-derived versions
+  type JsonSchema,
+  type TokenUsage,
+  type ExecutionMetrics,
+  type ExecutionMetadata,
+  type FunctionError,
+  type FunctionFilter,
+  type ValidationResult,
+  type ValidationError,
+  // Schema-based types (for runtime validation context)
+  type FunctionDefinitionFromSchema,
+  type FunctionResultFromSchema,
+  type FunctionInvocationFromSchema,
+  type WorkflowContextFromSchema,
+  type ExecutionContextFromSchema,
+  type DurationFromSchema,
+  type RetryPolicy as RetryPolicyFromSchema,
+} from './schemas.js'
+
+// Import for internal use in type assertions
+import type { DurationFromSchema, WorkflowContextFromSchema } from './schemas.js'
+
 // Re-export branded types for convenience
 export type { FunctionId, ExecutionId, WorkflowId } from './branded-types.js'
 
 // =============================================================================
-// FUNCTION TYPE DISCRIMINATOR
+// BASE FUNCTION DEFINITION (with branded types and generics)
 // =============================================================================
 
-export type FunctionType = 'code' | 'generative' | 'agentic' | 'human'
+import type {
+  FunctionType,
+  JsonSchema,
+  FunctionError,
+  TokenUsage,
+  FunctionDefinitionFromSchema,
+  FunctionResultFromSchema,
+  ValidationResult,
+  ValidationError,
+  FunctionFilter,
+  ExecutionMetrics as ExecutionMetricsFromSchema,
+  ExecutionMetadata as ExecutionMetadataFromSchema,
+} from './schemas.js'
 
-// =============================================================================
-// BASE FUNCTION DEFINITION
-// =============================================================================
-
+/**
+ * Function definition with branded FunctionId and generic type parameters.
+ * For runtime validation, use FunctionDefinitionFromSchema or the Zod schema.
+ */
 export interface FunctionDefinition<
   TInput = unknown,
   TOutput = unknown,
   TConfig = unknown,
 > {
-  /** Unique function identifier */
+  /** Unique function identifier (branded type) */
   id: FunctionId
 
   /** Human-readable name */
@@ -69,24 +118,33 @@ export interface FunctionDefinition<
   tags?: string[]
 }
 
+// Type assertion: FunctionDefinition (without generics/branded) is compatible with schema
+type _AssertFunctionDefinitionCompatible = FunctionDefinition extends { id: string; name: string; version: string; type: FunctionType }
+  ? true
+  : never
+
 // =============================================================================
-// FUNCTION RESULT
+// FUNCTION RESULT (with branded types and generics)
 // =============================================================================
 
-export type FunctionResultStatus = 'completed' | 'failed' | 'timeout' | 'cancelled'
+// FunctionResultStatus is re-exported from schemas.ts above
 
+/**
+ * Function result with branded IDs and generic output type.
+ * For runtime validation, use FunctionResultFromSchema or the Zod schema.
+ */
 export interface FunctionResult<TOutput = unknown> {
-  /** Unique execution ID */
+  /** Unique execution ID (branded type) */
   executionId: ExecutionId
 
-  /** Function ID that was executed */
+  /** Function ID that was executed (branded type) */
   functionId: FunctionId
 
   /** Function version */
   functionVersion: string
 
   /** Execution status */
-  status: FunctionResultStatus
+  status: import('./schemas.js').FunctionResultStatus
 
   /** Output data (if completed) */
   output?: TOutput
@@ -95,69 +153,18 @@ export interface FunctionResult<TOutput = unknown> {
   error?: FunctionError
 
   /** Execution metrics */
-  metrics: ExecutionMetrics
+  metrics: ExecutionMetricsFromSchema
 
   /** Execution metadata */
-  metadata: ExecutionMetadata
+  metadata: ExecutionMetadataFromSchema
 }
 
-export interface FunctionError {
-  name: string
-  message: string
-  code?: string
-  stack?: string
-  retryable?: boolean
-}
+// FunctionError, TokenUsage, ExecutionMetrics, ExecutionMetadata are re-exported from schemas.ts
 
-export interface ExecutionMetrics {
-  /** Total execution time in milliseconds */
-  durationMs: number
-
-  /** Input size in bytes */
-  inputSizeBytes: number
-
-  /** Output size in bytes */
-  outputSizeBytes: number
-
-  /** Number of retry attempts */
-  retryCount: number
-
-  /** Billable compute units (function type specific) */
-  computeUnits?: number
-
-  /** Token usage (for AI functions) */
-  tokens?: TokenUsage
-}
-
-export interface TokenUsage {
-  inputTokens: number
-  outputTokens: number
-  totalTokens: number
-}
-
-export interface ExecutionMetadata {
-  /** When execution started */
-  startedAt: number
-
-  /** When execution completed */
-  completedAt?: number
-
-  /** Region where execution ran */
-  region?: string
-
-  /** Trace ID for distributed tracing */
-  traceId?: string
-
-  /** Span ID for this execution */
-  spanId?: string
-
-  /** User/service that triggered execution */
-  triggeredBy?: string
-
-  /** Workflow context (if executed from workflow) */
-  workflowContext?: WorkflowContext
-}
-
+/**
+ * Workflow context with branded IDs.
+ * For runtime validation, use WorkflowContextFromSchema or the Zod schema.
+ */
 export interface WorkflowContext {
   workflowId: WorkflowId
   runId: ExecutionId
@@ -165,9 +172,13 @@ export interface WorkflowContext {
 }
 
 // =============================================================================
-// RETRY POLICY
+// RETRY POLICY (with Duration template literal type)
 // =============================================================================
 
+/**
+ * Retry policy with Duration type (template literal).
+ * For runtime validation, use RetryPolicyFromSchema or the Zod schema.
+ */
 export interface RetryPolicy {
   maxAttempts?: number           // Default: 3
   initialDelay?: Duration        // Default: 1s
@@ -177,9 +188,14 @@ export interface RetryPolicy {
 }
 
 // =============================================================================
-// DURATION
+// DURATION (Template literal type - stricter than Zod schema)
 // =============================================================================
 
+/**
+ * Duration type with template literal for compile-time checking.
+ * This is stricter than DurationFromSchema which uses regex validation.
+ * For runtime validation, use DurationSchema from schemas.ts.
+ */
 export type Duration =
   | number                       // milliseconds
   | `${number}ms`
@@ -188,6 +204,9 @@ export type Duration =
   | `${number}h` | `${number} hour` | `${number} hours`
   | `${number}d` | `${number} day` | `${number} days`
 
+/**
+ * Parses a Duration value to milliseconds.
+ */
 export function parseDuration(duration: Duration): number {
   if (typeof duration === 'number') return duration
 
@@ -207,25 +226,18 @@ export function parseDuration(duration: Duration): number {
   }
 }
 
-// =============================================================================
-// JSON SCHEMA (simplified)
-// =============================================================================
+// Type assertion: Duration is assignable to DurationFromSchema (imported at top)
+type _AssertDurationCompatible = Duration extends DurationFromSchema ? true : never
 
-export interface JsonSchema {
-  type?: 'object' | 'array' | 'string' | 'number' | 'boolean' | 'null'
-  properties?: Record<string, JsonSchema>
-  items?: JsonSchema
-  required?: string[]
-  enum?: unknown[]
-  description?: string
-  default?: unknown
-  [key: string]: unknown
-}
+// JsonSchema is re-exported from schemas.ts (single source of truth)
 
 // =============================================================================
 // FUNCTION EXECUTOR INTERFACE
 // =============================================================================
 
+/**
+ * Function executor interface with generic types.
+ */
 export interface FunctionExecutor<
   TInput = unknown,
   TOutput = unknown,
@@ -245,8 +257,12 @@ export interface FunctionExecutor<
   validateOutput?(output: unknown): ValidationResult
 }
 
+/**
+ * Execution context with branded ExecutionId and AbortSignal.
+ * For runtime validation (serializable parts), use ExecutionContextFromSchema.
+ */
 export interface ExecutionContext {
-  /** Execution ID (generated if not provided) */
+  /** Execution ID (generated if not provided, branded type) */
   executionId?: ExecutionId
 
   /** Trace ID for distributed tracing */
@@ -258,28 +274,22 @@ export interface ExecutionContext {
   /** Timeout override */
   timeout?: Duration
 
-  /** Signal for cancellation */
+  /** Signal for cancellation (not serializable, not in schema) */
   signal?: AbortSignal
 
   /** Environment bindings */
   env?: Record<string, unknown>
 }
 
-export interface ValidationResult {
-  valid: boolean
-  errors?: ValidationError[]
-}
-
-export interface ValidationError {
-  path: string
-  message: string
-  code?: string
-}
+// ValidationResult and ValidationError are re-exported from schemas.ts
 
 // =============================================================================
 // FUNCTION REGISTRY
 // =============================================================================
 
+/**
+ * Function registry interface with branded FunctionId.
+ */
 export interface FunctionRegistry {
   /** Register a function */
   register<TInput, TOutput, TConfig>(
@@ -300,6 +310,9 @@ export interface FunctionRegistry {
   unregister(functionId: FunctionId): boolean
 }
 
+/**
+ * Registered function with definition and executor.
+ */
 export interface RegisteredFunction<
   TInput = unknown,
   TOutput = unknown,
@@ -309,18 +322,18 @@ export interface RegisteredFunction<
   executor: FunctionExecutor<TInput, TOutput, TConfig>
 }
 
-export interface FunctionFilter {
-  type?: FunctionType
-  tags?: string[]
-  namePattern?: string
-}
+// FunctionFilter is re-exported from schemas.ts
 
 // =============================================================================
-// FUNCTION INVOCATION
+// FUNCTION INVOCATION (with branded types and generics)
 // =============================================================================
 
+/**
+ * Function invocation with branded FunctionId and generic types.
+ * For runtime validation, use FunctionInvocationFromSchema or the Zod schema.
+ */
 export interface FunctionInvocation<TInput = unknown, TConfig = unknown> {
-  /** Function ID to invoke */
+  /** Function ID to invoke (branded type) */
   functionId: FunctionId
 
   /** Function version (default: latest) */
@@ -338,3 +351,28 @@ export interface FunctionInvocation<TInput = unknown, TConfig = unknown> {
   /** Idempotency key for deduplication */
   idempotencyKey?: string
 }
+
+// =============================================================================
+// TYPE COMPATIBILITY ASSERTIONS
+// =============================================================================
+
+// These assertions ensure that our branded/generic types are compatible
+// with the schema-derived types at compile time.
+
+// FunctionResult (without generics) should be assignable to FunctionResultFromSchema fields
+type _AssertFunctionResultCompatible =
+  FunctionResult extends { executionId: string; functionId: string; status: string }
+    ? true
+    : never
+
+// FunctionInvocation (without generics) should be assignable to FunctionInvocationFromSchema
+type _AssertFunctionInvocationCompatible =
+  FunctionInvocation extends { functionId: string; input: unknown }
+    ? true
+    : never
+
+// WorkflowContext should be assignable to WorkflowContextFromSchema fields (imported at top)
+type _AssertWorkflowContextCompatible =
+  WorkflowContext extends { workflowId: string; runId: string; stepId: string }
+    ? true
+    : never

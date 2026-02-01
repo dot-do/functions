@@ -27,33 +27,33 @@ describe('Wrangler Configuration', () => {
 
   describe('Basic Configuration', () => {
     it('should have the correct worker name', () => {
-      expect(config.name).toBe('functions-do')
+      expect(config['name']).toBe('functions-do')
     })
 
     it('should have the correct main entry point', () => {
-      expect(config.main).toBe('src/index.ts')
+      expect(config['main']).toBe('src/index.ts')
     })
 
     it('should have a valid compatibility date', () => {
-      expect(config.compatibility_date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+      expect(config['compatibility_date']).toMatch(/^\d{4}-\d{2}-\d{2}$/)
     })
 
     it('should enable nodejs_compat flag', () => {
-      expect(config.compatibility_flags).toContain('nodejs_compat')
+      expect(config['compatibility_flags']).toContain('nodejs_compat')
     })
 
     it('should include JSON schema reference', () => {
-      expect(config.$schema).toBe('node_modules/wrangler/config-schema.json')
+      expect(config['$schema']).toBe('node_modules/wrangler/config-schema.json')
     })
   })
 
   describe('Routes Configuration', () => {
     it('should have routes array', () => {
-      expect(Array.isArray(config.routes)).toBe(true)
+      expect(Array.isArray(config['routes'])).toBe(true)
     })
 
     it('should configure functions.do custom domain', () => {
-      const routes = config.routes as Array<{ pattern: string; custom_domain: boolean }>
+      const routes = config['routes'] as Array<{ pattern: string; custom_domain: boolean }>
       const functionsRoute = routes.find((r) => r.pattern === 'functions.do')
       expect(functionsRoute).toBeDefined()
       expect(functionsRoute?.custom_domain).toBe(true)
@@ -64,7 +64,7 @@ describe('Wrangler Configuration', () => {
     let kvNamespaces: Array<{ binding: string; id: string }>
 
     beforeAll(() => {
-      kvNamespaces = config.kv_namespaces as Array<{ binding: string; id: string }>
+      kvNamespaces = config['kv_namespaces'] as Array<{ binding: string; id: string }>
     })
 
     it('should have kv_namespaces array', () => {
@@ -98,7 +98,7 @@ describe('Wrangler Configuration', () => {
     let durableObjects: { bindings: Array<{ name: string; class_name: string }> }
 
     beforeAll(() => {
-      durableObjects = config.durable_objects as typeof durableObjects
+      durableObjects = config['durable_objects'] as typeof durableObjects
     })
 
     it('should have durable_objects configuration', () => {
@@ -127,7 +127,7 @@ describe('Wrangler Configuration', () => {
     let migrations: Array<{ tag: string; new_classes?: string[] }>
 
     beforeAll(() => {
-      migrations = config.migrations as typeof migrations
+      migrations = config['migrations'] as typeof migrations
     })
 
     it('should have migrations array', () => {
@@ -146,7 +146,7 @@ describe('Wrangler Configuration', () => {
     let services: Array<{ binding: string; service: string; environment: string }>
 
     beforeAll(() => {
-      services = config.services as typeof services
+      services = config['services'] as typeof services
     })
 
     it('should have services array', () => {
@@ -172,7 +172,7 @@ describe('Wrangler Configuration', () => {
     let vars: Record<string, string>
 
     beforeAll(() => {
-      vars = config.vars as Record<string, string>
+      vars = config['vars'] as Record<string, string>
     })
 
     it('should have vars configuration', () => {
@@ -180,11 +180,11 @@ describe('Wrangler Configuration', () => {
     })
 
     it('should set ENVIRONMENT to production', () => {
-      expect(vars.ENVIRONMENT).toBe('production')
+      expect(vars['ENVIRONMENT']).toBe('production')
     })
 
     it('should set SERVICE_NAME to functions.do', () => {
-      expect(vars.SERVICE_NAME).toBe('functions.do')
+      expect(vars['SERVICE_NAME']).toBe('functions.do')
     })
   })
 
@@ -192,7 +192,7 @@ describe('Wrangler Configuration', () => {
     let observability: { enabled: boolean; head_sampling_rate?: number }
 
     beforeAll(() => {
-      observability = config.observability as typeof observability
+      observability = config['observability'] as typeof observability
     })
 
     it('should have observability configuration', () => {
@@ -210,7 +210,7 @@ describe('Wrangler Configuration', () => {
 
   describe('Configuration Pattern Compliance', () => {
     it('should follow dotdo naming convention (functions-do)', () => {
-      expect(config.name).toMatch(/-do$/)
+      expect(config['name']).toMatch(/-do$/)
     })
 
     it('should have all required production sections', () => {
@@ -234,7 +234,7 @@ describe('Wrangler Configuration', () => {
     })
 
     it('should use custom_domain pattern for routes', () => {
-      const routes = config.routes as Array<{ custom_domain?: boolean }>
+      const routes = config['routes'] as Array<{ custom_domain?: boolean }>
       const hasCustomDomain = routes.some((r) => r.custom_domain === true)
       expect(hasCustomDomain).toBe(true)
     })

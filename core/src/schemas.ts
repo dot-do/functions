@@ -1,30 +1,51 @@
 /**
- * Zod schemas for runtime validation
+ * Zod schemas for runtime validation - SINGLE SOURCE OF TRUTH
  *
- * These schemas provide:
- * - Runtime validation for function definitions and results
- * - Type inference that matches the TypeScript interfaces
- * - Validation helpers for API handlers
+ * This file is the canonical source for type definitions that need runtime validation.
+ * TypeScript types are derived from Zod schemas using z.infer<>.
+ *
+ * Benefits:
+ * - Single source of truth prevents type drift
+ * - Runtime validation matches compile-time types
+ * - Type inference from schemas provides consistency
+ *
+ * For types that cannot be expressed in Zod (branded types, complex generics),
+ * see types.ts which imports and re-exports types from this file.
  */
 
 import { z } from 'zod'
 
 // =============================================================================
-// BASIC TYPE SCHEMAS
+// BASIC TYPE SCHEMAS - Source of truth for simple types
 // =============================================================================
 
 /**
  * Schema for function type discriminator
+ * @canonical This is the source of truth for FunctionType
  */
 export const FunctionTypeSchema = z.enum(['code', 'generative', 'agentic', 'human'])
 
 /**
+ * FunctionType derived from schema - use this type, not a manual definition
+ */
+export type FunctionType = z.infer<typeof FunctionTypeSchema>
+
+/**
  * Schema for function result status
+ * @canonical This is the source of truth for FunctionResultStatus
  */
 export const FunctionResultStatusSchema = z.enum(['completed', 'failed', 'timeout', 'cancelled'])
 
 /**
+ * FunctionResultStatus derived from schema - use this type, not a manual definition
+ */
+export type FunctionResultStatus = z.infer<typeof FunctionResultStatusSchema>
+
+/**
  * Schema for duration values (number in ms or duration string)
+ * Note: The Duration type in types.ts has stricter template literal types,
+ * but this schema handles runtime validation.
+ * @canonical For runtime validation; types.ts has the full Duration type
  */
 export const DurationSchema = z.union([
   z.number().int().min(0),
@@ -34,14 +55,36 @@ export const DurationSchema = z.union([
   ),
 ])
 
+/**
+ * Duration type from schema - runtime validation compatible
+ * For the full template literal type, use Duration from types.ts
+ */
+export type DurationFromSchema = z.infer<typeof DurationSchema>
+
 // =============================================================================
 // JSON SCHEMA
 // =============================================================================
 
 /**
- * Schema for JSON Schema objects (simplified, allows additional properties)
+ * JsonSchema type - simplified JSON Schema interface
+ * @canonical This is the source of truth for JsonSchema
  */
-export const JsonSchemaSchema: z.ZodType<Record<string, unknown>> = z.lazy(() =>
+export interface JsonSchema {
+  type?: 'object' | 'array' | 'string' | 'number' | 'boolean' | 'null'
+  properties?: Record<string, JsonSchema>
+  items?: JsonSchema
+  required?: string[]
+  enum?: unknown[]
+  description?: string
+  default?: unknown
+  [key: string]: unknown
+}
+
+/**
+ * Schema for JSON Schema objects (simplified, allows additional properties)
+ * @canonical This is the source of truth for JsonSchema
+ */
+export const JsonSchemaSchema: z.ZodType<JsonSchema> = z.lazy(() =>
   z.object({
     type: z.enum(['object', 'array', 'string', 'number', 'boolean', 'null']).optional(),
     properties: z.record(z.lazy(() => JsonSchemaSchema)).optional(),
@@ -51,7 +94,7 @@ export const JsonSchemaSchema: z.ZodType<Record<string, unknown>> = z.lazy(() =>
     description: z.string().optional(),
     default: z.unknown().optional(),
   }).passthrough()
-)
+) as z.ZodType<JsonSchema>
 
 // =============================================================================
 // TOKEN USAGE & METRICS
@@ -59,6 +102,7 @@ export const JsonSchemaSchema: z.ZodType<Record<string, unknown>> = z.lazy(() =>
 
 /**
  * Schema for token usage metrics
+ * @canonical This is the source of truth for TokenUsage
  */
 export const TokenUsageSchema = z.object({
   inputTokens: z.number().int().min(0),
@@ -67,7 +111,13 @@ export const TokenUsageSchema = z.object({
 })
 
 /**
+ * TokenUsage derived from schema
+ */
+export type TokenUsage = z.infer<typeof TokenUsageSchema>
+
+/**
  * Schema for retry policy configuration
+ * @canonical This is the source of truth for RetryPolicy
  */
 export const RetryPolicySchema = z.object({
   maxAttempts: z.number().int().min(1).optional(),
@@ -78,7 +128,13 @@ export const RetryPolicySchema = z.object({
 }).partial()
 
 /**
+ * RetryPolicy derived from schema
+ */
+export type RetryPolicy = z.infer<typeof RetryPolicySchema>
+
+/**
  * Schema for execution metrics
+ * @canonical This is the source of truth for ExecutionMetrics
  */
 export const ExecutionMetricsSchema = z.object({
   durationMs: z.number().int().min(0),
@@ -89,12 +145,20 @@ export const ExecutionMetricsSchema = z.object({
   tokens: TokenUsageSchema.optional(),
 })
 
+/**
+ * ExecutionMetrics derived from schema
+ */
+export type ExecutionMetrics = z.infer<typeof ExecutionMetricsSchema>
+
 // =============================================================================
 // WORKFLOW CONTEXT
 // =============================================================================
 
 /**
  * Schema for workflow context
+ * Note: types.ts has WorkflowContext with branded types for workflowId/runId
+ * This schema validates the raw string values
+ * @canonical For runtime validation; types.ts has branded version
  */
 export const WorkflowContextSchema = z.object({
   workflowId: z.string().min(1),
@@ -102,12 +166,19 @@ export const WorkflowContextSchema = z.object({
   stepId: z.string().min(1),
 })
 
+/**
+ * WorkflowContext from schema (with plain strings)
+ * For branded types version, use WorkflowContext from types.ts
+ */
+export type WorkflowContextFromSchema = z.infer<typeof WorkflowContextSchema>
+
 // =============================================================================
 // EXECUTION METADATA
 // =============================================================================
 
 /**
  * Schema for execution metadata
+ * @canonical This is the source of truth for ExecutionMetadata
  */
 export const ExecutionMetadataSchema = z.object({
   startedAt: z.number().int(),
@@ -119,12 +190,18 @@ export const ExecutionMetadataSchema = z.object({
   workflowContext: WorkflowContextSchema.optional(),
 })
 
+/**
+ * ExecutionMetadata derived from schema
+ */
+export type ExecutionMetadata = z.infer<typeof ExecutionMetadataSchema>
+
 // =============================================================================
 // FUNCTION ERROR
 // =============================================================================
 
 /**
  * Schema for function error
+ * @canonical This is the source of truth for FunctionError
  */
 export const FunctionErrorSchema = z.object({
   name: z.string().min(1),
@@ -133,6 +210,11 @@ export const FunctionErrorSchema = z.object({
   stack: z.string().optional(),
   retryable: z.boolean().optional(),
 })
+
+/**
+ * FunctionError derived from schema
+ */
+export type FunctionError = z.infer<typeof FunctionErrorSchema>
 
 // =============================================================================
 // FUNCTION DEFINITION
@@ -145,6 +227,9 @@ const semverRegex = /^\d+\.\d+\.\d+(-[\w.]+)?(\+[\w.]+)?$/
 
 /**
  * Schema for function definition
+ * Note: types.ts has FunctionDefinition with branded FunctionId and generic params
+ * This schema validates the raw structure for runtime validation
+ * @canonical For runtime validation; types.ts has branded/generic version
  */
 export const FunctionDefinitionSchema = z.object({
   id: z.string().min(1),
@@ -160,12 +245,21 @@ export const FunctionDefinitionSchema = z.object({
   tags: z.array(z.string()).optional(),
 })
 
+/**
+ * FunctionDefinition from schema (with plain strings)
+ * For branded types and generic version, use FunctionDefinition from types.ts
+ */
+export type FunctionDefinitionFromSchema = z.infer<typeof FunctionDefinitionSchema>
+
 // =============================================================================
 // FUNCTION RESULT
 // =============================================================================
 
 /**
  * Schema for function result
+ * Note: types.ts has FunctionResult with branded types and generic params
+ * This schema validates the raw structure for runtime validation
+ * @canonical For runtime validation; types.ts has branded/generic version
  */
 export const FunctionResultSchema = z.object({
   executionId: z.string().min(1),
@@ -178,12 +272,19 @@ export const FunctionResultSchema = z.object({
   metadata: ExecutionMetadataSchema,
 })
 
+/**
+ * FunctionResult from schema (with plain strings)
+ * For branded types and generic version, use FunctionResult from types.ts
+ */
+export type FunctionResultFromSchema = z.infer<typeof FunctionResultSchema>
+
 // =============================================================================
 // VALIDATION TYPES
 // =============================================================================
 
 /**
  * Schema for validation error
+ * @canonical This is the source of truth for ValidationError
  */
 export const ValidationErrorSchema = z.object({
   path: z.string(),
@@ -192,12 +293,23 @@ export const ValidationErrorSchema = z.object({
 })
 
 /**
+ * ValidationError derived from schema
+ */
+export type ValidationError = z.infer<typeof ValidationErrorSchema>
+
+/**
  * Schema for validation result
+ * @canonical This is the source of truth for ValidationResult
  */
 export const ValidationResultSchema = z.object({
   valid: z.boolean(),
   errors: z.array(ValidationErrorSchema).optional(),
 })
+
+/**
+ * ValidationResult derived from schema
+ */
+export type ValidationResult = z.infer<typeof ValidationResultSchema>
 
 // =============================================================================
 // EXECUTION CONTEXT
@@ -205,6 +317,9 @@ export const ValidationResultSchema = z.object({
 
 /**
  * Schema for execution context
+ * Note: types.ts has ExecutionContext with branded ExecutionId and AbortSignal
+ * This schema validates the serializable parts for runtime validation
+ * @canonical For runtime validation; types.ts has full version with AbortSignal
  */
 export const ExecutionContextSchema = z.object({
   executionId: z.string().optional(),
@@ -215,12 +330,19 @@ export const ExecutionContextSchema = z.object({
   env: z.record(z.unknown()).optional(),
 }).partial()
 
+/**
+ * ExecutionContext from schema (serializable version)
+ * For full version with AbortSignal and branded types, use ExecutionContext from types.ts
+ */
+export type ExecutionContextFromSchema = z.infer<typeof ExecutionContextSchema>
+
 // =============================================================================
 // FUNCTION FILTER
 // =============================================================================
 
 /**
  * Schema for function filter
+ * @canonical This is the source of truth for FunctionFilter
  */
 export const FunctionFilterSchema = z.object({
   type: FunctionTypeSchema.optional(),
@@ -228,12 +350,20 @@ export const FunctionFilterSchema = z.object({
   namePattern: z.string().optional(),
 }).partial()
 
+/**
+ * FunctionFilter derived from schema
+ */
+export type FunctionFilter = z.infer<typeof FunctionFilterSchema>
+
 // =============================================================================
 // FUNCTION INVOCATION
 // =============================================================================
 
 /**
  * Schema for function invocation
+ * Note: types.ts has FunctionInvocation with branded FunctionId and generic params
+ * This schema validates the raw structure for runtime validation
+ * @canonical For runtime validation; types.ts has branded/generic version
  */
 export const FunctionInvocationSchema = z.object({
   functionId: z.string().min(1),
@@ -244,27 +374,52 @@ export const FunctionInvocationSchema = z.object({
   idempotencyKey: z.string().optional(),
 })
 
-// =============================================================================
-// INFERRED TYPES
-// =============================================================================
+/**
+ * FunctionInvocation from schema (with plain strings)
+ * For branded types and generic version, use FunctionInvocation from types.ts
+ */
+export type FunctionInvocationFromSchema = z.infer<typeof FunctionInvocationSchema>
 
-export type FunctionTypeInferred = z.infer<typeof FunctionTypeSchema>
-export type FunctionResultStatusInferred = z.infer<typeof FunctionResultStatusSchema>
-export type DurationInferred = z.infer<typeof DurationSchema>
-export type JsonSchemaInferred = z.infer<typeof JsonSchemaSchema>
-export type TokenUsageInferred = z.infer<typeof TokenUsageSchema>
-export type RetryPolicyInferred = z.infer<typeof RetryPolicySchema>
-export type ExecutionMetricsInferred = z.infer<typeof ExecutionMetricsSchema>
-export type WorkflowContextInferred = z.infer<typeof WorkflowContextSchema>
-export type ExecutionMetadataInferred = z.infer<typeof ExecutionMetadataSchema>
-export type FunctionErrorInferred = z.infer<typeof FunctionErrorSchema>
-export type FunctionDefinitionInferred = z.infer<typeof FunctionDefinitionSchema>
-export type FunctionResultInferred = z.infer<typeof FunctionResultSchema>
-export type ValidationErrorInferred = z.infer<typeof ValidationErrorSchema>
-export type ValidationResultInferred = z.infer<typeof ValidationResultSchema>
-export type ExecutionContextInferred = z.infer<typeof ExecutionContextSchema>
-export type FunctionFilterInferred = z.infer<typeof FunctionFilterSchema>
-export type FunctionInvocationInferred = z.infer<typeof FunctionInvocationSchema>
+// =============================================================================
+// INFERRED TYPES (DEPRECATED ALIASES)
+// =============================================================================
+// These "*Inferred" aliases are kept for backwards compatibility.
+// Prefer using the non-suffixed type names above (e.g., FunctionType instead of FunctionTypeInferred)
+
+/** @deprecated Use FunctionType instead */
+export type FunctionTypeInferred = FunctionType
+/** @deprecated Use FunctionResultStatus instead */
+export type FunctionResultStatusInferred = FunctionResultStatus
+/** @deprecated Use DurationFromSchema instead */
+export type DurationInferred = DurationFromSchema
+/** @deprecated Use JsonSchema instead */
+export type JsonSchemaInferred = JsonSchema
+/** @deprecated Use TokenUsage instead */
+export type TokenUsageInferred = TokenUsage
+/** @deprecated Use RetryPolicy instead */
+export type RetryPolicyInferred = RetryPolicy
+/** @deprecated Use ExecutionMetrics instead */
+export type ExecutionMetricsInferred = ExecutionMetrics
+/** @deprecated Use WorkflowContextFromSchema instead */
+export type WorkflowContextInferred = WorkflowContextFromSchema
+/** @deprecated Use ExecutionMetadata instead */
+export type ExecutionMetadataInferred = ExecutionMetadata
+/** @deprecated Use FunctionError instead */
+export type FunctionErrorInferred = FunctionError
+/** @deprecated Use FunctionDefinitionFromSchema instead */
+export type FunctionDefinitionInferred = FunctionDefinitionFromSchema
+/** @deprecated Use FunctionResultFromSchema instead */
+export type FunctionResultInferred = FunctionResultFromSchema
+/** @deprecated Use ValidationError instead */
+export type ValidationErrorInferred = ValidationError
+/** @deprecated Use ValidationResult instead */
+export type ValidationResultInferred = ValidationResult
+/** @deprecated Use ExecutionContextFromSchema instead */
+export type ExecutionContextInferred = ExecutionContextFromSchema
+/** @deprecated Use FunctionFilter instead */
+export type FunctionFilterInferred = FunctionFilter
+/** @deprecated Use FunctionInvocationFromSchema instead */
+export type FunctionInvocationInferred = FunctionInvocationFromSchema
 
 // =============================================================================
 // VALIDATION HELPERS
@@ -273,7 +428,7 @@ export type FunctionInvocationInferred = z.infer<typeof FunctionInvocationSchema
 /**
  * Validates a function definition and returns a ValidationResult
  */
-export function validateFunctionDefinition(data: unknown): ValidationResultInferred {
+export function validateFunctionDefinition(data: unknown): ValidationResult {
   const result = FunctionDefinitionSchema.safeParse(data)
   if (result.success) {
     return { valid: true }
@@ -287,7 +442,7 @@ export function validateFunctionDefinition(data: unknown): ValidationResultInfer
 /**
  * Validates a function result and returns a ValidationResult
  */
-export function validateFunctionResult(data: unknown): ValidationResultInferred {
+export function validateFunctionResult(data: unknown): ValidationResult {
   const result = FunctionResultSchema.safeParse(data)
   if (result.success) {
     return { valid: true }
@@ -305,39 +460,39 @@ export function validateFunctionResult(data: unknown): ValidationResultInferred 
 export function validateInput(
   input: unknown,
   schema: Record<string, unknown>
-): ValidationResultInferred {
+): ValidationResult {
   // For now, perform basic validation based on JSON schema structure
   // Full JSON Schema validation would require a dedicated library
-  const errors: ValidationErrorInferred[] = []
+  const errors: ValidationError[] = []
 
-  if (schema.type === 'object' && typeof input !== 'object') {
+  if (schema['type'] === 'object' && typeof input !== 'object') {
     errors.push({ path: 'input', message: 'Expected object' })
   }
 
-  if (schema.type === 'string' && typeof input !== 'string') {
+  if (schema['type'] === 'string' && typeof input !== 'string') {
     errors.push({ path: 'input', message: 'Expected string' })
   }
 
-  if (schema.type === 'number' && typeof input !== 'number') {
+  if (schema['type'] === 'number' && typeof input !== 'number') {
     errors.push({ path: 'input', message: 'Expected number' })
   }
 
-  if (schema.type === 'boolean' && typeof input !== 'boolean') {
+  if (schema['type'] === 'boolean' && typeof input !== 'boolean') {
     errors.push({ path: 'input', message: 'Expected boolean' })
   }
 
-  if (schema.type === 'array' && !Array.isArray(input)) {
+  if (schema['type'] === 'array' && !Array.isArray(input)) {
     errors.push({ path: 'input', message: 'Expected array' })
   }
 
   // Check required properties for objects
   if (
-    schema.type === 'object' &&
+    schema['type'] === 'object' &&
     typeof input === 'object' &&
     input !== null &&
-    Array.isArray(schema.required)
+    Array.isArray(schema['required'])
   ) {
-    for (const requiredProp of schema.required as string[]) {
+    for (const requiredProp of schema['required'] as string[]) {
       if (!(requiredProp in input)) {
         errors.push({
           path: `input.${requiredProp}`,
@@ -356,26 +511,26 @@ export function validateInput(
 export function validateOutput(
   output: unknown,
   schema: Record<string, unknown>
-): ValidationResultInferred {
-  const errors: ValidationErrorInferred[] = []
+): ValidationResult {
+  const errors: ValidationError[] = []
 
-  if (schema.type === 'object' && typeof output !== 'object') {
+  if (schema['type'] === 'object' && typeof output !== 'object') {
     errors.push({ path: 'output', message: 'Expected object' })
   }
 
-  if (schema.type === 'string' && typeof output !== 'string') {
+  if (schema['type'] === 'string' && typeof output !== 'string') {
     errors.push({ path: 'output', message: 'Expected string' })
   }
 
-  if (schema.type === 'number' && typeof output !== 'number') {
+  if (schema['type'] === 'number' && typeof output !== 'number') {
     errors.push({ path: 'output', message: 'Expected number' })
   }
 
-  if (schema.type === 'boolean' && typeof output !== 'boolean') {
+  if (schema['type'] === 'boolean' && typeof output !== 'boolean') {
     errors.push({ path: 'output', message: 'Expected boolean' })
   }
 
-  if (schema.type === 'array' && !Array.isArray(output)) {
+  if (schema['type'] === 'array' && !Array.isArray(output)) {
     errors.push({ path: 'output', message: 'Expected array' })
   }
 
@@ -387,7 +542,7 @@ export function validateOutput(
  */
 export function safeParseFunctionDefinition(
   data: unknown
-): z.SafeParseReturnType<unknown, FunctionDefinitionInferred> {
+): z.SafeParseReturnType<unknown, FunctionDefinitionFromSchema> {
   return FunctionDefinitionSchema.safeParse(data)
 }
 
@@ -396,14 +551,14 @@ export function safeParseFunctionDefinition(
  */
 export function safeParseFunctionResult(
   data: unknown
-): z.SafeParseReturnType<unknown, FunctionResultInferred> {
+): z.SafeParseReturnType<unknown, FunctionResultFromSchema> {
   return FunctionResultSchema.safeParse(data)
 }
 
 /**
  * Creates an array of ValidationError from a ZodError
  */
-export function createValidationError(zodError: z.ZodError): ValidationErrorInferred[] {
+export function createValidationError(zodError: z.ZodError): ValidationError[] {
   return zodError.issues.map((issue) => ({
     path: issue.path.join('.') || 'root',
     message: issue.message,
@@ -417,6 +572,8 @@ export function createValidationError(zodError: z.ZodError): ValidationErrorInfe
 
 /**
  * Schema for supported code languages
+ * @canonical This is the source of truth for CodeLanguage (runtime validation)
+ * Note: code/index.ts has the same CodeLanguage type for compile-time use
  */
 export const CodeLanguageSchema = z.enum([
   'typescript',
@@ -428,6 +585,11 @@ export const CodeLanguageSchema = z.enum([
   'assemblyscript',
   'csharp',
 ])
+
+/**
+ * CodeLanguage derived from schema
+ */
+export type CodeLanguage = z.infer<typeof CodeLanguageSchema>
 
 // =============================================================================
 // DEPLOY REQUEST SCHEMA
@@ -451,12 +613,18 @@ export const DeployRequestSchema = z.object({
   tags: z.array(z.string()).optional(),
 })
 
-export type DeployRequestInferred = z.infer<typeof DeployRequestSchema>
+/**
+ * DeployRequest derived from schema
+ */
+export type DeployRequest = z.infer<typeof DeployRequestSchema>
+
+/** @deprecated Use DeployRequest instead */
+export type DeployRequestInferred = DeployRequest
 
 /**
  * Validates a deploy request body
  */
-export function validateDeployRequest(data: unknown): ValidationResultInferred {
+export function validateDeployRequest(data: unknown): ValidationResult {
   const result = DeployRequestSchema.safeParse(data)
   if (result.success) {
     return { valid: true }
@@ -470,7 +638,7 @@ export function validateDeployRequest(data: unknown): ValidationResultInferred {
 /**
  * Parses and validates a deploy request, throwing on error
  */
-export function parseDeployRequest(data: unknown): DeployRequestInferred {
+export function parseDeployRequest(data: unknown): DeployRequest {
   return DeployRequestSchema.parse(data)
 }
 
@@ -481,7 +649,7 @@ export function parseDeployRequest(data: unknown): DeployRequestInferred {
 /**
  * Validates a function invocation request
  */
-export function validateInvocation(data: unknown): ValidationResultInferred {
+export function validateInvocation(data: unknown): ValidationResult {
   const result = FunctionInvocationSchema.safeParse(data)
   if (result.success) {
     return { valid: true }
@@ -495,21 +663,21 @@ export function validateInvocation(data: unknown): ValidationResultInferred {
 /**
  * Parses and validates a function definition, throwing on error
  */
-export function parseFunctionDefinition(data: unknown): FunctionDefinitionInferred {
+export function parseFunctionDefinition(data: unknown): FunctionDefinitionFromSchema {
   return FunctionDefinitionSchema.parse(data)
 }
 
 /**
  * Parses and validates a function result, throwing on error
  */
-export function parseFunctionResult(data: unknown): FunctionResultInferred {
+export function parseFunctionResult(data: unknown): FunctionResultFromSchema {
   return FunctionResultSchema.parse(data)
 }
 
 /**
  * Parses and validates a function invocation, throwing on error
  */
-export function parseInvocation(data: unknown): FunctionInvocationInferred {
+export function parseInvocation(data: unknown): FunctionInvocationFromSchema {
   return FunctionInvocationSchema.parse(data)
 }
 
@@ -517,21 +685,21 @@ export function parseInvocation(data: unknown): FunctionInvocationInferred {
  * Creates a validated function result from raw data
  */
 export function createFunctionResult<T>(
-  data: Omit<FunctionResultInferred, 'output'> & { output?: T }
-): FunctionResultInferred & { output?: T } {
-  return FunctionResultSchema.parse(data) as FunctionResultInferred & { output?: T }
+  data: Omit<FunctionResultFromSchema, 'output'> & { output?: T }
+): FunctionResultFromSchema & { output?: T } {
+  return FunctionResultSchema.parse(data) as FunctionResultFromSchema & { output?: T }
 }
 
 /**
  * Type guard to check if a value is a valid function definition
  */
-export function isFunctionDefinition(data: unknown): data is FunctionDefinitionInferred {
+export function isFunctionDefinition(data: unknown): data is FunctionDefinitionFromSchema {
   return FunctionDefinitionSchema.safeParse(data).success
 }
 
 /**
  * Type guard to check if a value is a valid function result
  */
-export function isFunctionResult(data: unknown): data is FunctionResultInferred {
+export function isFunctionResult(data: unknown): data is FunctionResultFromSchema {
   return FunctionResultSchema.safeParse(data).success
 }

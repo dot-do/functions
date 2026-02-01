@@ -18,15 +18,15 @@ import type {
   IterationResult,
   ToolCallRecord,
   AgenticExecutionInfo,
-} from '../../core/src/agentic/index.js'
+} from '@dotdo/functions/agentic'
 
 import type {
   ExecutionContext,
   TokenUsage,
   FunctionResultStatus,
-} from '../../core/src/types.js'
+} from '@dotdo/functions'
 
-import { parseDuration } from '../../core/src/types.js'
+import { parseDuration } from '@dotdo/functions'
 
 // =============================================================================
 // MODULE DOCUMENTATION

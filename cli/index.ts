@@ -16,19 +16,16 @@
  */
 
 import cac from 'cac'
+import { runInit } from './commands/init.js'
+import { runDeploy } from './commands/deploy.js'
+import { runInvoke } from './commands/invoke.js'
+import { runList } from './commands/list.js'
+import { runLogs } from './commands/logs.js'
+import { runDelete } from './commands/delete.js'
+import { createDefaultContext, createDefaultAPIClient, createDefaultPrompt, createDefaultCompiler } from './context.js'
+import type { CLIContext } from './types.js'
 
 const VERSION = '0.1.0'
-
-/**
- * CLI context for dependency injection
- */
-export interface CLIContext {
-  stdout: (text: string) => void
-  stderr: (text: string) => void
-  exit: (code: number) => void
-  fetch: typeof fetch
-  env: Record<string, string | undefined>
-}
 
 /**
  * Command result
@@ -49,65 +46,144 @@ export function createCLI() {
 
   // init command
   cli.command('init [name]', 'Create a new function project')
-    .option('-l, --lang <language>', 'Programming language (typescript, rust, go, python, csharp)')
-    .option('-t, --template <template>', 'Project template')
-    .action(() => {})
+    .option('-t, --template <template>', 'Project template (typescript, rust, go, python)')
+    .option('-f, --force', 'Overwrite existing directory')
+    .action(async (name: string | undefined, options: { template?: string; force?: boolean }) => {
+      const context = createDefaultContext()
+      const result = await runInit(name || '', {
+        template: options.template as 'typescript' | 'rust' | 'go' | 'python' | undefined,
+        force: options.force,
+      }, context)
+      process.exit(result.exitCode)
+    })
 
   // dev command
   cli.command('dev', 'Start local development server')
     .option('-p, --port <port>', 'Port to listen on', { default: 8787 })
     .option('--inspect', 'Enable Chrome DevTools debugging')
-    .action(() => {})
+    .action(async (options: { port?: number; inspect?: boolean }) => {
+      const { spawn } = await import('child_process')
+      const args = ['wrangler', 'dev']
+      if (options.port) args.push('--port', String(options.port))
+      if (options.inspect) args.push('--inspect')
+      const child = spawn('npx', args, { stdio: 'inherit' })
+      child.on('exit', (code) => process.exit(code || 0))
+    })
 
   // deploy command
   cli.command('deploy', 'Deploy function to functions.do')
     .option('-n, --name <name>', 'Function name')
     .option('--dry-run', 'Show what would be deployed without deploying')
     .option('-e, --env <env>', 'Environment (production, staging)')
-    .action(() => {})
+    .option('-v, --version <version>', 'Deployment version')
+    .option('-m, --message <message>', 'Deployment message')
+    .action(async (options: { name?: string; dryRun?: boolean; env?: string; version?: string; message?: string }) => {
+      const context = createDefaultContext()
+      const api = createDefaultAPIClient(context)
+      const compiler = createDefaultCompiler()
+      const result = await runDeploy({
+        version: options.version,
+        message: options.message,
+      }, { ...context, api, compiler })
+      process.exit(result.exitCode)
+    })
 
   // list command
   cli.command('list', 'List deployed functions')
-    .option('-l, --long', 'Show detailed information')
+    .option('-l, --limit <limit>', 'Number of functions to show', { default: 20 })
     .option('--json', 'Output as JSON')
-    .action(() => {})
+    .action(async (options: { limit?: number; json?: boolean }) => {
+      const context = createDefaultContext()
+      const api = createDefaultAPIClient(context)
+      const result = await runList({
+        limit: options.limit,
+        json: options.json,
+      }, context, api)
+      process.exit(result.exitCode)
+    })
 
   // logs command
   cli.command('logs <functionId>', 'View function logs')
     .option('-f, --follow', 'Follow log output')
-    .option('-n, --lines <lines>', 'Number of lines to show', { default: 100 })
+    .option('-n, --limit <lines>', 'Number of lines to show', { default: 100 })
     .option('--level <level>', 'Filter by log level (debug, info, warn, error)')
-    .action(() => {})
+    .option('--since <time>', 'Show logs since time (ISO date or relative like 1h, 30m)')
+    .action(async (functionId: string, options: { follow?: boolean; limit?: number; level?: string; since?: string }) => {
+      const context = createDefaultContext()
+      const api = createDefaultAPIClient(context)
+      const result = await runLogs(functionId, {
+        follow: options.follow,
+        limit: options.limit,
+        level: options.level as 'debug' | 'info' | 'warn' | 'error' | undefined,
+        since: options.since,
+      }, context, api)
+      process.exit(result.exitCode)
+    })
 
   // invoke command
   cli.command('invoke <functionId>', 'Invoke a function')
     .option('-d, --data <data>', 'JSON data to send')
     .option('-f, --file <file>', 'Read data from file')
-    .option('-m, --method <method>', 'RPC method to call')
-    .action(() => {})
+    .option('-m, --method <method>', 'HTTP method to use')
+    .option('-H, --header <header>', 'Add custom header (can be used multiple times)')
+    .option('--timing', 'Show timing information')
+    .option('--headers', 'Show response headers')
+    .option('-v, --version <version>', 'Invoke specific version')
+    .action(async (functionId: string, options: { data?: string; file?: string; method?: string; header?: string | string[]; timing?: boolean; headers?: boolean; version?: string }) => {
+      const context = createDefaultContext()
+      const api = createDefaultAPIClient(context)
+      const headers = options.header ? (Array.isArray(options.header) ? options.header : [options.header]) : undefined
+      const result = await runInvoke(functionId, {
+        data: options.data,
+        file: options.file,
+        method: options.method,
+        header: headers,
+        timing: options.timing,
+        headers: options.headers,
+        version: options.version,
+      }, { ...context, api })
+      process.exit(result.exitCode)
+    })
 
   // delete command
   cli.command('delete <functionId>', 'Delete a function')
     .option('-f, --force', 'Skip confirmation')
     .option('--all-versions', 'Delete all versions')
-    .action(() => {})
+    .action(async (functionId: string, options: { force?: boolean; allVersions?: boolean }) => {
+      const context = createDefaultContext()
+      const api = createDefaultAPIClient(context)
+      const prompt = createDefaultPrompt()
+      const result = await runDelete(functionId, {
+        force: options.force,
+        allVersions: options.allVersions,
+      }, context, api, prompt)
+      process.exit(result.exitCode)
+    })
 
   // rollback command
   cli.command('rollback <functionId>', 'Rollback to previous version')
     .option('-v, --version <version>', 'Specific version to rollback to')
-    .action(() => {})
+    .action(async (functionId: string, options: { version?: string }) => {
+      console.log(`Rolling back ${functionId} to ${options.version || 'previous version'}...`)
+      console.log('Rollback command not yet implemented.')
+    })
 
   // secrets command
   cli.command('secrets', 'Manage function secrets')
     .option('list', 'List all secrets')
     .option('set <name> <value>', 'Set a secret')
     .option('delete <name>', 'Delete a secret')
-    .action(() => {})
+    .action(() => {
+      console.log('Secrets command not yet implemented.')
+    })
 
   // status command
   cli.command('status <functionId>', 'View function status')
     .option('--json', 'Output as JSON')
-    .action(() => {})
+    .action(async (functionId: string, options: { json?: boolean }) => {
+      console.log(`Fetching status for ${functionId}...`)
+      console.log('Status command not yet implemented.')
+    })
 
   return {
     name: 'dotdo',
@@ -120,21 +196,31 @@ export function createCLI() {
 /**
  * Default CLI context using real implementations
  */
-export function createDefaultContext(): CLIContext {
+export function createDefaultContext_legacy(): CLIContext {
   return {
+    fs: {
+      readFile: async () => '',
+      readFileBytes: async () => new Uint8Array(),
+      writeFile: async () => {},
+      readdir: async () => [],
+      mkdir: async () => {},
+      rm: async () => {},
+      exists: async () => false,
+      stat: async () => ({ size: 0, mode: 0, mtime: 0, type: 'file' as const }),
+    },
     stdout: (text: string) => process.stdout.write(text + '\n'),
     stderr: (text: string) => process.stderr.write(text + '\n'),
     exit: (code: number) => process.exit(code),
-    fetch: globalThis.fetch,
-    env: process.env,
+    cwd: process.cwd(),
   }
 }
 
 /**
  * Run CLI with given arguments
  */
-export async function runCLI(args: string[], context: CLIContext = createDefaultContext()): Promise<CommandResult> {
-  const { stdout, stderr } = context
+export async function runCLI(args: string[], context?: CLIContext): Promise<CommandResult> {
+  const ctx = context || createDefaultContext()
+  const { stdout, stderr } = ctx
 
   // Handle --version and -v
   if (args.includes('--version') || args.includes('-v')) {
@@ -168,7 +254,7 @@ Options:
   -v, --version      Show version
 
 Examples:
-  dotdo init my-function --lang typescript
+  dotdo init my-function --template typescript
   dotdo dev
   dotdo deploy
   dotdo logs my-function --follow
@@ -180,39 +266,100 @@ Documentation: https://functions.do/docs
   }
 
   const command = args[0]
+  const commandArgs = args.slice(1)
 
-  // Placeholder implementations - will be filled in with actual logic
   switch (command) {
-    case 'init':
-      stdout('Creating new function project...')
-      stdout('Use: npx create-function <name> --lang <language>')
-      return { exitCode: 0 }
+    case 'init': {
+      const name = commandArgs[0] || ''
+      const templateIdx = commandArgs.indexOf('--template')
+      const tIdx = commandArgs.indexOf('-t')
+      const template = templateIdx !== -1 ? commandArgs[templateIdx + 1] : (tIdx !== -1 ? commandArgs[tIdx + 1] : undefined)
+      const force = commandArgs.includes('--force') || commandArgs.includes('-f')
+
+      const result = await runInit(name, {
+        template: template as 'typescript' | 'rust' | 'go' | 'python' | undefined,
+        force,
+      }, ctx)
+      return result
+    }
 
     case 'dev':
       stdout('Starting development server...')
       stdout('Use: wrangler dev')
       return { exitCode: 0 }
 
-    case 'deploy':
-      stdout('Deploying function...')
-      stdout('Use: wrangler deploy')
-      return { exitCode: 0 }
+    case 'deploy': {
+      const api = createDefaultAPIClient(ctx)
+      const compiler = createDefaultCompiler()
+      const versionIdx = commandArgs.indexOf('--version')
+      const vIdx = commandArgs.indexOf('-v')
+      const version = versionIdx !== -1 ? commandArgs[versionIdx + 1] : (vIdx !== -1 ? commandArgs[vIdx + 1] : undefined)
+      const messageIdx = commandArgs.indexOf('--message')
+      const mIdx = commandArgs.indexOf('-m')
+      const message = messageIdx !== -1 ? commandArgs[messageIdx + 1] : (mIdx !== -1 ? commandArgs[mIdx + 1] : undefined)
 
-    case 'list':
-      stdout('Listing functions...')
-      return { exitCode: 0 }
+      const result = await runDeploy({ version, message }, { ...ctx, api, compiler })
+      return result
+    }
 
-    case 'logs':
-      stdout('Fetching logs...')
-      return { exitCode: 0 }
+    case 'list': {
+      const api = createDefaultAPIClient(ctx)
+      const json = commandArgs.includes('--json')
+      const limitIdx = commandArgs.indexOf('--limit')
+      const lIdx = commandArgs.indexOf('-l')
+      const limitStr = limitIdx !== -1 ? commandArgs[limitIdx + 1] : (lIdx !== -1 ? commandArgs[lIdx + 1] : undefined)
+      const limit = limitStr ? parseInt(limitStr, 10) : undefined
 
-    case 'invoke':
-      stdout('Invoking function...')
-      return { exitCode: 0 }
+      const result = await runList({ json, limit }, ctx, api)
+      return result
+    }
 
-    case 'delete':
-      stdout('Deleting function...')
-      return { exitCode: 0 }
+    case 'logs': {
+      const functionId = commandArgs[0] || ''
+      const api = createDefaultAPIClient(ctx)
+      const follow = commandArgs.includes('--follow') || commandArgs.includes('-f')
+      const levelIdx = commandArgs.indexOf('--level')
+      const level = levelIdx !== -1 ? commandArgs[levelIdx + 1] as 'debug' | 'info' | 'warn' | 'error' : undefined
+      const sinceIdx = commandArgs.indexOf('--since')
+      const since = sinceIdx !== -1 ? commandArgs[sinceIdx + 1] : undefined
+      const limitIdx = commandArgs.indexOf('--limit')
+      const nIdx = commandArgs.indexOf('-n')
+      const limitStr = limitIdx !== -1 ? commandArgs[limitIdx + 1] : (nIdx !== -1 ? commandArgs[nIdx + 1] : undefined)
+      const limit = limitStr ? parseInt(limitStr, 10) : undefined
+
+      const result = await runLogs(functionId, { follow, level, since, limit }, ctx, api)
+      return result
+    }
+
+    case 'invoke': {
+      const functionId = commandArgs[0] || ''
+      const api = createDefaultAPIClient(ctx)
+      const dataIdx = commandArgs.indexOf('--data')
+      const dIdx = commandArgs.indexOf('-d')
+      const data = dataIdx !== -1 ? commandArgs[dataIdx + 1] : (dIdx !== -1 ? commandArgs[dIdx + 1] : undefined)
+      const fileIdx = commandArgs.indexOf('--file')
+      const fIdx = commandArgs.indexOf('-f')
+      const file = fileIdx !== -1 ? commandArgs[fileIdx + 1] : (fIdx !== -1 ? commandArgs[fIdx + 1] : undefined)
+      const timing = commandArgs.includes('--timing')
+      const headers = commandArgs.includes('--headers')
+      const versionIdx = commandArgs.indexOf('--version')
+      const vIdx = commandArgs.indexOf('-v')
+      const version = versionIdx !== -1 ? commandArgs[versionIdx + 1] : (vIdx !== -1 ? commandArgs[vIdx + 1] : undefined)
+
+      const result = await runInvoke(functionId, { data, file, timing, headers, version }, { ...ctx, api })
+      return result
+    }
+
+    case 'delete': {
+      const functionId = commandArgs[0] || ''
+      const api = createDefaultAPIClient(ctx)
+      const prompt = createDefaultPrompt()
+      const force = commandArgs.includes('--force') || commandArgs.includes('-f')
+      const allVersions = commandArgs.includes('--all-versions')
+
+      const result = await runDelete(functionId, { force, allVersions }, ctx, api, prompt)
+      return result
+    }
 
     case 'rollback':
       stdout('Rolling back function...')
@@ -233,10 +380,21 @@ Documentation: https://functions.do/docs
   }
 }
 
+// Re-export types and context
+export { createDefaultContext, createDefaultAPIClient } from './context.js'
+export type { CLIContext, MockFS, CommandResult as CLICommandResult } from './types.js'
+
 // Run if called directly
 if (typeof process !== 'undefined' && process.argv) {
   const args = process.argv.slice(2)
-  runCLI(args).then(result => {
-    process.exit(result.exitCode)
-  })
+
+  // If running directly (not imported for testing), use cac
+  if (args.length > 0 && !args.includes('--test-mode')) {
+    const { cli } = createCLI()
+    cli.parse(process.argv)
+  } else if (args.length === 0) {
+    runCLI([]).then(result => {
+      process.exit(result.exitCode)
+    })
+  }
 }

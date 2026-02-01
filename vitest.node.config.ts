@@ -30,7 +30,7 @@ export default defineConfig({
       // E2E tests
       'test/*.test.ts',
       // Core tests run in Node.js environment
-      // Exception: worker-loader.test.ts uses cloudflare:test and runs in Workers
+      'src/core/__tests__/worker-loader.test.ts',
       'src/core/__tests__/auth.test.ts',
       'src/core/__tests__/cascade-executor.test.ts',
       'src/core/__tests__/code-storage.test.ts',
@@ -48,10 +48,14 @@ export default defineConfig({
       'src/core/cascade-constants.test.ts',
       // Schema tests
       'core/src/__tests__/schemas.test.ts',
+      // Cascade tests
+      'core/src/__tests__/cascade.test.ts',
       // AI tests
       'src/ai/__tests__/*.test.ts',
       // Generative executor tests (require ai-functions package)
       'src/tiers/__tests__/generative-executor.test.ts',
+      // Template literals tests
+      'src/__tests__/template-literals.test.ts',
     ],
     exclude: ['node_modules/**'],
     testTimeout: 30000,

@@ -141,7 +141,7 @@ describe('Rust Compiler', () => {
     const wasmModule = await WebAssembly.compile(result.wasm)
     const wasmInstance = await WebAssembly.instantiate(wasmModule)
 
-    const compute = wasmInstance.exports.compute as (x: number) => number
+    const compute = wasmInstance.exports['compute'] as (x: number) => number
     expect(compute(5)).toBe(11)
     expect(compute(10)).toBe(21)
     expect(compute(0)).toBe(1)

@@ -88,10 +88,10 @@ describe('Tier Executor Integration', () => {
 
       // Should use the tier executor, not placeholder
       expect(response.status).toBe(200)
-      expect(body.doubled).toBe(42)
-      expect(body._meta).toBeDefined()
-      expect((body._meta as JsonBody).executorType).toBe('code')
-      expect((body._meta as JsonBody).tier).toBe(1) // Code is tier 1
+      expect(body['doubled']).toBe(42)
+      expect(body['_meta']).toBeDefined()
+      expect((body['_meta'] as JsonBody)['executorType']).toBe('code')
+      expect((body['_meta'] as JsonBody)['tier']).toBe(1) // Code is tier 1
     })
 
     it('should enforce 5s default timeout for code functions', async () => {
@@ -132,8 +132,8 @@ describe('Tier Executor Integration', () => {
       const body = (await response.json()) as JsonBody
 
       expect(response.status).toBe(408) // Request Timeout
-      expect(body.error).toMatch(/timeout/i)
-      expect((body._meta as JsonBody).tier).toBe(1)
+      expect(body['error']).toMatch(/timeout/i)
+      expect((body['_meta'] as JsonBody)['tier']).toBe(1)
     })
 
     it('should return codeExecution metrics from CodeExecutor', async () => {
@@ -166,11 +166,11 @@ describe('Tier Executor Integration', () => {
       const body = (await response.json()) as JsonBody
 
       expect(response.status).toBe(200)
-      expect(body._meta).toBeDefined()
-      const meta = body._meta as JsonBody
-      expect(meta.codeExecution).toBeDefined()
-      expect((meta.codeExecution as JsonBody).language).toBe('typescript')
-      expect(typeof (meta.codeExecution as JsonBody).cpuTimeMs).toBe('number')
+      expect(body['_meta']).toBeDefined()
+      const meta = body['_meta'] as JsonBody
+      expect(meta['codeExecution']).toBeDefined()
+      expect((meta['codeExecution'] as JsonBody)['language']).toBe('typescript')
+      expect(typeof (meta['codeExecution'] as JsonBody)['cpuTimeMs']).toBe('number')
     })
   })
 
@@ -227,11 +227,11 @@ describe('Tier Executor Integration', () => {
       const body = (await response.json()) as JsonBody
 
       expect(response.status).toBe(200)
-      expect(body.sentiment).toBe('positive')
-      expect(body.confidence).toBeGreaterThan(0)
-      expect(body._meta).toBeDefined()
-      expect((body._meta as JsonBody).executorType).toBe('generative')
-      expect((body._meta as JsonBody).tier).toBe(2) // Generative is tier 2
+      expect(body['sentiment']).toBe('positive')
+      expect(body['confidence']).toBeGreaterThan(0)
+      expect(body['_meta']).toBeDefined()
+      expect((body['_meta'] as JsonBody)['executorType']).toBe('generative')
+      expect((body['_meta'] as JsonBody)['tier']).toBe(2) // Generative is tier 2
     })
 
     it('should enforce 30s default timeout for generative functions', async () => {
@@ -272,8 +272,8 @@ describe('Tier Executor Integration', () => {
       const body = (await response.json()) as JsonBody
 
       expect(response.status).toBe(408)
-      expect(body.error).toMatch(/timeout/i)
-      expect((body._meta as JsonBody).tier).toBe(2)
+      expect(body['error']).toMatch(/timeout/i)
+      expect((body['_meta'] as JsonBody)['tier']).toBe(2)
     })
 
     it('should return generativeExecution info from GenerativeExecutor', async () => {
@@ -304,12 +304,12 @@ describe('Tier Executor Integration', () => {
       const body = (await response.json()) as JsonBody
 
       expect(response.status).toBe(200)
-      const meta = body._meta as JsonBody
-      expect(meta.generativeExecution).toBeDefined()
-      const genExec = meta.generativeExecution as JsonBody
-      expect(genExec.model).toContain('claude')
-      expect(genExec.tokens).toBeDefined()
-      expect((genExec.tokens as JsonBody).inputTokens).toBeGreaterThan(0)
+      const meta = body['_meta'] as JsonBody
+      expect(meta['generativeExecution']).toBeDefined()
+      const genExec = meta['generativeExecution'] as JsonBody
+      expect(genExec['model']).toContain('claude')
+      expect(genExec['tokens']).toBeDefined()
+      expect((genExec['tokens'] as JsonBody)['inputTokens']).toBeGreaterThan(0)
     })
   })
 
@@ -366,9 +366,9 @@ describe('Tier Executor Integration', () => {
       const body = (await response.json()) as JsonBody
 
       expect(response.status).toBe(200)
-      expect(body._meta).toBeDefined()
-      expect((body._meta as JsonBody).executorType).toBe('agentic')
-      expect((body._meta as JsonBody).tier).toBe(3) // Agentic is tier 3
+      expect(body['_meta']).toBeDefined()
+      expect((body['_meta'] as JsonBody)['executorType']).toBe('agentic')
+      expect((body['_meta'] as JsonBody)['tier']).toBe(3) // Agentic is tier 3
     })
 
     it('should enforce 5m default timeout for agentic functions', async () => {
@@ -410,8 +410,8 @@ describe('Tier Executor Integration', () => {
       const body = (await response.json()) as JsonBody
 
       expect(response.status).toBe(408)
-      expect(body.error).toMatch(/timeout/i)
-      expect((body._meta as JsonBody).tier).toBe(3)
+      expect(body['error']).toMatch(/timeout/i)
+      expect((body['_meta'] as JsonBody)['tier']).toBe(3)
     })
 
     it('should return agenticExecution info with tool calls and iterations', async () => {
@@ -463,13 +463,13 @@ describe('Tier Executor Integration', () => {
       const body = (await response.json()) as JsonBody
 
       expect(response.status).toBe(200)
-      const meta = body._meta as JsonBody
-      expect(meta.agenticExecution).toBeDefined()
-      const agentExec = meta.agenticExecution as JsonBody
-      expect(agentExec.iterations).toBeGreaterThan(0)
-      expect(agentExec.toolsUsed).toBeDefined()
-      expect(Array.isArray(agentExec.toolsUsed)).toBe(true)
-      expect(agentExec.totalTokens).toBeDefined()
+      const meta = body['_meta'] as JsonBody
+      expect(meta['agenticExecution']).toBeDefined()
+      const agentExec = meta['agenticExecution'] as JsonBody
+      expect(agentExec['iterations']).toBeGreaterThan(0)
+      expect(agentExec['toolsUsed']).toBeDefined()
+      expect(Array.isArray(agentExec['toolsUsed'])).toBe(true)
+      expect(agentExec['totalTokens']).toBeDefined()
     })
   })
 
@@ -526,11 +526,11 @@ describe('Tier Executor Integration', () => {
 
       // Human tasks return 202 Accepted (async)
       expect(response.status).toBe(202)
-      expect(body.taskId).toBeDefined()
-      expect(body.taskUrl).toBeDefined()
-      expect(body._meta).toBeDefined()
-      expect((body._meta as JsonBody).executorType).toBe('human')
-      expect((body._meta as JsonBody).tier).toBe(4) // Human is tier 4
+      expect(body['taskId']).toBeDefined()
+      expect(body['taskUrl']).toBeDefined()
+      expect(body['_meta']).toBeDefined()
+      expect((body['_meta'] as JsonBody)['executorType']).toBe('human')
+      expect((body['_meta'] as JsonBody)['tier']).toBe(4) // Human is tier 4
     })
 
     it('should create a pending task with correct routing', async () => {
@@ -564,9 +564,9 @@ describe('Tier Executor Integration', () => {
       const body = (await response.json()) as JsonBody
 
       expect(response.status).toBe(202)
-      expect(body.taskId).toBeDefined()
-      expect(body.status).toBe('pending')
-      expect(body.assignees).toBeDefined()
+      expect(body['taskId']).toBeDefined()
+      expect(body['status']).toBe('pending')
+      expect(body['assignees']).toBeDefined()
     })
 
     it('should return humanExecution info with task details', async () => {
@@ -598,11 +598,11 @@ describe('Tier Executor Integration', () => {
       const body = (await response.json()) as JsonBody
 
       expect(response.status).toBe(202)
-      const meta = body._meta as JsonBody
-      expect(meta.humanExecution).toBeDefined()
-      const humanExec = meta.humanExecution as JsonBody
-      expect(humanExec.taskId).toBeDefined()
-      expect(humanExec.expiresAt).toBeDefined()
+      const meta = body['_meta'] as JsonBody
+      expect(meta['humanExecution']).toBeDefined()
+      const humanExec = meta['humanExecution'] as JsonBody
+      expect(humanExec['taskId']).toBeDefined()
+      expect(humanExec['expiresAt']).toBeDefined()
     })
   })
 
@@ -654,9 +654,9 @@ describe('Tier Executor Integration', () => {
 
       expect([200, 501]).toContain(response.status)
       if (response.status === 200) {
-        expect(body._meta).toBeDefined()
-        expect((body._meta as JsonBody).executorType).toBe('cascade')
-        expect((body._meta as JsonBody).stepsExecuted).toBeDefined()
+        expect(body['_meta']).toBeDefined()
+        expect((body['_meta'] as JsonBody)['executorType']).toBe('cascade')
+        expect((body['_meta'] as JsonBody)['stepsExecuted']).toBeDefined()
       }
     })
   })
@@ -697,7 +697,7 @@ describe('Tier Executor Integration', () => {
       const body = (await response.json()) as JsonBody
 
       expect(response.status).toBe(503) // Service Unavailable
-      expect(body.error).toMatch(/executor|not available|not configured/i)
+      expect(body['error']).toMatch(/executor|not available|not configured/i)
     })
 
     it('should propagate executor errors with proper formatting', async () => {
@@ -730,9 +730,9 @@ describe('Tier Executor Integration', () => {
       const body = (await response.json()) as JsonBody
 
       expect(response.status).toBe(500)
-      expect(body.error).toBeDefined()
-      expect(body._meta).toBeDefined()
-      expect((body._meta as JsonBody).executorType).toBe('code')
+      expect(body['error']).toBeDefined()
+      expect(body['_meta']).toBeDefined()
+      expect((body['_meta'] as JsonBody)['executorType']).toBe('code')
     })
 
     it('should include execution metrics even on failure', async () => {
@@ -764,11 +764,11 @@ describe('Tier Executor Integration', () => {
       const response = await invokeHandler(request, mockEnv, mockCtx, context)
       const body = (await response.json()) as JsonBody
 
-      expect(body._meta).toBeDefined()
-      const meta = body._meta as JsonBody
-      expect(meta.duration).toBeDefined()
-      expect(typeof meta.duration).toBe('number')
-      expect(meta.executorType).toBe('code')
+      expect(body['_meta']).toBeDefined()
+      const meta = body['_meta'] as JsonBody
+      expect(meta['duration']).toBeDefined()
+      expect(typeof meta['duration']).toBe('number')
+      expect(meta['executorType']).toBe('code')
     })
   })
 
@@ -820,9 +820,9 @@ describe('Tier Executor Integration', () => {
       expect([200, 501]).toContain(response.status)
       if (response.status === 200) {
         const body = (await response.json()) as JsonBody
-        const meta = body._meta as JsonBody
-        expect(meta.tiersAttempted).toContain('code')
-        expect(meta.tiersAttempted).toContain('generative')
+        const meta = body['_meta'] as JsonBody
+        expect(meta['tiersAttempted']).toContain('code')
+        expect(meta['tiersAttempted']).toContain('generative')
       }
     })
   })

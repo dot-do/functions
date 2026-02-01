@@ -319,24 +319,24 @@ function parsePoetryDependency(name: string, spec: unknown): PythonDependency | 
   } else if (typeof spec === 'object' && spec !== null) {
     const specObj = spec as Record<string, unknown>
 
-    if (typeof specObj.version === 'string') {
-      dep.versionSpec = convertPoetryVersionSpec(specObj.version)
+    if (typeof specObj['version'] === 'string') {
+      dep.versionSpec = convertPoetryVersionSpec(specObj['version'])
     }
 
-    if (Array.isArray(specObj.extras)) {
-      dep.extras = specObj.extras.filter((e): e is string => typeof e === 'string')
+    if (Array.isArray(specObj['extras'])) {
+      dep.extras = specObj['extras'].filter((e): e is string => typeof e === 'string')
     }
 
-    if (typeof specObj.markers === 'string') {
-      dep.markers = specObj.markers
+    if (typeof specObj['markers'] === 'string') {
+      dep.markers = specObj['markers']
     }
 
-    if (typeof specObj.python === 'string') {
-      dep.markers = dep.markers ? `${dep.markers} and ${specObj.python}` : `python_version ${specObj.python}`
+    if (typeof specObj['python'] === 'string') {
+      dep.markers = dep.markers ? `${dep.markers} and ${specObj['python']}` : `python_version ${specObj['python']}`
     }
 
     // Skip git, path, and url dependencies
-    if (specObj.git || specObj.path || specObj.url) {
+    if (specObj['git'] || specObj['path'] || specObj['url']) {
       return null
     }
   }

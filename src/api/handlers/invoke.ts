@@ -9,6 +9,20 @@
  * - Tier 3: Agentic (5m timeout) - Multi-step AI agent execution
  * - Tier 4: Human (24h timeout) - Human-in-the-loop tasks
  *
+ * ## TypeScript Execution
+ *
+ * For TypeScript functions, the invoke handler uses pre-compiled JavaScript
+ * stored at deploy time. This provides:
+ * - Zero runtime compilation overhead
+ * - Full TypeScript support (enums, decorators, namespaces)
+ * - Fast cold starts
+ *
+ * Fallback behavior:
+ * 1. Use pre-compiled JS from KV (code:{id}:compiled)
+ * 2. Fall back to regex stripping if no compiled code
+ *
+ * Design reference: docs/ESBUILD_WASM_DESIGN.md
+ *
  * @module handlers/invoke
  */
 
@@ -18,7 +32,7 @@ import { KVCodeStorage } from '../../core/code-storage'
 import { validateFunctionId } from '../../core/function-registry'
 import type { FunctionMetadata } from '../../core/types'
 import { jsonResponse } from '../http-utils'
-import { stripTypeScript } from '../../core/ts-strip'
+import { stripTypeScriptSync } from '../../core/ts-compiler'
 
 /**
  * Extended route context for invoke handler with required function ID.
@@ -136,11 +150,58 @@ export const invokeHandler: Handler = async (
 
   // Code execution path
   const codeStorage = new KVCodeStorage(env.FUNCTIONS_CODE)
-  const code = version
-    ? await codeStorage.get(functionId, version)
-    : await codeStorage.get(functionId)
 
-  if (!code) {
+  // For TypeScript, try to use pre-compiled JavaScript first
+  // This avoids runtime compilation overhead
+  let jsCode: string | null = null
+  let usedPrecompiled = false
+  let fallbackReason: string | undefined
+
+  if (metadata.language === 'typescript') {
+    // Try to get pre-compiled JavaScript
+    jsCode = version
+      ? await codeStorage.getCompiled(functionId, version)
+      : await codeStorage.getCompiled(functionId)
+
+    if (jsCode) {
+      usedPrecompiled = true
+    } else {
+      // Fall back to original source and strip TypeScript at runtime
+      fallbackReason = 'no_precompiled_code'
+      const sourceCode = version
+        ? await codeStorage.get(functionId, version)
+        : await codeStorage.get(functionId)
+
+      if (!sourceCode) {
+        return jsonResponse({ error: `Function code not found: ${functionId}` }, 404)
+      }
+
+      // Use regex-based stripping as fallback (fast but limited)
+      try {
+        jsCode = stripTypeScriptSync(sourceCode)
+      } catch (stripError) {
+        // If stripping fails, the code might have complex TS features
+        // Return an error suggesting redeployment
+        const message = stripError instanceof Error ? stripError.message : String(stripError)
+        return jsonResponse({
+          error: `TypeScript compilation failed at runtime: ${message}. ` +
+                 `Please redeploy this function to compile with esbuild.`,
+          _meta: {
+            executorType: 'code',
+            duration: Date.now() - start,
+            fallbackReason: 'regex_strip_failed',
+          },
+        }, 500)
+      }
+    }
+  } else {
+    // For JavaScript, get the code directly
+    jsCode = version
+      ? await codeStorage.get(functionId, version)
+      : await codeStorage.get(functionId)
+  }
+
+  if (!jsCode) {
     return jsonResponse({ error: `Function code not found: ${functionId}` }, 404)
   }
 
@@ -156,17 +217,6 @@ export const invokeHandler: Handler = async (
         }>): {
           getEntrypoint(): { fetch(request: Request): Promise<Response> }
         }
-      }
-
-      // Strip TypeScript if needed
-      let jsCode = code
-      const isTypeScript = metadata.language === 'typescript' ||
-        code.includes(': Request') ||
-        code.includes(': Response') ||
-        code.includes(': Promise')
-
-      if (isTypeScript) {
-        jsCode = stripTypeScript(code)
       }
 
       const workerId = `fn-${functionId}-${Date.now()}`
@@ -195,7 +245,13 @@ export const invokeHandler: Handler = async (
         return jsonResponse(
           {
             ...(result as object),
-            _meta: { duration, executedWith: 'worker_loaders', executorType: 'code' },
+            _meta: {
+              duration,
+              executedWith: 'worker_loaders',
+              executorType: 'code',
+              usedPrecompiled,
+              fallbackReason,
+            },
           },
           200,
           { 'X-Execution-Time': String(duration) }
@@ -207,7 +263,13 @@ export const invokeHandler: Handler = async (
         {
           result: body,
           status: response.status,
-          _meta: { duration, executedWith: 'worker_loaders', executorType: 'code' },
+          _meta: {
+            duration,
+            executedWith: 'worker_loaders',
+            executorType: 'code',
+            usedPrecompiled,
+            fallbackReason,
+          },
         },
         200,
         { 'X-Execution-Time': String(duration) }
@@ -251,7 +313,13 @@ export const invokeHandler: Handler = async (
         return jsonResponse(
           {
             ...(result as object),
-            _meta: { duration, executedWith: 'dispatch_namespace', executorType: 'code' },
+            _meta: {
+              duration,
+              executedWith: 'dispatch_namespace',
+              executorType: 'code',
+              usedPrecompiled,
+              fallbackReason,
+            },
           },
           200,
           { 'X-Execution-Time': String(duration) }
@@ -263,7 +331,13 @@ export const invokeHandler: Handler = async (
         {
           result: body,
           status: response.status,
-          _meta: { duration, executedWith: 'dispatch_namespace', executorType: 'code' },
+          _meta: {
+            duration,
+            executedWith: 'dispatch_namespace',
+            executorType: 'code',
+            usedPrecompiled,
+            fallbackReason,
+          },
         },
         200,
         { 'X-Execution-Time': String(duration) }
@@ -278,7 +352,12 @@ export const invokeHandler: Handler = async (
   return jsonResponse(
     {
       error: 'Function execution not available. LOADER or dispatch namespace required.',
-      _meta: { executorType: 'code', duration: Date.now() - start },
+      _meta: {
+        executorType: 'code',
+        duration: Date.now() - start,
+        usedPrecompiled,
+        fallbackReason,
+      },
     },
     501
   )

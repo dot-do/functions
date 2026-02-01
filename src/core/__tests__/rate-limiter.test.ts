@@ -342,8 +342,8 @@ describe('CompositeRateLimiter', () => {
       expect(result.allowed).toBe(true)
       expect(result.results).toHaveProperty('ip')
       expect(result.results).toHaveProperty('function')
-      expect(result.results.ip.allowed).toBe(true)
-      expect(result.results.function.allowed).toBe(true)
+      expect(result.results['ip'].allowed).toBe(true)
+      expect(result.results['function'].allowed).toBe(true)
     })
 
     it('should fail if any limiter blocks', async () => {
@@ -359,8 +359,8 @@ describe('CompositeRateLimiter', () => {
 
       expect(result.allowed).toBe(false)
       expect(result.blockingCategory).toBe('ip')
-      expect(result.results.ip.allowed).toBe(false)
-      expect(result.results.function.allowed).toBe(true)
+      expect(result.results['ip'].allowed).toBe(false)
+      expect(result.results['function'].allowed).toBe(true)
     })
 
     it('should skip unknown categories', async () => {

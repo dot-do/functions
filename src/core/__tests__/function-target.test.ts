@@ -139,7 +139,7 @@ describe('FunctionTarget.invoke() calls WorkerStub.fetch()', () => {
     expect(request).toBeInstanceOf(Request)
 
     const body = (await request.clone().json()) as JsonBody
-    expect(body.method).toBe('myFunction')
+    expect(body['method']).toBe('myFunction')
   })
 
   it('should serialize arguments in request body', async () => {
@@ -149,7 +149,7 @@ describe('FunctionTarget.invoke() calls WorkerStub.fetch()', () => {
     const request = fetchCall[0] as Request
     const body = (await request.clone().json()) as JsonBody
 
-    expect(body.params).toEqual([10, 20, { multiply: true }])
+    expect(body['params']).toEqual([10, 20, { multiply: true }])
   })
 
   it('should use POST method for RPC calls', async () => {
@@ -180,9 +180,9 @@ describe('FunctionTarget.invoke() calls WorkerStub.fetch()', () => {
     const body1 = (await (call1[0] as Request).clone().json()) as JsonBody
     const body2 = (await (call2[0] as Request).clone().json()) as JsonBody
 
-    expect(body1.id).toBeDefined()
-    expect(body2.id).toBeDefined()
-    expect(body1.id).not.toBe(body2.id)
+    expect(body1['id']).toBeDefined()
+    expect(body2['id']).toBeDefined()
+    expect(body1['id']).not.toBe(body2['id'])
   })
 
   it('should handle complex serializable arguments', async () => {
@@ -471,8 +471,8 @@ describe('FunctionTarget promise pipelining', () => {
 
     // Should be able to access .nested.value before awaiting
     const promise = target.invoke('getData')
-    const nestedPromise = promise.nested
-    const valuePromise = nestedPromise.value
+    const nestedPromise = promise['nested']
+    const valuePromise = nestedPromise['value']
 
     const value = await valuePromise
 

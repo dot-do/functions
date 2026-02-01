@@ -19,7 +19,10 @@ export { WorkerLoader, type WorkerLoaderOptions, type WorkerStub } from './worke
 export { FunctionTarget, type FunctionTargetOptions } from './function-target'
 
 // Registry & Storage
+// Throwing validators (legacy - use safe versions in new code)
 export { FunctionRegistry, validateFunctionId, validateLanguage, validateEntryPoint, validateVersion, validateDependencies, validateMetadata } from './function-registry'
+// Result-returning validators (preferred for new code)
+export { validateFunctionIdSafe, validateLanguageSafe, validateEntryPointSafe, validateVersionSafe, validateDependenciesSafe, validateMetadataSafe } from './function-registry'
 export { KVCodeStorage } from './code-storage'
 export { KVFunctionRegistry } from './kv-function-registry'
 export { KVApiKeyStore } from './kv-api-keys'
@@ -33,6 +36,24 @@ export { CompositeRateLimiter, InMemoryRateLimiter, createDefaultRateLimiter, ge
 export { MetricsCollector, MetricsExporter } from './metrics'
 export { LogAggregator } from './log-aggregator'
 export { DistributedTracer, TraceContext, W3CTraceContextPropagator, OpenTelemetryExporter, TraceExporter, SamplingConfig } from './distributed-tracing'
+
+// Logging
+export {
+  createLogger,
+  createLoggerFromEnv,
+  getDefaultLogger,
+  setDefaultLogger,
+  getLogLevelFromEnv,
+  getLogFormatFromEnv,
+  noopLogger,
+  NoopOutput,
+  type Logger,
+  type LoggerConfig,
+  type LogContext,
+  type LogEntry,
+  type LogLevel,
+  type LogOutput,
+} from './logger'
 
 // Analytics (Iceberg)
 export * from './iceberg-analytics'

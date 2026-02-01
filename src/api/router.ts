@@ -10,10 +10,83 @@ import { infoHandler } from './handlers/info'
 import { invokeHandler } from './handlers/invoke'
 import { deleteHandler } from './handlers/delete'
 import { logsHandler } from './handlers/logs'
+import { cascadeHandler } from './handlers/cascade'
+import { authValidateHandler, authMeHandler, authOrgsHandler } from './handlers/auth'
 import { createAuthMiddleware, authMiddleware, AuthMiddlewareResult } from './middleware/auth'
 import { createRateLimitMiddleware, rateLimitMiddleware, RateLimitResult } from './middleware/rate-limit'
 import { InMemoryRateLimiter, CompositeRateLimiter, RateLimitConfig } from '../core/rate-limiter'
 import { jsonResponse } from './http-utils'
+
+/**
+ * esbuild-compiler RPC interface for TypeScript compilation via Service Binding.
+ * See: workers/esbuild-compiler/src/types.ts
+ */
+export interface EsbuildCompiler {
+  transform(options: {
+    code: string
+    loader: 'ts' | 'tsx' | 'js' | 'jsx'
+    target?: string
+    format?: 'esm' | 'cjs' | 'iife'
+    jsx?: { factory?: string; fragment?: string }
+    sourcemap?: boolean
+  }): Promise<{
+    code: string
+    map?: string
+    warnings: string[]
+    errors?: string[]
+  }>
+}
+
+/**
+ * AI client interface for generative/agentic execution
+ */
+export interface AIClient {
+  messages?: {
+    create(params: unknown): Promise<{
+      content: Array<{ type: string; text: string }>
+      usage?: { input_tokens: number; output_tokens: number }
+      stop_reason?: string
+      model?: string
+    }>
+  }
+  chat?: (request: unknown) => Promise<{
+    content: string
+    toolCalls?: Array<{ name: string; input: unknown }>
+    stopReason: string
+    tokens: { inputTokens: number; outputTokens: number; totalTokens: number }
+  }>
+}
+
+/**
+ * OAuth.do service binding interface for authentication.
+ * See: src/core/oauth.ts for full type definitions.
+ */
+export interface OAuthServiceBinding {
+  validateToken(token: string): Promise<{
+    active: boolean
+    sub: string
+    clientId: string
+    scopes: string[]
+    exp: number
+    iat: number
+  } | null>
+  getUserInfo(token: string): Promise<{
+    id: string
+    email?: string
+    name?: string
+    organizations?: Array<{
+      organization: { id: string; name: string; slug: string }
+      role: 'owner' | 'admin' | 'member' | 'viewer'
+      joinedAt: string
+    }>
+  } | null>
+  checkScopes(token: string, scopes: string[]): Promise<Record<string, boolean>>
+  getOrganizations(token: string): Promise<Array<{ id: string; name: string; slug: string }> | null>
+  checkPermission(token: string, resource: string, action: string): Promise<{
+    allowed: boolean
+    reason?: string
+  }>
+}
 
 /**
  * Environment type for the API
@@ -28,6 +101,16 @@ export interface Env {
   CLOUDFLARE_ACCOUNT_ID?: string
   CLOUDFLARE_API_TOKEN?: string
   DISPATCH_NAMESPACE?: string
+  /** esbuild-wasm compiler service for TypeScript compilation */
+  ESBUILD_COMPILER?: EsbuildCompiler
+  /** AI client for generative/agentic cascade tiers */
+  AI_CLIENT?: AIClient
+  /** Durable Object for human task execution (cascade tier 4) */
+  HUMAN_TASKS?: DurableObjectNamespace
+  /** R2 bucket for code storage */
+  CODE_STORAGE?: R2Bucket
+  /** OAuth.do service binding for user authentication */
+  OAUTH?: OAuthServiceBinding
 }
 
 /**
@@ -80,6 +163,7 @@ export interface Router {
   handle(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>
   group(prefix: string, callback: (group: RouterGroup) => void): Router
   configureRateLimit(config: { ip?: RateLimitConfig; function?: RateLimitConfig }): void
+  resetRateLimit(): void
 }
 
 /**
@@ -230,6 +314,10 @@ export function createRouter(): Router {
       }
     },
 
+    resetRateLimit(): void {
+      rateLimiter = null
+    },
+
     async handle(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
       const url = new URL(request.url)
       const path = url.pathname
@@ -364,14 +452,79 @@ export function createRouter(): Router {
   }
 
   // Register default routes
+  // Health check endpoints (public, no versioning needed)
   router.get('/health', healthHandler)
   router.get('/', healthHandler)
+
+  // ============================================================================
+  // API v1 Routes (versioned endpoints)
+  // ============================================================================
+
+  // Deploy function: POST /v1/api/functions
+  router.post('/v1/api/functions', deployHandler)
+
+  // Function info: GET /v1/api/functions/:id
+  router.get('/v1/api/functions/:id', infoHandler)
+
+  // Delete function: DELETE /v1/api/functions/:id
+  router.delete('/v1/api/functions/:id', deleteHandler)
+
+  // Invoke function: POST /v1/functions/:id
+  router.post('/v1/functions/:id', invokeHandler)
+
+  // Invoke function (explicit): POST /v1/functions/:id/invoke
+  router.post('/v1/functions/:id/invoke', invokeHandler)
+
+  // Function logs: GET /v1/functions/:id/logs
+  router.get('/v1/functions/:id/logs', logsHandler)
+
+  // Cascade execution: POST /v1/cascade/:id
+  router.post('/v1/cascade/:id', cascadeHandler)
+
+  // ============================================================================
+  // Legacy Routes (backwards compatibility)
+  // These routes are maintained for backwards compatibility with existing clients.
+  // New integrations should use the /v1/ prefixed endpoints.
+  // ============================================================================
+
+  // Deploy function (legacy)
   router.post('/api/functions', deployHandler)
+
+  // Function info (legacy)
   router.get('/api/functions/:id', infoHandler)
+
+  // Delete function (legacy)
   router.delete('/api/functions/:id', deleteHandler)
+
+  // Function logs (legacy)
+  router.get('/functions/:id/logs', logsHandler)
+  // Also keep the old /api/ path for backwards compat
   router.get('/api/functions/:id/logs', logsHandler)
+
+  // Invoke function (legacy)
   router.post('/functions/:id', invokeHandler)
   router.post('/functions/:id/invoke', invokeHandler)
+
+  // Cascade execution (legacy)
+  router.post('/cascade/:id', cascadeHandler)
+
+  // ============================================================================
+  // Auth Routes (OAuth.do integration)
+  // ============================================================================
+
+  // Validate current authentication: GET /v1/api/auth/validate
+  router.get('/v1/api/auth/validate', authValidateHandler)
+
+  // Get current user info: GET /v1/api/auth/me
+  router.get('/v1/api/auth/me', authMeHandler)
+
+  // Get user's organizations: GET /v1/api/auth/orgs
+  router.get('/v1/api/auth/orgs', authOrgsHandler)
+
+  // Legacy auth routes
+  router.get('/api/auth/validate', authValidateHandler)
+  router.get('/api/auth/me', authMeHandler)
+  router.get('/api/auth/orgs', authOrgsHandler)
 
   return router
 }

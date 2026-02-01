@@ -8,6 +8,23 @@ The Functions.do API provides a complete interface for deploying, invoking, and 
 
 All API requests should use `Content-Type: application/json` for request bodies and will return JSON responses.
 
+## API Versioning
+
+The API supports versioned endpoints with the `/v1/` prefix. This allows for future API changes while maintaining backwards compatibility.
+
+**Recommended:** Use versioned endpoints (e.g., `/v1/api/functions`) for all new integrations.
+
+**Legacy Support:** Unversioned endpoints (e.g., `/api/functions`) remain available for backwards compatibility but may be deprecated in future releases.
+
+| Versioned Endpoint | Legacy Endpoint | Description |
+|-------------------|-----------------|-------------|
+| `POST /v1/api/functions` | `POST /api/functions` | Deploy a function |
+| `GET /v1/api/functions/:id` | `GET /api/functions/:id` | Get function info |
+| `DELETE /v1/api/functions/:id` | `DELETE /api/functions/:id` | Delete a function |
+| `GET /v1/functions/:id/logs` | `GET /functions/:id/logs` | Get function logs |
+| `POST /v1/functions/:id` | `POST /functions/:id` | Invoke a function |
+| `POST /v1/functions/:id/invoke` | `POST /functions/:id/invoke` | Invoke a function (explicit) |
+
 ## Authentication
 
 The Functions.do API uses API key-based authentication via the `X-API-Key` header.
@@ -39,7 +56,7 @@ API keys may have an expiration date. Expired keys will return a 401 Unauthorize
 ### cURL Example with Authentication
 
 ```bash
-curl -X POST https://functions.do/functions \
+curl -X POST https://functions.do/v1/api/functions \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-api-key-here" \
   -d '{"id": "my-function", "version": "1.0.0", "language": "typescript", "entryPoint": "index.ts", "dependencies": {}}'
@@ -47,7 +64,7 @@ curl -X POST https://functions.do/functions \
 
 ## Endpoints
 
-### POST /functions
+### POST /v1/api/functions
 
 Deploy a new function or update an existing function.
 
@@ -81,7 +98,7 @@ Deploy a new function or update an existing function.
 }
 ```
 
-### POST /functions/:functionId
+### POST /v1/functions/:functionId
 
 Invoke a function by ID. Supports both direct fetch handler invocation and RPC-style method calls.
 
@@ -108,15 +125,15 @@ Invoke a function by ID. Supports both direct fetch handler invocation and RPC-s
 **Invoke Example:**
 
 ```bash
-curl -X POST https://functions.do/functions/my-function \
+curl -X POST https://functions.do/v1/functions/my-function \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-api-key-here" \
   -d '{"method": "hello", "params": ["world"]}'
 ```
 
-### POST /functions/:functionId/invoke
+### POST /v1/functions/:functionId/invoke
 
-Alternative endpoint to invoke a function. Behaves identically to `POST /functions/:functionId`.
+Alternative endpoint to invoke a function. Behaves identically to `POST /v1/functions/:functionId`.
 
 **Request Body:**
 
@@ -127,7 +144,7 @@ Alternative endpoint to invoke a function. Behaves identically to `POST /functio
 }
 ```
 
-### GET /functions
+### GET /v1/api/functions
 
 List all deployed functions. Returns an array of function metadata.
 
@@ -169,7 +186,7 @@ The response may also be wrapped in a `functions` object:
 }
 ```
 
-### GET /functions/:functionId
+### GET /v1/api/functions/:functionId
 
 Get details and metadata for a specific function.
 
@@ -185,11 +202,11 @@ Get details and metadata for a specific function.
 }
 ```
 
-### GET /functions/:functionId/info
+### GET /v1/api/functions/:functionId/info
 
 Alternative endpoint to get function details. Returns function metadata and loading information.
 
-### DELETE /functions/:functionId
+### DELETE /v1/api/functions/:functionId
 
 Delete a function and all its versions. This operation cascades to remove:
 - The current active function
@@ -205,7 +222,7 @@ Delete a function and all its versions. This operation cascades to remove:
 }
 ```
 
-### POST /functions/:functionId/rollback
+### POST /v1/api/functions/:functionId/rollback
 
 Rollback a function to a previous version. This restores the function metadata and code from the specified version.
 
@@ -229,7 +246,7 @@ Rollback a function to a previous version. This restores the function metadata a
 }
 ```
 
-### GET /functions/:functionId/logs
+### GET /v1/functions/:functionId/logs
 
 Retrieve execution logs for a function.
 

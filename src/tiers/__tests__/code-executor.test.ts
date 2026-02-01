@@ -27,8 +27,11 @@ import type {
   CodeFunctionResult,
   CodeLanguage,
   SandboxConfig,
+  CodeSource,
 } from '../../../core/src/code/index.js'
 import { defineCodeFunction } from '../../../core/src/code/index.js'
+import { functionId as toFunctionId, type FunctionId } from '../../../core/src/branded-types.js'
+import type { Duration } from '../../../core/src/types.js'
 
 // Import the CodeExecutor implementation
 import { CodeExecutor } from '../code-executor.js'
@@ -141,7 +144,7 @@ function createMockR2Bucket(): R2Bucket {
 }
 
 /**
- * Create a test code function definition
+ * Create a test code function definition with inline source
  */
 function createTestCodeFunction<TInput = unknown, TOutput = unknown>(
   id: string,
@@ -150,19 +153,46 @@ function createTestCodeFunction<TInput = unknown, TOutput = unknown>(
     language?: CodeLanguage
     sandbox?: SandboxConfig
     config?: CodeFunctionConfig
-    timeout?: string
+    timeout?: Duration
   } = {}
 ): CodeFunctionDefinition<TInput, TOutput> {
   return defineCodeFunction({
-    id,
+    id: toFunctionId(id),
     name: id,
     version: '1.0.0',
     language: options.language ?? 'typescript',
     source: { type: 'inline', code },
     sandbox: options.sandbox,
     defaultConfig: options.config,
-    timeout: options.timeout ?? '5s',
+    timeout: options.timeout ?? ('5s' as Duration),
   })
+}
+
+/**
+ * Create a test code function definition with custom source
+ * Helper to properly type the id as FunctionId
+ */
+function createTestCodeFunctionWithSource<TInput = unknown, TOutput = unknown>(
+  id: string,
+  source: CodeSource,
+  options: {
+    language?: CodeLanguage
+    sandbox?: SandboxConfig
+    config?: CodeFunctionConfig
+    timeout?: Duration
+  } = {}
+): CodeFunctionDefinition<TInput, TOutput> {
+  return {
+    id: toFunctionId(id),
+    name: id,
+    version: '1.0.0',
+    type: 'code',
+    language: options.language ?? 'typescript',
+    source,
+    sandbox: options.sandbox,
+    defaultConfig: options.config,
+    timeout: options.timeout ?? ('5s' as Duration),
+  } as CodeFunctionDefinition<TInput, TOutput>
 }
 
 // ============================================================================
@@ -1462,17 +1492,11 @@ describe('CodeExecutor', () => {
 
   describe('Source Types', () => {
     it('should load inline source', async () => {
-      const fn: CodeFunctionDefinition = {
-        id: 'inline-source',
-        name: 'Inline Source Test',
-        version: '1.0.0',
-        type: 'code',
-        language: 'typescript',
-        source: {
-          type: 'inline',
-          code: 'export default () => ({ inline: true })',
-        },
-      }
+      const fn = createTestCodeFunctionWithSource(
+        'inline-source',
+        { type: 'inline', code: 'export default () => ({ inline: true })' },
+        { language: 'typescript' }
+      )
 
       const result = await executor.execute(fn, {})
 
@@ -1488,18 +1512,11 @@ describe('CodeExecutor', () => {
         'export default () => ({ fromR2: true })'
       )
 
-      const fn: CodeFunctionDefinition = {
-        id: 'r2-source',
-        name: 'R2 Source Test',
-        version: '1.0.0',
-        type: 'code',
-        language: 'typescript',
-        source: {
-          type: 'r2',
-          bucket: 'functions',
-          key: 'functions/r2-test/code.ts',
-        },
-      }
+      const fn = createTestCodeFunctionWithSource(
+        'r2-source',
+        { type: 'r2', bucket: 'functions', key: 'functions/r2-test/code.ts' },
+        { language: 'typescript' }
+      )
 
       const result = await executor.execute(fn, {})
 
@@ -1519,17 +1536,11 @@ describe('CodeExecutor', () => {
         return new Response('Not found', { status: 404 })
       })
 
-      const fn: CodeFunctionDefinition = {
-        id: 'url-source',
-        name: 'URL Source Test',
-        version: '1.0.0',
-        type: 'code',
-        language: 'typescript',
-        source: {
-          type: 'url',
-          url: 'https://cdn.example.com/functions/url-test.ts',
-        },
-      }
+      const fn = createTestCodeFunctionWithSource(
+        'url-source',
+        { type: 'url', url: 'https://cdn.example.com/functions/url-test.ts' },
+        { language: 'typescript' }
+      )
 
       const result = await executor.execute(fn, {})
 
@@ -1552,18 +1563,11 @@ describe('CodeExecutor', () => {
         FUNCTION_REGISTRY: mockRegistry,
       })
 
-      const fn: CodeFunctionDefinition = {
-        id: 'registry-source',
-        name: 'Registry Source Test',
-        version: '1.0.0',
-        type: 'code',
-        language: 'typescript',
-        source: {
-          type: 'registry',
-          functionId: 'published-function',
-          version: '1.0.0',
-        },
-      }
+      const fn = createTestCodeFunctionWithSource(
+        'registry-source',
+        { type: 'registry', functionId: toFunctionId('published-function'), version: '1.0.0' },
+        { language: 'typescript' }
+      )
 
       const result = await executorWithRegistry.execute(fn, {})
 
@@ -1572,18 +1576,11 @@ describe('CodeExecutor', () => {
     })
 
     it('should throw for missing R2 bucket', async () => {
-      const fn: CodeFunctionDefinition = {
-        id: 'missing-r2',
-        name: 'Missing R2 Test',
-        version: '1.0.0',
-        type: 'code',
-        language: 'typescript',
-        source: {
-          type: 'r2',
-          bucket: 'non-existent-bucket',
-          key: 'missing.ts',
-        },
-      }
+      const fn = createTestCodeFunctionWithSource(
+        'missing-r2',
+        { type: 'r2', bucket: 'non-existent-bucket', key: 'missing.ts' },
+        { language: 'typescript' }
+      )
 
       await expect(executor.execute(fn, {})).rejects.toThrow(/bucket|not found|missing/i)
     })
@@ -1593,17 +1590,11 @@ describe('CodeExecutor', () => {
         return new Response('Not found', { status: 404 })
       })
 
-      const fn: CodeFunctionDefinition = {
-        id: 'failed-url',
-        name: 'Failed URL Test',
-        version: '1.0.0',
-        type: 'code',
-        language: 'typescript',
-        source: {
-          type: 'url',
-          url: 'https://cdn.example.com/not-found.ts',
-        },
-      }
+      const fn = createTestCodeFunctionWithSource(
+        'failed-url',
+        { type: 'url', url: 'https://cdn.example.com/not-found.ts' },
+        { language: 'typescript' }
+      )
 
       await expect(executor.execute(fn, {})).rejects.toThrow(/fetch|404|not found/i)
     })
@@ -1618,17 +1609,11 @@ describe('CodeExecutor', () => {
         FUNCTION_REGISTRY: mockRegistry,
       })
 
-      const fn: CodeFunctionDefinition = {
-        id: 'missing-registry',
-        name: 'Missing Registry Test',
-        version: '1.0.0',
-        type: 'code',
-        language: 'typescript',
-        source: {
-          type: 'registry',
-          functionId: 'non-existent-function',
-        },
-      }
+      const fn = createTestCodeFunctionWithSource(
+        'missing-registry',
+        { type: 'registry', functionId: toFunctionId('non-existent-function') },
+        { language: 'typescript' }
+      )
 
       await expect(executorWithRegistry.execute(fn, {})).rejects.toThrow(
         /registry|not found|missing/i
@@ -1656,18 +1641,11 @@ describe('CodeExecutor', () => {
         FUNCTION_REGISTRY: mockRegistry,
       })
 
-      const fn: CodeFunctionDefinition = {
-        id: 'versioned-registry',
-        name: 'Versioned Registry Test',
-        version: '1.0.0',
-        type: 'code',
-        language: 'typescript',
-        source: {
-          type: 'registry',
-          functionId: 'versioned-function',
-          version: '2.0.0',
-        },
-      }
+      const fn = createTestCodeFunctionWithSource(
+        'versioned-registry',
+        { type: 'registry', functionId: toFunctionId('versioned-function'), version: '2.0.0' },
+        { language: 'typescript' }
+      )
 
       const result = await executorWithRegistry.execute(fn, {})
 
@@ -1709,17 +1687,11 @@ describe('CodeExecutor', () => {
         ASSETS: mockAssets,
       })
 
-      const fn: CodeFunctionDefinition = {
-        id: 'assets-source',
-        name: 'Assets Source Test',
-        version: '1.0.0',
-        type: 'code',
-        language: 'rust', // WASM language
-        source: {
-          type: 'assets',
-          functionId: 'my-wasm-function',
-        },
-      }
+      const fn = createTestCodeFunctionWithSource(
+        'assets-source',
+        { type: 'assets', functionId: toFunctionId('my-wasm-function') },
+        { language: 'rust' }
+      )
 
       // The loadSource method returns a marker string: __WASM_ASSETS__:{functionId}:{version}
       // This marker is used by executeCode to load the binary and execute via worker_loaders
@@ -1752,18 +1724,11 @@ describe('CodeExecutor', () => {
         ASSETS: mockAssets,
       })
 
-      const fn: CodeFunctionDefinition = {
-        id: 'versioned-assets-source',
-        name: 'Versioned Assets Source Test',
-        version: '1.0.0',
-        type: 'code',
-        language: 'rust',
-        source: {
-          type: 'assets',
-          functionId: 'my-wasm-function',
-          version: '2.0.0',
-        },
-      }
+      const fn = createTestCodeFunctionWithSource(
+        'versioned-assets-source',
+        { type: 'assets', functionId: toFunctionId('my-wasm-function'), version: '2.0.0' },
+        { language: 'rust' }
+      )
 
       await executorWithAssets.execute(fn, {})
 
@@ -1778,17 +1743,11 @@ describe('CodeExecutor', () => {
         ASSETS: undefined,
       })
 
-      const fn: CodeFunctionDefinition = {
-        id: 'no-assets-binding',
-        name: 'No Assets Binding Test',
-        version: '1.0.0',
-        type: 'code',
-        language: 'rust',
-        source: {
-          type: 'assets',
-          functionId: 'my-wasm-function',
-        },
-      }
+      const fn = createTestCodeFunctionWithSource(
+        'no-assets-binding',
+        { type: 'assets', functionId: toFunctionId('my-wasm-function') },
+        { language: 'rust' }
+      )
 
       await expect(executorNoAssets.execute(fn, {})).rejects.toThrow(/assets|binding|not configured/i)
     })
@@ -1803,17 +1762,11 @@ describe('CodeExecutor', () => {
         ASSETS: mockAssets,
       })
 
-      const fn: CodeFunctionDefinition = {
-        id: 'missing-wasm',
-        name: 'Missing WASM Test',
-        version: '1.0.0',
-        type: 'code',
-        language: 'rust',
-        source: {
-          type: 'assets',
-          functionId: 'non-existent-function',
-        },
-      }
+      const fn = createTestCodeFunctionWithSource(
+        'missing-wasm',
+        { type: 'assets', functionId: toFunctionId('non-existent-function') },
+        { language: 'rust' }
+      )
 
       await expect(executorWithAssets.execute(fn, {})).rejects.toThrow(/not found|assets/i)
     })
@@ -1828,17 +1781,11 @@ describe('CodeExecutor', () => {
         ASSETS: mockAssets,
       })
 
-      const fn: CodeFunctionDefinition = {
-        id: 'assets-error',
-        name: 'Assets Error Test',
-        version: '1.0.0',
-        type: 'code',
-        language: 'rust',
-        source: {
-          type: 'assets',
-          functionId: 'error-function',
-        },
-      }
+      const fn = createTestCodeFunctionWithSource(
+        'assets-error',
+        { type: 'assets', functionId: toFunctionId('error-function') },
+        { language: 'rust' }
+      )
 
       await expect(executorWithAssets.execute(fn, {})).rejects.toThrow(/500|Internal Server Error|fetch/i)
     })
@@ -1881,17 +1828,11 @@ describe('CodeExecutor', () => {
         LOADER: mockLoader as unknown as Fetcher,
       })
 
-      const fn: CodeFunctionDefinition = {
-        id: 'wasm-loader-test',
-        name: 'WASM Worker Loader Test',
-        version: '1.0.0',
-        type: 'code',
-        language: 'rust',
-        source: {
-          type: 'assets',
-          functionId: 'wasm-loader-test',
-        },
-      }
+      const fn = createTestCodeFunctionWithSource(
+        'wasm-loader-test',
+        { type: 'assets', functionId: toFunctionId('wasm-loader-test') },
+        { language: 'rust' }
+      )
 
       const result = await executorWithLoader.execute(fn, { input: 'test' })
 
@@ -1943,17 +1884,11 @@ describe('CodeExecutor', () => {
         LOADER: undefined,
       })
 
-      const fn: CodeFunctionDefinition = {
-        id: 'no-loader-wasm',
-        name: 'No Loader WASM Test',
-        version: '1.0.0',
-        type: 'code',
-        language: 'rust',
-        source: {
-          type: 'assets',
-          functionId: 'no-loader-wasm',
-        },
-      }
+      const fn = createTestCodeFunctionWithSource(
+        'no-loader-wasm',
+        { type: 'assets', functionId: toFunctionId('no-loader-wasm') },
+        { language: 'rust' }
+      )
 
       const result = await executorNoLoader.execute(fn, {})
 

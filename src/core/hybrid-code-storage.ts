@@ -1,17 +1,17 @@
 import type { CodeStorage } from './function-loader'
-import { R2CodeStorage } from './r2-code-storage'
-import { KVCodeStorage, type CodeWithFallback, type PaginationOptions, type PaginatedVersions, type CompiledCodeResult } from './code-storage'
+import { R2CodeStorage, type R2CodeStorageOptions } from './r2-code-storage'
+import { KVCodeStorage, type CodeWithFallback, type PaginationOptions, type PaginatedVersions, type CompiledCodeResult, type KVCodeStorageOptions } from './code-storage'
 
 /**
  * Migration status for a function's code
  */
 export interface MigrationStatus {
   functionId: string
-  version?: string
-  migratedAt?: string
+  version?: string | undefined
+  migratedAt?: string | undefined
   source: 'kv' | 'r2'
   status: 'pending' | 'migrated' | 'failed'
-  error?: string
+  error?: string | undefined
 }
 
 /**
@@ -22,7 +22,7 @@ export interface MigrationProgress {
   migrated: number
   failed: number
   pending: number
-  errors: Array<{ functionId: string; version?: string; error: string }>
+  errors: Array<{ functionId: string; version?: string | undefined; error: string }>
 }
 
 /**
@@ -47,6 +47,16 @@ export interface HybridStorageOptions {
    * When true, code read from KV is automatically copied to R2
    */
   autoMigrate?: boolean
+
+  /**
+   * Compression options for R2 storage
+   */
+  r2Options?: R2CodeStorageOptions | undefined
+
+  /**
+   * Compression options for KV storage
+   */
+  kvOptions?: KVCodeStorageOptions | undefined
 }
 
 /**
@@ -70,12 +80,14 @@ export class HybridCodeStorage implements CodeStorage {
     kvNamespace: KVNamespace,
     options: HybridStorageOptions = {}
   ) {
-    this.r2Storage = new R2CodeStorage(r2Bucket)
-    this.kvStorage = new KVCodeStorage(kvNamespace)
+    this.r2Storage = new R2CodeStorage(r2Bucket, options.r2Options)
+    this.kvStorage = new KVCodeStorage(kvNamespace, options.kvOptions)
     this.options = {
       writeToR2: options.writeToR2 ?? true,
       preferR2: options.preferR2 ?? true,
       autoMigrate: options.autoMigrate ?? false,
+      r2Options: options.r2Options,
+      kvOptions: options.kvOptions,
     }
   }
 

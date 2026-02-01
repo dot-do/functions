@@ -20,7 +20,7 @@ import type {
   FormField,
   UIContext,
   ReminderChannel,
-} from '../../core/src/human/index.js'
+} from '@dotdo/functions/human'
 
 // =============================================================================
 // TYPES
@@ -772,7 +772,7 @@ export function transformPlatformResponse(
     typeof response === 'object' &&
     'selected' in response
   ) {
-    const selected = (response as Record<string, unknown>).selected
+    const selected = (response as Record<string, unknown>)['selected']
     if (typeof selected === 'string' && quickActions) {
       const action = quickActions.find((a) => a.id === selected)
       if (action) {

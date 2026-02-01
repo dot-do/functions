@@ -26,6 +26,7 @@ import type {
   ExecutionContext,
 } from '../../core/src/types.js'
 import { parseDuration } from '../../core/src/types.js'
+import { executionId as toExecutionId, type ExecutionId } from '../../core/src/branded-types.js'
 import { stripTypeScript } from '../core/ts-strip'
 import { evaluate, type SandboxEnv, type EvaluateResult } from 'ai-evaluate'
 import { PyodideExecutor } from '../languages/python/pyodide-executor'
@@ -195,8 +196,8 @@ const DETERMINISTIC_DATE = DETERMINISTIC.FIXED_DATE_MS
 /**
  * Generate a unique execution ID
  */
-function generateExecutionId(): string {
-  return `exec_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`
+function generateExecutionId(): ExecutionId {
+  return toExecutionId(`exec_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`)
 }
 
 /**
@@ -454,13 +455,12 @@ export class CodeExecutor {
 
       const completedAt = Date.now()
 
-      return {
+      const successResult: CodeFunctionResultWithCache<TOutput> = {
         executionId,
         functionId: definition.id,
         functionVersion: definition.version,
         status: result.status,
         output: result.output as TOutput,
-        error: result.error,
         metrics: {
           durationMs: completedAt - startedAt,
           inputSizeBytes: calculateByteSize(input),
@@ -481,6 +481,10 @@ export class CodeExecutor {
         },
         cacheHit,
       }
+      if (result.error) {
+        successResult.error = result.error
+      }
+      return successResult
     } catch (error) {
       const completedAt = Date.now()
       const funcError = wrapError(error)
@@ -503,12 +507,11 @@ export class CodeExecutor {
         funcError.name = 'TimeoutError'
       }
 
-      return {
+      const errorResult: CodeFunctionResultWithCache<TOutput> = {
         executionId,
         functionId: definition.id,
         functionVersion: definition.version,
         status,
-        output,
         error: funcError,
         metrics: {
           durationMs: completedAt - startedAt,
@@ -530,6 +533,10 @@ export class CodeExecutor {
         },
         cacheHit,
       }
+      if (output !== undefined) {
+        errorResult.output = output
+      }
+      return errorResult
     }
   }
 
@@ -1366,12 +1373,22 @@ export class CodeExecutor {
     }
 
     // Use in-process evaluation for JS/TS code
-    return this.executeInProcess(code, input, {
+    const executeOptions: {
+      timeout: number
+      deterministic: boolean
+      blockNetwork?: boolean
+      networkAllowlist?: string[]
+    } = {
       timeout,
       deterministic,
-      blockNetwork: config.networkEnabled === false,
-      networkAllowlist: config.networkAllowlist,
-    })
+    }
+    if (config.networkEnabled === false) {
+      executeOptions.blockNetwork = true
+    }
+    if (config.networkAllowlist) {
+      executeOptions.networkAllowlist = config.networkAllowlist
+    }
+    return this.executeInProcess(code, input, executeOptions)
   }
 
   /**
@@ -1430,7 +1447,7 @@ export class CodeExecutor {
     try {
       // Create SandboxEnv from LOADER binding if available
       const sandboxEnv: SandboxEnv | undefined = this.env.LOADER
-        ? { LOADER: this.env.LOADER } as SandboxEnv
+        ? { LOADER: this.env.LOADER } as unknown as SandboxEnv
         : undefined
 
       // Use ai-evaluate for sandboxed execution

@@ -267,7 +267,7 @@ describe('Worker Fetch Handler - List Endpoint Behavior', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('Function ID required')
+      expect(body['error']).toContain('Function ID required')
     })
 
     it('should return JSON response with Content-Type header', async () => {
@@ -307,7 +307,7 @@ describe('Worker Fetch Handler - List Endpoint Behavior', () => {
 
       expect(response.status).toBe(401)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBe('Missing API key')
+      expect(body['error']).toBe('Missing API key')
     })
 
     it('should return 401 for invalid API key', async () => {
@@ -319,7 +319,7 @@ describe('Worker Fetch Handler - List Endpoint Behavior', () => {
 
       expect(response.status).toBe(401)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBe('Invalid API key')
+      expect(body['error']).toBe('Invalid API key')
     })
 
     it('should return 401 for expired API key', async () => {
@@ -351,7 +351,7 @@ describe('Worker Fetch Handler - List Endpoint Behavior', () => {
       // With valid API key, should get 400 (function ID required) not 401
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('Function ID required')
+      expect(body['error']).toContain('Function ID required')
     })
 
     it('should allow health endpoint without authentication', async () => {

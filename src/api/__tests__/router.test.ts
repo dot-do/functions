@@ -60,8 +60,8 @@ describe('API Router', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.status).toBe('ok')
-      expect(body.service).toBe('Functions.do')
+      expect(body['status']).toBe('ok')
+      expect(body['service']).toBe('Functions.do')
     })
 
     it('routes POST /api/functions to deploy handler', async () => {
@@ -101,7 +101,7 @@ describe('API Router', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('test-func')
+      expect(body['id']).toBe('test-func')
     })
 
     it('routes POST /functions/:id to invoke handler', async () => {
@@ -175,7 +175,7 @@ describe('API Router', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.success).toBe(true)
+      expect(body['success']).toBe(true)
     })
 
     it('routes GET /api/functions/:id/logs to logs handler', async () => {
@@ -198,7 +198,7 @@ describe('API Router', () => {
 
       expect(response.status).toBe(404)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBeDefined()
+      expect(body['error']).toBeDefined()
     })
 
     it('returns 405 for wrong method', async () => {
@@ -210,7 +210,7 @@ describe('API Router', () => {
 
       expect(response.status).toBe(405)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('not allowed')
+      expect(body['error']).toContain('not allowed')
     })
   })
 
@@ -275,7 +275,7 @@ describe('API Router', () => {
 
       expect(response.status).toBe(401)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBeDefined()
+      expect(body['error']).toBeDefined()
     })
 
     it('short-circuits on rate limit', async () => {
@@ -318,7 +318,7 @@ describe('API Router', () => {
 
       expect(response.status).toBe(500)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBeDefined()
+      expect(body['error']).toBeDefined()
     })
 
     it('returns JSON error response', async () => {
@@ -330,7 +330,7 @@ describe('API Router', () => {
 
       expect(response.headers.get('Content-Type')).toBe('application/json')
       const body = (await response.json()) as JsonBody
-      expect(typeof body.error).toBe('string')
+      expect(typeof body['error']).toBe('string')
     })
 
     it('includes correlation ID in error', async () => {
@@ -343,7 +343,7 @@ describe('API Router', () => {
 
       const body = (await response.json()) as JsonBody
       // Should include correlation ID for debugging
-      expect(body.correlationId || body.requestId).toBeDefined()
+      expect(body['correlationId'] || body['requestId']).toBeDefined()
     })
   })
 
@@ -366,7 +366,7 @@ describe('API Router', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('param-test')
+      expect(body['id']).toBe('param-test')
     })
 
     it('handles special characters in function ID', async () => {

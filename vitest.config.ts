@@ -25,7 +25,7 @@ export default defineWorkersProject({
       'src/__tests__/agentic-e2e.test.ts',
       'core/src/__tests__/schemas.test.ts',
       // Core tests run in Node.js environment to avoid conflicts
-      // Exception: worker-loader.test.ts uses cloudflare:test
+      'src/core/__tests__/worker-loader.test.ts',
       'src/core/__tests__/auth.test.ts',
       'src/core/__tests__/cascade-executor.test.ts',
       'src/core/__tests__/code-storage.test.ts',
@@ -51,6 +51,8 @@ export default defineWorkersProject({
       'docs/**/*.test.ts',
       // E2E tests
       'test/**/*.test.ts',
+      // Template literals tests run in Node.js
+      'src/__tests__/template-literals.test.ts',
     ],
     testTimeout: 30000,
     // CRITICAL: Limit parallelism to prevent RAM exhaustion (100GB+ without these limits)

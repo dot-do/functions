@@ -104,8 +104,8 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('my-function')
-      expect(body.status).toBe('loaded')
+      expect(body['id']).toBe('my-function')
+      expect(body['status']).toBe('loaded')
     })
 
     it('should include function id in response', async () => {
@@ -117,7 +117,7 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('my-function')
+      expect(body['id']).toBe('my-function')
     })
 
     it('should include status in response', async () => {
@@ -129,7 +129,7 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.status).toBe('loaded')
+      expect(body['status']).toBe('loaded')
     })
 
     it('should include fromCache property in response', async () => {
@@ -142,7 +142,7 @@ describe('Function Details API - GET /functions/:id', () => {
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
       expect(body).toHaveProperty('fromCache')
-      expect(typeof body.fromCache).toBe('boolean')
+      expect(typeof body['fromCache']).toBe('boolean')
     })
 
     it('should include loadTimeMs property in response', async () => {
@@ -155,7 +155,7 @@ describe('Function Details API - GET /functions/:id', () => {
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
       expect(body).toHaveProperty('loadTimeMs')
-      expect(typeof body.loadTimeMs).toBe('number')
+      expect(typeof body['loadTimeMs']).toBe('number')
     })
   })
 
@@ -169,8 +169,8 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('my-function')
-      expect(body.status).toBe('loaded')
+      expect(body['id']).toBe('my-function')
+      expect(body['status']).toBe('loaded')
     })
 
     it('should return same data for /info endpoint and base endpoint', async () => {
@@ -192,8 +192,8 @@ describe('Function Details API - GET /functions/:id', () => {
       const body1 = (await response1.json()) as JsonBody
       const body2 = (await response2.json()) as JsonBody
 
-      expect(body1.id).toBe(body2.id)
-      expect(body1.status).toBe(body2.status)
+      expect(body1['id']).toBe(body2['id'])
+      expect(body1['status']).toBe(body2['status'])
     })
   })
 
@@ -217,7 +217,7 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(404)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBeTruthy()
+      expect(body['error']).toBeTruthy()
     })
 
     it('should return 404 for function with metadata but no code', async () => {
@@ -239,7 +239,7 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(404)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('not found')
+      expect(body['error']).toContain('not found')
     })
   })
 
@@ -263,7 +263,7 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(401)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBe('Missing API key')
+      expect(body['error']).toBe('Missing API key')
     })
 
     it('should return 401 for invalid API key', async () => {
@@ -275,7 +275,7 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(401)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBe('Invalid API key')
+      expect(body['error']).toBe('Invalid API key')
     })
 
     it('should return 401 for expired API key', async () => {
@@ -297,7 +297,7 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(401)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBe('Invalid API key')
+      expect(body['error']).toBe('Invalid API key')
     })
 
     it('should allow access with valid API key', async () => {
@@ -309,7 +309,7 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('my-function')
+      expect(body['id']).toBe('my-function')
     })
 
     it('should require X-API-Key header (Authorization Bearer not yet supported)', async () => {
@@ -324,7 +324,7 @@ describe('Function Details API - GET /functions/:id', () => {
       // Returns 401 because Authorization header is not checked
       expect(response.status).toBe(401)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBe('Missing API key')
+      expect(body['error']).toBe('Missing API key')
     })
   })
 
@@ -368,7 +368,7 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('my-function')
+      expect(body['id']).toBe('my-function')
     })
 
     it('should handle function IDs with alphanumeric characters', async () => {
@@ -401,7 +401,7 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('func123')
+      expect(body['id']).toBe('func123')
     })
 
     it('should handle concurrent requests', async () => {
@@ -427,7 +427,7 @@ describe('Function Details API - GET /functions/:id', () => {
       for (const response of responses) {
         expect(response.status).toBe(200)
         const body = (await response.json()) as JsonBody
-        expect(body.id).toBe('my-function')
+        expect(body['id']).toBe('my-function')
       }
     })
   })
@@ -441,8 +441,8 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.status).toBe('ok')
-      expect(body.service).toBe('Functions.do')
+      expect(body['status']).toBe('ok')
+      expect(body['service']).toBe('Functions.do')
     })
 
     it('should not require authentication for root endpoint', async () => {
@@ -453,8 +453,8 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.status).toBe('ok')
-      expect(body.service).toBe('Functions.do')
+      expect(body['status']).toBe('ok')
+      expect(body['service']).toBe('Functions.do')
     })
   })
 
@@ -468,7 +468,7 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(405)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('not allowed')
+      expect(body['error']).toContain('not allowed')
     })
 
     it('should return 405 for PUT requests', async () => {
@@ -509,7 +509,7 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('my-function')
+      expect(body['id']).toBe('my-function')
     })
   })
 })

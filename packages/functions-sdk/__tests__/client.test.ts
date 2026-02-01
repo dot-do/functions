@@ -269,7 +269,7 @@ describe('FunctionClient', () => {
       const result = await client.deploy(code, metadata)
 
       expect(global.fetch).toHaveBeenCalledWith(
-        `${mockBaseUrl}/v1/functions`,
+        `${mockBaseUrl}/v1/api/functions`,
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({ code, ...metadata }),
@@ -380,7 +380,7 @@ describe('FunctionClient', () => {
       const result = await client.list()
 
       expect(global.fetch).toHaveBeenCalledWith(
-        `${mockBaseUrl}/v1/functions`,
+        `${mockBaseUrl}/v1/api/functions`,
         expect.objectContaining({
           method: 'GET',
         })
@@ -408,7 +408,7 @@ describe('FunctionClient', () => {
       await client.list({ limit: 10, offset: 20 })
 
       expect(global.fetch).toHaveBeenCalledWith(
-        `${mockBaseUrl}/v1/functions?limit=10&offset=20`,
+        `${mockBaseUrl}/v1/api/functions?limit=10&offset=20`,
         expect.any(Object)
       )
     })
@@ -422,7 +422,7 @@ describe('FunctionClient', () => {
       await client.list({ status: 'active' })
 
       expect(global.fetch).toHaveBeenCalledWith(
-        `${mockBaseUrl}/v1/functions?status=active`,
+        `${mockBaseUrl}/v1/api/functions?status=active`,
         expect.any(Object)
       )
     })
@@ -452,7 +452,7 @@ describe('FunctionClient', () => {
       const result = await client.get('func-123')
 
       expect(global.fetch).toHaveBeenCalledWith(
-        `${mockBaseUrl}/v1/functions/func-123`,
+        `${mockBaseUrl}/v1/api/functions/func-123`,
         expect.objectContaining({
           method: 'GET',
         })
@@ -493,7 +493,7 @@ describe('FunctionClient', () => {
       const result = await client.get('func-123', { includeCode: true })
 
       expect(global.fetch).toHaveBeenCalledWith(
-        `${mockBaseUrl}/v1/functions/func-123?includeCode=true`,
+        `${mockBaseUrl}/v1/api/functions/func-123?includeCode=true`,
         expect.any(Object)
       )
       expect(result.code).toBe('export default () => "hello"')
@@ -514,7 +514,7 @@ describe('FunctionClient', () => {
       const result = await client.delete('func-123')
 
       expect(global.fetch).toHaveBeenCalledWith(
-        `${mockBaseUrl}/v1/functions/func-123`,
+        `${mockBaseUrl}/v1/api/functions/func-123`,
         expect.objectContaining({
           method: 'DELETE',
         })
@@ -594,20 +594,14 @@ describe('FunctionClient', () => {
     })
 
     it('should provide error details in FunctionClientError', async () => {
-      vi.mocked(global.fetch).mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        statusText: 'Bad Request',
-        json: async () => ({ error: 'Validation failed', details: { field: 'name', message: 'Name is required' } }),
-      } as Response)
-
+      // SDK validates name locally and throws ValidationError
       try {
         await client.deploy('code', {} as FunctionMetadata)
         expect.fail('Should have thrown')
       } catch (error) {
         expect(error).toBeInstanceOf(FunctionClientError)
         expect((error as FunctionClientError).statusCode).toBe(400)
-        expect((error as FunctionClientError).details).toEqual({ field: 'name', message: 'Name is required' })
+        expect((error as FunctionClientError).details).toEqual({ message: 'Name is required' })
       }
     })
 
@@ -732,17 +726,17 @@ describe('FunctionClientError', () => {
   })
 
   it('should store details', () => {
-    const error = new FunctionClientError('Test error', 400, { field: 'name' })
+    const error = new FunctionClientError('Test error', 400, { details: { field: 'name' } })
     expect(error.details).toEqual({ field: 'name' })
   })
 
   it('should store request ID', () => {
-    const error = new FunctionClientError('Test error', 500, undefined, 'req-123')
+    const error = new FunctionClientError('Test error', 500, { requestId: 'req-123' })
     expect(error.requestId).toBe('req-123')
   })
 
   it('should store retry-after for rate limiting', () => {
-    const error = new FunctionClientError('Rate limited', 429, undefined, undefined, 60)
+    const error = new FunctionClientError('Rate limited', 429, { retryAfter: 60 })
     expect(error.retryAfter).toBe(60)
   })
 })

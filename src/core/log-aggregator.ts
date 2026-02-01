@@ -244,7 +244,7 @@ export class LogAggregator {
     if (message.length > MAX_MESSAGE_SIZE) {
       message = message.slice(0, MAX_MESSAGE_SIZE)
       metadata = metadata || {}
-      metadata.truncated = true
+      metadata['truncated'] = true
     }
 
     const entry: LogEntry = {

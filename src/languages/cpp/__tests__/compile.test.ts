@@ -104,7 +104,7 @@ int compute(int x) {
     const wasmModule = await WebAssembly.compile(result.wasm)
     const wasmInstance = await WebAssembly.instantiate(wasmModule)
 
-    const compute = wasmInstance.exports.compute as (x: number) => number
+    const compute = wasmInstance.exports['compute'] as (x: number) => number
     expect(compute(5)).toBe(11)
     expect(compute(10)).toBe(21)
     expect(compute(0)).toBe(1)
@@ -134,9 +134,9 @@ int subtract(int a, int b) {
     const wasmModule = await WebAssembly.compile(result.wasm)
     const wasmInstance = await WebAssembly.instantiate(wasmModule)
 
-    const add = wasmInstance.exports.add as (a: number, b: number) => number
-    const multiply = wasmInstance.exports.multiply as (a: number, b: number) => number
-    const subtract = wasmInstance.exports.subtract as (a: number, b: number) => number
+    const add = wasmInstance.exports['add'] as (a: number, b: number) => number
+    const multiply = wasmInstance.exports['multiply'] as (a: number, b: number) => number
+    const subtract = wasmInstance.exports['subtract'] as (a: number, b: number) => number
 
     expect(add(5, 3)).toBe(8)
     expect(multiply(6, 7)).toBe(42)

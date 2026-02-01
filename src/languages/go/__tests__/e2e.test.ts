@@ -263,7 +263,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const answer = exports.answer as () => number
+    const answer = exports['answer'] as () => number
     expect(answer()).toBe(42)
   })
 
@@ -280,7 +280,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const add = exports.add as (a: number, b: number) => number
+    const add = exports['add'] as (a: number, b: number) => number
     expect(add(2, 3)).toBe(5)
     expect(add(10, 20)).toBe(30)
     expect(add(-5, 5)).toBe(0)
@@ -301,7 +301,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const subtract = exports.subtract as (a: number, b: number) => number
+    const subtract = exports['subtract'] as (a: number, b: number) => number
     expect(subtract(10, 3)).toBe(7)
     expect(subtract(5, 10)).toBe(-5)
     expect(subtract(0, 0)).toBe(0)
@@ -320,7 +320,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const multiply = exports.multiply as (a: number, b: number) => number
+    const multiply = exports['multiply'] as (a: number, b: number) => number
     expect(multiply(6, 7)).toBe(42)
     expect(multiply(0, 100)).toBe(0)
     expect(multiply(-3, 4)).toBe(-12)
@@ -340,7 +340,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const divide = exports.divide as (a: number, b: number) => number
+    const divide = exports['divide'] as (a: number, b: number) => number
     expect(divide(10, 2)).toBe(5)
     expect(divide(7, 3)).toBe(2) // Go integer division
     expect(divide(-10, 3)).toBe(-3)
@@ -359,7 +359,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const modulo = exports.modulo as (a: number, b: number) => number
+    const modulo = exports['modulo'] as (a: number, b: number) => number
     expect(modulo(10, 3)).toBe(1)
     expect(modulo(10, 5)).toBe(0)
     expect(modulo(7, 2)).toBe(1)
@@ -378,7 +378,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const compute = exports.compute as (x: number) => number
+    const compute = exports['compute'] as (x: number) => number
     expect(compute(5)).toBe(11)
     expect(compute(10)).toBe(21)
     expect(compute(0)).toBe(1)
@@ -398,7 +398,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const identity = exports.identity as (x: number) => number
+    const identity = exports['identity'] as (x: number) => number
     expect(identity(42)).toBe(42)
     expect(identity(0)).toBe(0)
     expect(identity(-999)).toBe(-999)
@@ -427,9 +427,9 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const add = exports.add as (a: number, b: number) => number
-    const multiply = exports.multiply as (a: number, b: number) => number
-    const square = exports.square as (x: number) => number
+    const add = exports['add'] as (a: number, b: number) => number
+    const multiply = exports['multiply'] as (a: number, b: number) => number
+    const square = exports['square'] as (x: number) => number
 
     expect(add(3, 4)).toBe(7)
     expect(multiply(3, 4)).toBe(12)
@@ -449,7 +449,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const add = exports.overflow_add as (a: number, b: number) => number
+    const add = exports['overflow_add'] as (a: number, b: number) => number
     // int32 max is 2147483647
     const result = add(2147483647, 1)
     // Should wrap to -2147483648
@@ -469,7 +469,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const negative = exports.negative as () => number
+    const negative = exports['negative'] as () => number
     expect(negative()).toBe(-42)
   })
 
@@ -486,7 +486,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const zero = exports.zero as () => number
+    const zero = exports['zero'] as () => number
     expect(zero()).toBe(0)
   })
 
@@ -503,7 +503,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const bitwiseAnd = exports.bitwise_and as (a: number, b: number) => number
+    const bitwiseAnd = exports['bitwise_and'] as (a: number, b: number) => number
     expect(bitwiseAnd(0b1010, 0b1100)).toBe(0b1000)
     expect(bitwiseAnd(0xFF, 0x0F)).toBe(0x0F)
   })
@@ -521,7 +521,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const bitwiseOr = exports.bitwise_or as (a: number, b: number) => number
+    const bitwiseOr = exports['bitwise_or'] as (a: number, b: number) => number
     expect(bitwiseOr(0b1010, 0b0101)).toBe(0b1111)
   })
 
@@ -538,7 +538,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const leftShift = exports.left_shift as (x: number, n: number) => number
+    const leftShift = exports['left_shift'] as (x: number, n: number) => number
     expect(leftShift(1, 4)).toBe(16)
     expect(leftShift(5, 2)).toBe(20)
   })
@@ -698,8 +698,8 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    expect(exports.exact_export_name).toBeDefined()
-    expect(typeof exports.exact_export_name).toBe('function')
+    expect(exports['exact_export_name']).toBeDefined()
+    expect(typeof exports['exact_export_name']).toBe('function')
   })
 
   it('exports function with snake_case name', async () => {
@@ -715,8 +715,8 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    expect(exports.my_snake_case_function).toBeDefined()
-    const fn = exports.my_snake_case_function as () => number
+    expect(exports['my_snake_case_function']).toBeDefined()
+    const fn = exports['my_snake_case_function'] as () => number
     expect(fn()).toBe(42)
   })
 
@@ -733,8 +733,8 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    expect(exports.external_name).toBeDefined()
-    const fn = exports.external_name as () => number
+    expect(exports['external_name']).toBeDefined()
+    const fn = exports['external_name'] as () => number
     expect(fn()).toBe(123)
   })
 
@@ -751,8 +751,8 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    expect(exports.x).toBeDefined()
-    const fn = exports.x as () => number
+    expect(exports['x']).toBeDefined()
+    const fn = exports['x'] as () => number
     expect(fn()).toBe(1)
   })
 
@@ -769,8 +769,8 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    expect(exports.func123).toBeDefined()
-    const fn = exports.func123 as () => number
+    expect(exports['func123']).toBeDefined()
+    const fn = exports['func123'] as () => number
     expect(fn()).toBe(123)
   })
 
@@ -802,10 +802,10 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const zero = exports.zero_args as () => number
-    const one = exports.one_arg as (x: number) => number
-    const two = exports.two_args as (a: number, b: number) => number
-    const three = exports.three_args as (a: number, b: number, c: number) => number
+    const zero = exports['zero_args'] as () => number
+    const one = exports['one_arg'] as (x: number) => number
+    const two = exports['two_args'] as (a: number, b: number) => number
+    const three = exports['three_args'] as (a: number, b: number, c: number) => number
 
     expect(zero()).toBe(0)
     expect(one(42)).toBe(42)
@@ -831,8 +831,8 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    expect(exports.exported).toBeDefined()
-    expect(exports.internal).toBeUndefined()
+    expect(exports['exported']).toBeDefined()
+    expect(exports['internal']).toBeUndefined()
   })
 
   it('handles underscore-prefixed export names', async () => {
@@ -848,8 +848,8 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    expect(exports._private_looking).toBeDefined()
-    const fn = exports._private_looking as () => number
+    expect(exports['_private_looking']).toBeDefined()
+    const fn = exports['_private_looking'] as () => number
     expect(fn()).toBe(42)
   })
 
@@ -867,8 +867,8 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    expect(exports.calculate).toBeDefined()
-    const fn = exports.calculate as (x: number) => number
+    expect(exports['calculate']).toBeDefined()
+    const fn = exports['calculate'] as (x: number) => number
     expect(fn(5)).toBe(10)
   })
 })
@@ -1120,7 +1120,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const abs = exports.abs as (x: number) => number
+    const abs = exports['abs'] as (x: number) => number
     expect(abs(-5)).toBe(5)
     expect(abs(5)).toBe(5)
     expect(abs(0)).toBe(0)
@@ -1150,8 +1150,8 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const minFn = exports.min as (a: number, b: number) => number
-    const maxFn = exports.max as (a: number, b: number) => number
+    const minFn = exports['min'] as (a: number, b: number) => number
+    const maxFn = exports['max'] as (a: number, b: number) => number
 
     expect(minFn(3, 7)).toBe(3)
     expect(maxFn(3, 7)).toBe(7)
@@ -1176,7 +1176,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const classify = exports.classify as (x: number) => number
+    const classify = exports['classify'] as (x: number) => number
     expect(classify(-5)).toBe(-1)
     expect(classify(5)).toBe(1)
     expect(classify(0)).toBe(0)
@@ -1199,7 +1199,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const sumToN = exports.sum_to_n as (n: number) => number
+    const sumToN = exports['sum_to_n'] as (n: number) => number
     expect(sumToN(5)).toBe(15) // 1+2+3+4+5
     expect(sumToN(10)).toBe(55)
     expect(sumToN(0)).toBe(0)
@@ -1225,7 +1225,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const dayType = exports.day_type as (day: number) => number
+    const dayType = exports['day_type'] as (day: number) => number
     expect(dayType(0)).toBe(0) // Sunday - weekend
     expect(dayType(6)).toBe(0) // Saturday - weekend
     expect(dayType(1)).toBe(1) // Monday - weekday
@@ -1248,7 +1248,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const withLocals = exports.with_locals as (x: number) => number
+    const withLocals = exports['with_locals'] as (x: number) => number
     // x=5 -> a=10 -> b=20 -> c=10
     expect(withLocals(5)).toBe(10)
   })
@@ -1270,7 +1270,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const withHelper = exports.with_helper as (x: number) => number
+    const withHelper = exports['with_helper'] as (x: number) => number
     expect(withHelper(5)).toBe(11) // (5*2) + 1
   })
 })
@@ -1293,7 +1293,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const fn = exports.memory_test as () => number
+    const fn = exports['memory_test'] as () => number
     expect(fn()).toBe(42)
   })
 
@@ -1328,7 +1328,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const fn = exports.large_value as () => number
+    const fn = exports['large_value'] as () => number
     expect(fn()).toBe(2147483647) // int32 max
   })
 
@@ -1345,7 +1345,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const fn = exports.min_value as () => number
+    const fn = exports['min_value'] as () => number
     expect(fn()).toBe(-2147483648) // int32 min
   })
 
@@ -1459,7 +1459,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const safeDivide = exports.safe_divide as (a: number, b: number) => number
+    const safeDivide = exports['safe_divide'] as (a: number, b: number) => number
     expect(safeDivide(10, 2)).toBe(5)
     expect(safeDivide(10, 0)).toBe(0) // Safe handling
   })
@@ -1483,7 +1483,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const clamp = exports.clamp as (x: number, min: number, max: number) => number
+    const clamp = exports['clamp'] as (x: number, min: number, max: number) => number
     expect(clamp(5, 0, 10)).toBe(5)
     expect(clamp(-5, 0, 10)).toBe(0)
     expect(clamp(15, 0, 10)).toBe(10)
@@ -1505,7 +1505,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const factorial = exports.factorial as (n: number) => number
+    const factorial = exports['factorial'] as (n: number) => number
     expect(factorial(0)).toBe(1)
     expect(factorial(1)).toBe(1)
     expect(factorial(5)).toBe(120)
@@ -1528,7 +1528,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const fibonacci = exports.fibonacci as (n: number) => number
+    const fibonacci = exports['fibonacci'] as (n: number) => number
     expect(fibonacci(0)).toBe(0)
     expect(fibonacci(1)).toBe(1)
     expect(fibonacci(10)).toBe(55)
@@ -1554,7 +1554,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const fib = exports.fibonacci_iter as (n: number) => number
+    const fib = exports['fibonacci_iter'] as (n: number) => number
     expect(fib(0)).toBe(0)
     expect(fib(1)).toBe(1)
     expect(fib(10)).toBe(55)
@@ -1574,7 +1574,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const fn = exports.sum_eight as (...args: number[]) => number
+    const fn = exports['sum_eight'] as (...args: number[]) => number
     expect(fn(1, 2, 3, 4, 5, 6, 7, 8)).toBe(36)
   })
 
@@ -1591,7 +1591,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const add = exports.add as (a: number, b: number) => number
+    const add = exports['add'] as (a: number, b: number) => number
 
     // Execute 10000 times to check for memory stability
     for (let i = 0; i < 10000; i++) {
@@ -1623,9 +1623,9 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const s1 = exports.step1 as () => number
-    const s2 = exports.step2 as () => number
-    const s3 = exports.step3 as () => number
+    const s1 = exports['step1'] as () => number
+    const s2 = exports['step2'] as () => number
+    const s3 = exports['step3'] as () => number
 
     // Call many times to simulate stack usage
     for (let i = 0; i < 1000; i++) {
@@ -1656,7 +1656,7 @@ func main() {}
 
     const module = await WebAssembly.compile(result.wasm)
     const instance = await WebAssembly.instantiate(module)
-    const fn = instance.exports.opt_test as () => number
+    const fn = instance.exports['opt_test'] as () => number
 
     expect(fn()).toBe(42)
   })
@@ -1676,7 +1676,7 @@ func main() {}
 
     const module = await WebAssembly.compile(result.wasm)
     const instance = await WebAssembly.instantiate(module)
-    const fn = instance.exports.opt_test as () => number
+    const fn = instance.exports['opt_test'] as () => number
 
     expect(fn()).toBe(42)
   })
@@ -1732,7 +1732,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const fn = exports.multiline as (x: number) => number
+    const fn = exports['multiline'] as (x: number) => number
     expect(fn(5)).toBe(11) // (5*2)+1
   })
 
@@ -1789,7 +1789,7 @@ func main() {}
     ])
 
     for (const instance of instances) {
-      const fn = instance.exports.counter as () => number
+      const fn = instance.exports['counter'] as () => number
       expect(fn()).toBe(1)
     }
   })
@@ -1812,8 +1812,8 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const isPositive = exports.is_positive as (x: number) => number
-    const negateBool = exports.negate_bool as (b: number) => number
+    const isPositive = exports['is_positive'] as (x: number) => number
+    const negateBool = exports['negate_bool'] as (b: number) => number
 
     // WASM represents bool as i32 (0 or 1)
     expect(isPositive(5)).toBe(1)
@@ -1836,7 +1836,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const add = exports.unsigned_add as (a: number, b: number) => number
+    const add = exports['unsigned_add'] as (a: number, b: number) => number
     expect(add(100, 200)).toBe(300)
   })
 
@@ -1853,7 +1853,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const add = exports.byte_add as (a: number, b: number) => number
+    const add = exports['byte_add'] as (a: number, b: number) => number
     expect(add(10, 20)).toBe(30)
   })
 
@@ -1873,7 +1873,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const fn = exports.single_return as (a: number, b: number) => number
+    const fn = exports['single_return'] as (a: number, b: number) => number
     expect(fn(3, 4)).toBe(7)
   })
 
@@ -1893,7 +1893,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const gcdFn = exports.gcd as (a: number, b: number) => number
+    const gcdFn = exports['gcd'] as (a: number, b: number) => number
     expect(gcdFn(48, 18)).toBe(6)
     expect(gcdFn(100, 25)).toBe(25)
     expect(gcdFn(17, 13)).toBe(1)
@@ -1917,7 +1917,7 @@ func main() {}
 `
     const { exports } = await compileAndInstantiate(goCode)
 
-    const power = exports.power as (base: number, exp: number) => number
+    const power = exports['power'] as (base: number, exp: number) => number
     expect(power(2, 0)).toBe(1)
     expect(power(2, 1)).toBe(2)
     expect(power(2, 8)).toBe(256)

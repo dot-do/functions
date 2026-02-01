@@ -74,7 +74,7 @@ describe('Deploy Handler', () => {
 
         expect(response.status).toBe(400)
         const body = (await response.json()) as JsonBody
-        expect(body.error).toBeDefined()
+        expect(body['error']).toBeDefined()
       }
     })
 
@@ -99,7 +99,7 @@ describe('Deploy Handler', () => {
 
         expect(response.status).toBe(400)
         const body = (await response.json()) as JsonBody
-        expect(body.error).toContain('language')
+        expect(body['error']).toContain('language')
       }
     })
 
@@ -132,7 +132,7 @@ describe('Deploy Handler', () => {
         if (response.status === 400) {
           const body = (await response.json()) as JsonBody
           // Should not be a language validation error for supported languages
-          expect(body.error).not.toContain('Unsupported language')
+          expect(body['error']).not.toContain('Unsupported language')
         }
       }
     })
@@ -166,7 +166,7 @@ describe('Deploy Handler', () => {
 
         expect(response.status).toBe(400)
         const body = (await response.json()) as JsonBody
-        expect(body.error).toContain('version')
+        expect(body['error']).toContain('version')
       }
     })
 
@@ -200,7 +200,7 @@ describe('Deploy Handler', () => {
         // Should not fail on version validation
         if (response.status === 400) {
           const body = (await response.json()) as JsonBody
-          expect(body.error).not.toContain('Invalid semantic version')
+          expect(body['error']).not.toContain('Invalid semantic version')
         }
       }
     })
@@ -223,7 +223,7 @@ describe('Deploy Handler', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('code')
+      expect(body['error']).toContain('code')
     })
 
     it('validates code is not empty', async () => {
@@ -244,7 +244,7 @@ describe('Deploy Handler', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('code')
+      expect(body['error']).toContain('code')
     })
 
     it('returns 400 with validation errors', async () => {
@@ -262,7 +262,7 @@ describe('Deploy Handler', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBeDefined()
+      expect(body['error']).toBeDefined()
     })
 
     it('validates entry point format', async () => {
@@ -336,8 +336,8 @@ describe('Deploy Handler', () => {
       // Verify function was stored in registry
       const stored = await mockEnv.FUNCTIONS_REGISTRY.get('registry:storage-test', 'json')
       expect(stored).toBeDefined()
-      expect((stored as JsonBody).id).toBe('storage-test')
-      expect((stored as JsonBody).version).toBe('1.0.0')
+      expect((stored as JsonBody)['id']).toBe('storage-test')
+      expect((stored as JsonBody)['version']).toBe('1.0.0')
     })
 
     it('stores code in code storage', async () => {
@@ -454,7 +454,7 @@ describe('Deploy Handler', () => {
 
       // Latest should point to v2
       const latest = await mockEnv.FUNCTIONS_REGISTRY.get('registry:latest-pointer-test', 'json')
-      expect((latest as JsonBody).version).toBe('2.0.0')
+      expect((latest as JsonBody)['version']).toBe('2.0.0')
     })
   })
 
@@ -558,7 +558,7 @@ describe('Deploy Handler', () => {
       // If it fails, should be 400 with compilation error details
       if (response.status === 400) {
         const body = (await response.json()) as JsonBody
-        expect(body.error).toBeDefined()
+        expect(body['error']).toBeDefined()
       }
     })
 
@@ -664,9 +664,9 @@ describe('Deploy Handler', () => {
       expect([200, 201]).toContain(response.status)
 
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('deploy-response-test')
-      expect(body.version).toBe('1.0.0')
-      expect(body.url).toContain('deploy-response-test')
+      expect(body['id']).toBe('deploy-response-test')
+      expect(body['version']).toBe('1.0.0')
+      expect(body['url']).toContain('deploy-response-test')
     })
 
     it('includes dispatch upload status', async () => {
@@ -687,7 +687,7 @@ describe('Deploy Handler', () => {
 
       if (response.status === 200 || response.status === 201) {
         const body = (await response.json()) as JsonBody
-        expect(body.dispatchUpload).toBeDefined()
+        expect(body['dispatchUpload']).toBeDefined()
       }
     })
   })

@@ -68,8 +68,8 @@ describe('Index Router Integration', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.status).toBe('ok')
-      expect(body.service).toBe('Functions.do')
+      expect(body['status']).toBe('ok')
+      expect(body['service']).toBe('Functions.do')
     })
 
     it('GET /health returns health status', async () => {
@@ -78,8 +78,8 @@ describe('Index Router Integration', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.status).toBe('ok')
-      expect(body.service).toBe('Functions.do')
+      expect(body['status']).toBe('ok')
+      expect(body['service']).toBe('Functions.do')
     })
   })
 
@@ -90,7 +90,7 @@ describe('Index Router Integration', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('test-func')
+      expect(body['id']).toBe('test-func')
     })
 
     it('GET /api/functions/:id returns 404 for missing function', async () => {
@@ -131,7 +131,7 @@ describe('Index Router Integration', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBeDefined()
+      expect(body['error']).toBeDefined()
     })
   })
 
@@ -145,7 +145,7 @@ describe('Index Router Integration', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.success).toBe(true)
+      expect(body['success']).toBe(true)
     })
 
     it('DELETE /api/functions/:id returns 404 for missing function', async () => {
@@ -166,7 +166,7 @@ describe('Index Router Integration', () => {
 
       expect(response.status).toBe(503)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('not configured')
+      expect(body['error']).toContain('not configured')
     })
   })
 
@@ -220,7 +220,7 @@ describe('Index Router Integration', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('test-func')
+      expect(body['id']).toBe('test-func')
     })
 
     it('GET /functions/:id/info returns function info', async () => {
@@ -232,7 +232,7 @@ describe('Index Router Integration', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('test-func')
+      expect(body['id']).toBe('test-func')
     })
   })
 
@@ -246,7 +246,7 @@ describe('Index Router Integration', () => {
 
       expect(response.status).toBe(404)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBeDefined()
+      expect(body['error']).toBeDefined()
     })
 
     it('returns 405 for unsupported methods on known routes', async () => {

@@ -792,12 +792,14 @@ describe('Zod Schemas', () => {
   describe('Type Inference', () => {
     it('should infer FunctionType correctly', () => {
       const functionType: FunctionTypeInferred = 'code'
-      expectTypeOf(functionType).toEqualTypeOf<'code' | 'generative' | 'agentic' | 'human'>()
+      // Use toMatchTypeOf for alias compatibility
+      expectTypeOf(functionType).toMatchTypeOf<'code' | 'generative' | 'agentic' | 'human'>()
     })
 
     it('should infer FunctionResultStatus correctly', () => {
       const status: FunctionResultStatusInferred = 'completed'
-      expectTypeOf(status).toEqualTypeOf<'completed' | 'failed' | 'timeout' | 'cancelled'>()
+      // Use toMatchTypeOf for alias compatibility
+      expectTypeOf(status).toMatchTypeOf<'completed' | 'failed' | 'timeout' | 'cancelled'>()
     })
 
     it('should infer Duration correctly', () => {

@@ -1,10 +1,21 @@
 /**
  * Auth Middleware for Functions.do
  *
- * Provides API key-based authentication for protected endpoints.
+ * Provides API key-based and OAuth-based authentication for protected endpoints.
+ * Supports:
+ * - API key authentication via X-API-Key header or Bearer token
+ * - OAuth token authentication via oauth.do service binding
+ * - Organization context via X-Organization header
  */
 
 import { jsonResponse } from '../http-utils'
+import {
+  OAuthClient,
+  extractBearerToken,
+  type OAuthService,
+  type OAuthContext,
+  type OrganizationMembership,
+} from '../../core/oauth'
 
 /**
  * API key record stored in KV
@@ -31,6 +42,16 @@ export interface AuthContext {
   scopes: string[]
   authenticatedAt: number
   isInternal?: boolean
+  /** Authentication method used */
+  authMethod?: 'api-key' | 'oauth'
+  /** User email (from OAuth) */
+  email?: string
+  /** User name (from OAuth) */
+  name?: string
+  /** User's organizations (from OAuth) */
+  organizations?: OrganizationMembership[]
+  /** Current organization context */
+  currentOrgId?: string
 }
 
 /**
@@ -44,6 +65,8 @@ export interface AuthMiddlewareConfig {
   trustInternalRequests?: boolean
   internalHeader?: string
   internalSecret?: string
+  /** OAuth.do service binding for token validation */
+  oauthService?: OAuthService
 }
 
 /**
@@ -180,6 +203,15 @@ function hasRequiredScopes(
 }
 
 /**
+ * Check if a token looks like an API key (vs OAuth token).
+ * API keys typically have specific prefixes.
+ */
+function isApiKeyFormat(token: string): boolean {
+  const apiKeyPrefixes = ['sk_', 'pk_', 'fn_', 'api_', 'key_']
+  return apiKeyPrefixes.some((prefix) => token.startsWith(prefix))
+}
+
+/**
  * Create auth middleware with custom configuration
  */
 export function createAuthMiddleware(config: AuthMiddlewareConfig) {
@@ -191,6 +223,7 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig) {
     trustInternalRequests = false,
     internalHeader,
     internalSecret,
+    oauthService,
   } = config
 
   return async (
@@ -219,65 +252,81 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig) {
             scopes: ['*'],
             authenticatedAt: Date.now(),
             isInternal: true,
+            authMethod: 'api-key',
           },
         }
       }
     }
 
-    // Get KV namespace from config or env
-    const kv = apiKeysKV || (env.FUNCTIONS_API_KEYS as KVNamespace | undefined)
+    // Get KV namespace and OAuth service from config or env
+    const kv = apiKeysKV || (env['FUNCTIONS_API_KEYS'] as KVNamespace | undefined)
+    const oauth = oauthService || (env['OAUTH'] as OAuthService | undefined)
 
-    if (!kv) {
-      // No KV namespace - auth is disabled
+    // If neither auth method is available, allow through (auth disabled)
+    if (!kv && !oauth) {
       return { shouldContinue: true }
     }
 
-    // Extract API key
-    const apiKey = extractApiKey(request, apiKeyHeader)
-    if (!apiKey) {
+    // Extract credentials
+    const xApiKey = request.headers.get(apiKeyHeader)
+    const authHeader = request.headers.get('Authorization')
+    const bearerToken = extractBearerToken(authHeader)
+    const orgHeader = request.headers.get('X-Organization')
+
+    // No credentials provided
+    if (!xApiKey && !bearerToken) {
       return {
         shouldContinue: false,
         response: jsonResponse(
-          { error: 'Missing API key' },
+          { error: 'Missing authentication' },
           401,
           { 'WWW-Authenticate': 'Bearer realm="Functions.do"' }
         ),
       }
     }
 
-    // Validate API key
-    const record = await kv.get<ApiKeyRecord>(apiKey, 'json')
-    if (!record) {
-      return {
-        shouldContinue: false,
-        response: jsonResponse(
-          { error: 'Invalid API key' },
-          401,
-          { 'WWW-Authenticate': 'Bearer realm="Functions.do"' }
-        ),
-      }
+    // Priority 1: X-API-Key header (always API key auth)
+    if (xApiKey && kv) {
+      return await validateApiKey(xApiKey, kv, request, scopeRequirements)
     }
 
-    // Check if active
-    if (!record.active) {
-      return {
-        shouldContinue: false,
-        response: jsonResponse(
-          { error: 'API key is inactive' },
-          401,
-          { 'WWW-Authenticate': 'Bearer realm="Functions.do"' }
-        ),
+    // Priority 2: Bearer token
+    if (bearerToken) {
+      // Check if this looks like an API key
+      if (isApiKeyFormat(bearerToken) && kv) {
+        return await validateApiKey(bearerToken, kv, request, scopeRequirements)
       }
-    }
 
-    // Check expiration
-    if (record.expiresAt) {
-      const expiresAt = new Date(record.expiresAt)
-      if (expiresAt < new Date()) {
+      // Try OAuth validation if service is available
+      if (oauth) {
+        const oauthResult = await validateOAuthToken(
+          bearerToken,
+          oauth,
+          orgHeader,
+          request,
+          scopeRequirements
+        )
+        if (oauthResult.shouldContinue || !oauthResult.error?.includes('OAuth')) {
+          return oauthResult
+        }
+        // OAuth failed, try API key fallback
+      }
+
+      // Fall back to API key lookup for Bearer token
+      if (kv) {
+        const apiKeyResult = await validateApiKey(bearerToken, kv, request, scopeRequirements)
+        // Only return API key result if it was successful or definitively failed
+        if (apiKeyResult.shouldContinue || apiKeyResult.response?.status === 403) {
+          return apiKeyResult
+        }
+      }
+
+      // If OAuth is available but failed, return OAuth error
+      if (oauth) {
         return {
           shouldContinue: false,
           response: jsonResponse(
-            { error: 'API key has expired' },
+            { error: 'Invalid or expired token' },
             401,
             { 'WWW-Authenticate': 'Bearer realm="Functions.do"' }
           ),
@@ -285,27 +334,146 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig) {
       }
     }
 
-    // Build auth context with hashed/hinted key (never store full key)
+    // No valid authentication
+    return {
+      shouldContinue: false,
+      response: jsonResponse(
+        { error: 'Invalid authentication' },
+        401,
+        { 'WWW-Authenticate': 'Bearer realm="Functions.do"' }
+      ),
+    }
+  }
+}
+
+/**
+ * Validate an API key against KV storage.
+ */
+async function validateApiKey(
+  apiKey: string,
+  kv: KVNamespace,
+  request: Request,
+  scopeRequirements?: Record<string, string[]>
+): Promise<AuthMiddlewareResult> {
+  const record = await kv.get<ApiKeyRecord>(apiKey, 'json')
+  if (!record) {
+    return {
+      shouldContinue: false,
+      response: jsonResponse(
+        { error: 'Invalid API key' },
+        401,
+        { 'WWW-Authenticate': 'Bearer realm="Functions.do"' }
+      ),
+    }
+  }
+
+  // Check if active
+  if (!record.active) {
+    return {
+      shouldContinue: false,
+      response: jsonResponse(
+        { error: 'API key is inactive' },
+        401,
+        { 'WWW-Authenticate': 'Bearer realm="Functions.do"' }
+      ),
+    }
+  }
+
+  // Check expiration
+  if (record.expiresAt) {
+    const expiresAt = new Date(record.expiresAt)
+    if (expiresAt < new Date()) {
+      return {
+        shouldContinue: false,
+        response: jsonResponse(
+          { error: 'API key has expired' },
+          401,
+          { 'WWW-Authenticate': 'Bearer realm="Functions.do"' }
+        ),
+      }
+    }
+  }
+
+  // Build auth context with hashed/hinted key (never store full key)
+  const authContext: AuthContext = {
+    userId: record.userId || 'anonymous',
+    keyHash: await hashApiKey(apiKey),
+    keyHint: createKeyHint(apiKey),
+    scopes: record.scopes || [],
+    authenticatedAt: Date.now(),
+    authMethod: 'api-key',
+  }
+
+  // Check scope requirements
+  if (!hasRequiredScopes(request, authContext.scopes, scopeRequirements)) {
+    return {
+      shouldContinue: false,
+      response: jsonResponse({ error: 'Insufficient permissions' }, 403),
+    }
+  }
+
+  return { shouldContinue: true, authContext }
+}
+
+/**
+ * Validate an OAuth token via the oauth.do service binding.
+ */
+async function validateOAuthToken(
+  token: string,
+  oauthService: OAuthService,
+  orgHeader: string | null,
+  request: Request,
+  scopeRequirements?: Record<string, string[]>
+): Promise<AuthMiddlewareResult> {
+  const oauthClient = new OAuthClient(oauthService)
+
+  try {
+    const context = await oauthClient.buildContext(token, orgHeader)
+    if (!context) {
+      return {
+        shouldContinue: false,
+        error: 'OAuth token validation failed',
+        response: jsonResponse(
+          { error: 'Invalid or expired token' },
+          401,
+          { 'WWW-Authenticate': 'Bearer realm="Functions.do"' }
+        ),
+      }
+    }
+
+    // Build auth context from OAuth context
     const authContext: AuthContext = {
-      userId: record.userId || 'anonymous',
-      keyHash: await hashApiKey(apiKey),
-      keyHint: createKeyHint(apiKey),
-      scopes: record.scopes || [],
+      userId: context.userId,
+      keyHash: await hashApiKey(token), // Hash the token for correlation
+      keyHint: context.tokenHint,
+      scopes: context.scopes,
       authenticatedAt: Date.now(),
+      authMethod: 'oauth',
+      email: context.email,
+      name: context.name,
+      organizations: context.organizations,
+      currentOrgId: context.currentOrg?.id,
     }
 
     // Check scope requirements
     if (!hasRequiredScopes(request, authContext.scopes, scopeRequirements)) {
       return {
         shouldContinue: false,
-        response: jsonResponse(
-          { error: 'Insufficient permissions' },
-          403
-        ),
+        response: jsonResponse({ error: 'Insufficient permissions' }, 403),
       }
     }
 
     return { shouldContinue: true, authContext }
+  } catch (error) {
+    console.error('OAuth validation error:', error)
+    return {
+      shouldContinue: false,
+      error: 'OAuth service error',
+      response: jsonResponse(
+        { error: 'Authentication service unavailable' },
+        503
+      ),
+    }
   }
 }
 
@@ -313,5 +481,11 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig) {
  * Default auth middleware with standard configuration
  */
 export const authMiddleware = createAuthMiddleware({
-  publicEndpoints: ['/health', '/', '/api/status'],
+  publicEndpoints: [
+    '/health',
+    '/',
+    '/api/status',
+    '/v1/api/auth/validate', // Auth validation should be accessible
+    '/api/auth/validate',
+  ],
 })

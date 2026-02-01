@@ -192,7 +192,7 @@ function createLanguageTag(language: SupportedLanguage) {
         const id = options.id || `fn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         const version = options.version || '1.0.0'
         const baseUrl = options.baseUrl || 'https://functions.do'
-        const apiKey = options.apiKey || process.env.FUNCTIONS_API_KEY
+        const apiKey = options.apiKey || process.env['FUNCTIONS_API_KEY']
 
         if (!apiKey) {
           throw new Error('API key required for deployment. Set FUNCTIONS_API_KEY or pass apiKey option.')

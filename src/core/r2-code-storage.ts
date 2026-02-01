@@ -4,6 +4,11 @@ import { compareVersions } from './types'
 import type { CodeWithFallback, PaginationOptions, PaginatedVersions } from './code-storage'
 
 /**
+ * Compression encoding types
+ */
+type CompressionEncoding = 'gzip' | 'none'
+
+/**
  * Metadata stored with R2 objects for code storage
  */
 interface CodeObjectMetadata {
@@ -12,6 +17,29 @@ interface CodeObjectMetadata {
   contentType: 'code' | 'source-map'
   createdAt: string
   sizeBytes: number
+  /** Original uncompressed size in bytes */
+  originalSize?: string
+  /** Compression encoding used (gzip or none) */
+  encoding?: CompressionEncoding
+}
+
+/**
+ * Options for R2CodeStorage
+ */
+export interface R2CodeStorageOptions {
+  /**
+   * Enable gzip compression for stored code (default: true)
+   * When enabled, code is compressed before storage and decompressed on retrieval.
+   * This can reduce storage costs by 60-80% for text-based code.
+   */
+  compression?: boolean
+
+  /**
+   * Minimum size in bytes before compression is applied (default: 1024)
+   * Code smaller than this threshold is stored uncompressed to avoid
+   * compression overhead for small files.
+   */
+  compressionThreshold?: number
 }
 
 /**
@@ -22,6 +50,11 @@ interface CodeObjectMetadata {
  * - R2: 5GB max object size, no read/write limits
  * - KV: 25MB max value size, eventual consistency
  *
+ * Features:
+ * - Gzip compression for stored code (configurable)
+ * - Automatic decompression on retrieval
+ * - Backward compatible with uncompressed data
+ *
  * Key format:
  * - code/{functionId}/latest - Latest version of function code
  * - code/{functionId}/v/{version} - Specific version of function code
@@ -29,7 +62,77 @@ interface CodeObjectMetadata {
  * - code/{functionId}/v/{version}.map - Source map for specific version
  */
 export class R2CodeStorage implements CodeStorage {
-  constructor(private bucket: R2Bucket) {}
+  private readonly compressionEnabled: boolean
+  private readonly compressionThreshold: number
+
+  constructor(private bucket: R2Bucket, options: R2CodeStorageOptions = {}) {
+    this.compressionEnabled = options.compression ?? true
+    this.compressionThreshold = options.compressionThreshold ?? 1024
+  }
+
+  /**
+   * Compress data using gzip via CompressionStream API.
+   * Falls back to uncompressed if compression fails.
+   */
+  private async compress(data: string): Promise<{ compressed: Uint8Array; encoding: CompressionEncoding }> {
+    const encoder = new TextEncoder()
+    const bytes = encoder.encode(data)
+
+    // Skip compression for small data
+    if (!this.compressionEnabled || bytes.length < this.compressionThreshold) {
+      return { compressed: bytes, encoding: 'none' }
+    }
+
+    try {
+      // Use CompressionStream API (available in Cloudflare Workers)
+      const stream = new Blob([bytes]).stream()
+      const compressionStream = new CompressionStream('gzip')
+      const compressedStream = stream.pipeThrough(compressionStream)
+      const compressedBlob = await new Response(compressedStream).blob()
+      const compressedBytes = new Uint8Array(await compressedBlob.arrayBuffer())
+
+      // Only use compression if it actually reduces size
+      if (compressedBytes.length < bytes.length) {
+        return { compressed: compressedBytes, encoding: 'gzip' }
+      }
+      return { compressed: bytes, encoding: 'none' }
+    } catch {
+      // Fallback to uncompressed if compression fails
+      return { compressed: bytes, encoding: 'none' }
+    }
+  }
+
+  /**
+   * Decompress gzip data using DecompressionStream API.
+   */
+  private async decompress(data: ArrayBuffer, encoding: CompressionEncoding): Promise<string> {
+    if (encoding === 'none') {
+      const decoder = new TextDecoder()
+      return decoder.decode(data)
+    }
+
+    try {
+      // Use DecompressionStream API (available in Cloudflare Workers)
+      const stream = new Blob([data]).stream()
+      const decompressionStream = new DecompressionStream('gzip')
+      const decompressedStream = stream.pipeThrough(decompressionStream)
+      const decompressedBlob = await new Response(decompressedStream).blob()
+      return decompressedBlob.text()
+    } catch {
+      // If decompression fails, try treating as uncompressed text
+      const decoder = new TextDecoder()
+      return decoder.decode(data)
+    }
+  }
+
+  /**
+   * Detect if data is gzip compressed by checking magic bytes.
+   */
+  private isGzipCompressed(data: ArrayBuffer): boolean {
+    const bytes = new Uint8Array(data)
+    // Gzip magic bytes: 0x1f 0x8b
+    return bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b
+  }
 
   /**
    * Build the R2 object key for a function's code.
@@ -44,6 +147,7 @@ export class R2CodeStorage implements CodeStorage {
 
   /**
    * Get the code for a function, optionally for a specific version.
+   * Automatically decompresses gzip-compressed code.
    *
    * @param functionId - The unique function identifier
    * @param version - Optional version to retrieve
@@ -59,11 +163,28 @@ export class R2CodeStorage implements CodeStorage {
       return null
     }
 
-    return object.text()
+    // Check metadata for encoding information
+    const metadata = object.customMetadata as unknown as CodeObjectMetadata | undefined
+    const encoding = metadata?.encoding as CompressionEncoding | undefined
+
+    // Get the raw data
+    const data = await object.arrayBuffer()
+
+    // Determine encoding: use metadata if available, otherwise auto-detect
+    let effectiveEncoding: CompressionEncoding = 'none'
+    if (encoding) {
+      effectiveEncoding = encoding
+    } else if (this.isGzipCompressed(data)) {
+      // Auto-detect gzip for backward compatibility or missing metadata
+      effectiveEncoding = 'gzip'
+    }
+
+    return this.decompress(data, effectiveEncoding)
   }
 
   /**
    * Store code for a function, optionally for a specific version.
+   * Automatically compresses code using gzip if compression is enabled.
    *
    * @param functionId - The unique function identifier
    * @param code - The function code to store
@@ -74,18 +195,24 @@ export class R2CodeStorage implements CodeStorage {
     validateFunctionId(functionId)
     const key = this.buildKey(functionId, version)
 
+    // Compress the code
+    const originalSize = new TextEncoder().encode(code).length
+    const { compressed, encoding } = await this.compress(code)
+
     const metadata: CodeObjectMetadata = {
       functionId,
       contentType: 'code',
       createdAt: new Date().toISOString(),
-      sizeBytes: new TextEncoder().encode(code).length,
+      sizeBytes: compressed.length,
+      originalSize: String(originalSize),
+      encoding,
     }
 
     if (version) {
       metadata.version = version
     }
 
-    await this.bucket.put(key, code, {
+    await this.bucket.put(key, compressed, {
       customMetadata: metadata as unknown as Record<string, string>,
     })
   }
@@ -163,6 +290,7 @@ export class R2CodeStorage implements CodeStorage {
 
   /**
    * Store a source map for a function.
+   * Automatically compresses source maps using gzip if compression is enabled.
    *
    * @param functionId - The unique function identifier
    * @param sourceMap - The source map content
@@ -172,24 +300,31 @@ export class R2CodeStorage implements CodeStorage {
     validateFunctionId(functionId)
     const key = this.buildKey(functionId, version, true)
 
+    // Compress the source map
+    const originalSize = new TextEncoder().encode(sourceMap).length
+    const { compressed, encoding } = await this.compress(sourceMap)
+
     const metadata: CodeObjectMetadata = {
       functionId,
       contentType: 'source-map',
       createdAt: new Date().toISOString(),
-      sizeBytes: new TextEncoder().encode(sourceMap).length,
+      sizeBytes: compressed.length,
+      originalSize: String(originalSize),
+      encoding,
     }
 
     if (version) {
       metadata.version = version
     }
 
-    await this.bucket.put(key, sourceMap, {
+    await this.bucket.put(key, compressed, {
       customMetadata: metadata as unknown as Record<string, string>,
     })
   }
 
   /**
    * Retrieve a source map for a function.
+   * Automatically decompresses gzip-compressed source maps.
    *
    * @param functionId - The unique function identifier
    * @param version - Optional version for version-specific source maps
@@ -204,7 +339,23 @@ export class R2CodeStorage implements CodeStorage {
       return null
     }
 
-    return object.text()
+    // Check metadata for encoding information
+    const metadata = object.customMetadata as unknown as CodeObjectMetadata | undefined
+    const encoding = metadata?.encoding as CompressionEncoding | undefined
+
+    // Get the raw data
+    const data = await object.arrayBuffer()
+
+    // Determine encoding: use metadata if available, otherwise auto-detect
+    let effectiveEncoding: CompressionEncoding = 'none'
+    if (encoding) {
+      effectiveEncoding = encoding
+    } else if (this.isGzipCompressed(data)) {
+      // Auto-detect gzip for backward compatibility or missing metadata
+      effectiveEncoding = 'gzip'
+    }
+
+    return this.decompress(data, effectiveEncoding)
   }
 
   /**
@@ -423,4 +574,49 @@ export class R2CodeStorage implements CodeStorage {
     const head = await this.bucket.head(key)
     return head !== null
   }
+
+  // ============ Compression Utilities ============
+
+  /**
+   * Get compression statistics for stored code.
+   *
+   * @param functionId - The unique function identifier
+   * @param version - Optional version to check
+   * @returns Compression stats or null if not found
+   */
+  async getCompressionStats(
+    functionId: string,
+    version?: string
+  ): Promise<{
+    originalSize: number
+    compressedSize: number
+    compressionRatio: number
+    encoding: CompressionEncoding
+  } | null> {
+    const metadata = await this.getMetadata(functionId, version)
+    if (!metadata) {
+      return null
+    }
+
+    const originalSize = metadata.originalSize ? parseInt(metadata.originalSize, 10) : metadata.sizeBytes
+    const compressedSize = metadata.sizeBytes
+    const encoding = metadata.encoding ?? 'none'
+
+    return {
+      originalSize,
+      compressedSize,
+      compressionRatio: originalSize > 0 ? 1 - compressedSize / originalSize : 0,
+      encoding,
+    }
+  }
+
+  /**
+   * Check if compression is enabled for this storage instance.
+   */
+  isCompressionEnabled(): boolean {
+    return this.compressionEnabled
+  }
 }
+
+// Export the metadata type for external use
+export type { CodeObjectMetadata, CompressionEncoding }

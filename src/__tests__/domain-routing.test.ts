@@ -135,8 +135,8 @@ describe('Domain Routing - functions.do', () => {
       expect(response.headers.get('Content-Type')).toBe('application/json')
 
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('hello-world')
-      expect(body.status).toBe('loaded')
+      expect(body['id']).toBe('hello-world')
+      expect(body['status']).toBe('loaded')
     })
 
     it('should return function info via GET /functions/:functionId/info', async () => {
@@ -147,8 +147,8 @@ describe('Domain Routing - functions.do', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('hello-world')
-      expect(body.status).toBe('loaded')
+      expect(body['id']).toBe('hello-world')
+      expect(body['status']).toBe('loaded')
     })
 
     it('should return 404 for non-existent function via GET /functions/:functionId', async () => {
@@ -176,7 +176,7 @@ describe('Domain Routing - functions.do', () => {
       expect(response.headers.get('Content-Type')).toBe('application/json')
 
       const body = (await response.json()) as JsonBody
-      expect(body.message).toBe('Hello from hello-world')
+      expect(body['message']).toBe('Hello from hello-world')
     })
 
     it('should invoke function via POST /functions/:functionId/invoke', async () => {
@@ -191,7 +191,7 @@ describe('Domain Routing - functions.do', () => {
       expect(response.headers.get('Content-Type')).toBe('application/json')
 
       const body = (await response.json()) as JsonBody
-      expect(body.message).toBe('Hello from hello-world')
+      expect(body['message']).toBe('Hello from hello-world')
     })
 
     it('should return 404 for non-existent function via POST /functions/:functionId', async () => {
@@ -217,7 +217,7 @@ describe('Domain Routing - functions.do', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('Invalid JSON')
+      expect(body['error']).toContain('Invalid JSON')
     })
   })
 
@@ -235,7 +235,7 @@ describe('Domain Routing - functions.do', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.message).toBe('Hello from hello-world')
+      expect(body['message']).toBe('Hello from hello-world')
     })
 
     it('should get function info via X-Function-Id header with GET', async () => {
@@ -249,8 +249,8 @@ describe('Domain Routing - functions.do', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('hello-world')
-      expect(body.status).toBe('loaded')
+      expect(body['id']).toBe('hello-world')
+      expect(body['status']).toBe('loaded')
     })
 
     it('should prefer URL path over header when both are present', async () => {
@@ -262,7 +262,7 @@ describe('Domain Routing - functions.do', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('hello-world')
+      expect(body['id']).toBe('hello-world')
     })
   })
 
@@ -275,7 +275,7 @@ describe('Domain Routing - functions.do', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('Function ID required')
+      expect(body['error']).toContain('Function ID required')
     })
 
     it('should return 400 for paths that do not match /functions/:id pattern', async () => {
@@ -286,7 +286,7 @@ describe('Domain Routing - functions.do', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('Function ID required')
+      expect(body['error']).toContain('Function ID required')
     })
   })
 
@@ -302,7 +302,7 @@ describe('Domain Routing - functions.do', () => {
 
       const body = (await response.json()) as JsonBody
       expect(body).toHaveProperty('error')
-      expect(String(body.error).toLowerCase()).toContain('not found')
+      expect(String(body['error']).toLowerCase()).toContain('not found')
     })
 
     it('should return 404 when function metadata exists but code is missing', async () => {
@@ -324,7 +324,7 @@ describe('Domain Routing - functions.do', () => {
 
       expect(response.status).toBe(404)
       const body = (await response.json()) as JsonBody
-      expect(String(body.error).toLowerCase()).toContain('not found')
+      expect(String(body['error']).toLowerCase()).toContain('not found')
     })
   })
 
@@ -339,7 +339,7 @@ describe('Domain Routing - functions.do', () => {
 
       expect(response.status).toBe(405)
       const body = (await response.json()) as JsonBody
-      expect(String(body.error).toLowerCase()).toContain('not allowed')
+      expect(String(body['error']).toLowerCase()).toContain('not allowed')
     })
 
     it('should return 405 for unsupported PATCH method', async () => {
@@ -352,7 +352,7 @@ describe('Domain Routing - functions.do', () => {
 
       expect(response.status).toBe(405)
       const body = (await response.json()) as JsonBody
-      expect(String(body.error).toLowerCase()).toContain('not allowed')
+      expect(String(body['error']).toLowerCase()).toContain('not allowed')
     })
 
     it('should return 405 for unsupported DELETE method', async () => {
@@ -363,7 +363,7 @@ describe('Domain Routing - functions.do', () => {
 
       expect(response.status).toBe(405)
       const body = (await response.json()) as JsonBody
-      expect(String(body.error).toLowerCase()).toContain('not allowed')
+      expect(String(body['error']).toLowerCase()).toContain('not allowed')
     })
   })
 

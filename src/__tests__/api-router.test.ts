@@ -99,8 +99,8 @@ describe('Hono API Router', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.status).toBe('ok')
-      expect(body.service).toBe('Functions.do')
+      expect(body['status']).toBe('ok')
+      expect(body['service']).toBe('Functions.do')
     })
 
     it('should respond to GET / with service info', async () => {
@@ -109,8 +109,8 @@ describe('Hono API Router', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.status).toBe('ok')
-      expect(body.service).toBe('Functions.do')
+      expect(body['status']).toBe('ok')
+      expect(body['service']).toBe('Functions.do')
     })
 
     it('should not require authentication for health endpoints', async () => {
@@ -127,7 +127,7 @@ describe('Hono API Router', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.status).toBe('ok')
+      expect(body['status']).toBe('ok')
     })
   })
 
@@ -146,7 +146,7 @@ describe('Hono API Router', () => {
       const response = await worker.fetch(request, mockEnv, mockCtx)
 
       const body = (await response.json()) as JsonBody
-      expect(body.service).toBeDefined()
+      expect(body['service']).toBeDefined()
     })
 
     it('should not require authentication for root endpoint', async () => {
@@ -173,8 +173,8 @@ describe('Hono API Router', () => {
 
         expect(response.status).toBe(200)
         const body = (await response.json()) as JsonBody
-        expect(body.id).toBe('test-func')
-        expect(body.status).toBe('loaded')
+        expect(body['id']).toBe('test-func')
+        expect(body['status']).toBe('loaded')
         expect(body).toHaveProperty('fromCache')
         expect(body).toHaveProperty('loadTimeMs')
       })
@@ -187,7 +187,7 @@ describe('Hono API Router', () => {
 
         expect(response.status).toBe(404)
         const body = (await response.json()) as JsonBody
-        expect(body.error).toBeTruthy()
+        expect(body['error']).toBeTruthy()
       })
     })
 
@@ -200,8 +200,8 @@ describe('Hono API Router', () => {
 
         expect(response.status).toBe(200)
         const body = (await response.json()) as JsonBody
-        expect(body.id).toBe('test-func')
-        expect(body.status).toBe('loaded')
+        expect(body['id']).toBe('test-func')
+        expect(body['status']).toBe('loaded')
       })
     })
 
@@ -229,7 +229,7 @@ describe('Hono API Router', () => {
 
         expect(response.status).toBe(400)
         const body = (await response.json()) as JsonBody
-        expect(body.error).toBeTruthy()
+        expect(body['error']).toBeTruthy()
       })
     })
 
@@ -255,7 +255,7 @@ describe('Hono API Router', () => {
 
         expect(response.status).toBe(200)
         const body = (await response.json()) as JsonBody
-        expect(body.message).toBe('Hello from test-func')
+        expect(body['message']).toBe('Hello from test-func')
       })
 
       it('should handle function execution errors gracefully', async () => {
@@ -287,7 +287,7 @@ describe('Hono API Router', () => {
 
         expect(response.status).toBe(500)
         const body = (await response.json()) as JsonBody
-        expect(body.error).toBeTruthy()
+        expect(body['error']).toBeTruthy()
       })
     })
 
@@ -301,7 +301,7 @@ describe('Hono API Router', () => {
 
         expect(response.status).toBe(405)
         const body = (await response.json()) as JsonBody
-        expect(body.error).toContain('not allowed')
+        expect(body['error']).toContain('not allowed')
       })
 
       it('should return 405 for DELETE requests', async () => {
@@ -364,7 +364,7 @@ describe('Hono API Router', () => {
 
       expect(response.status).toBe(401)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBe('Missing API key')
+      expect(body['error']).toBe('Missing API key')
     })
 
     it('should return 401 for invalid API key', async () => {
@@ -376,7 +376,7 @@ describe('Hono API Router', () => {
 
       expect(response.status).toBe(401)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBe('Invalid API key')
+      expect(body['error']).toBe('Invalid API key')
     })
 
     it('should return 401 for expired API key', async () => {
@@ -454,7 +454,7 @@ describe('Hono API Router', () => {
 
       expect(response.status).toBe(429)
       const body = (await response.json()) as JsonBody
-      expect(body.message).toContain('function')
+      expect(body['message']).toContain('function')
     })
 
     it('should return 429 when rate limit exceeded', async () => {
@@ -580,7 +580,7 @@ describe('Hono API Router', () => {
       expect(response.status).toBe(404)
       expect(response.headers.get('Content-Type')).toBe('application/json')
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBeTruthy()
+      expect(body['error']).toBeTruthy()
     })
 
     it('should return appropriate HTTP status codes', async () => {
@@ -616,7 +616,7 @@ describe('Hono API Router', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('Invalid JSON')
+      expect(body['error']).toContain('Invalid JSON')
     })
 
     it('should include validation error details', async () => {
@@ -628,7 +628,7 @@ describe('Hono API Router', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('Function ID required')
+      expect(body['error']).toContain('Function ID required')
     })
   })
 
@@ -663,7 +663,7 @@ describe('Hono API Router', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('test-func')
+      expect(body['id']).toBe('test-func')
     })
   })
 
@@ -676,7 +676,7 @@ describe('Hono API Router', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('test-func')
+      expect(body['id']).toBe('test-func')
     })
 
     it('should support typed route parameters', async () => {
@@ -690,7 +690,7 @@ describe('Hono API Router', () => {
       expect(response.status).toBe(404)
       const body = (await response.json()) as JsonBody
       // The error message should reference the function by ID
-      expect(body.error).toBeTruthy()
+      expect(body['error']).toBeTruthy()
     })
 
     it('should return 400 for requests without function ID', async () => {
@@ -701,7 +701,7 @@ describe('Hono API Router', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('Function ID required')
+      expect(body['error']).toContain('Function ID required')
     })
   })
 
@@ -736,8 +736,8 @@ describe('Hono API Router', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('test-func')
-      expect(body.status).toBe('loaded')
+      expect(body['id']).toBe('test-func')
+      expect(body['status']).toBe('loaded')
     })
   })
 })
@@ -861,7 +861,7 @@ describe('Router Integration with Current Worker', () => {
 
     expect(response.status).toBe(200)
     const body = (await response.json()) as JsonBody
-    expect(body.message).toBe('Hello')
+    expect(body['message']).toBe('Hello')
   })
 
   it('should maintain backward compatibility with /health route', async () => {
@@ -870,8 +870,8 @@ describe('Router Integration with Current Worker', () => {
 
     expect(response.status).toBe(200)
     const body = (await response.json()) as JsonBody
-    expect(body.status).toBe('ok')
-    expect(body.service).toBe('Functions.do')
+    expect(body['status']).toBe('ok')
+    expect(body['service']).toBe('Functions.do')
   })
 
   it('should maintain backward compatibility with /functions/:id route', async () => {
@@ -882,7 +882,7 @@ describe('Router Integration with Current Worker', () => {
 
     expect(response.status).toBe(200)
     const body = (await response.json()) as JsonBody
-    expect(body.id).toBe('test-func')
+    expect(body['id']).toBe('test-func')
   })
 
   it('should maintain backward compatibility with /functions/:id/invoke route', async () => {

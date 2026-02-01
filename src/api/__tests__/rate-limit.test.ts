@@ -396,9 +396,9 @@ describe('Rate Limit Middleware', () => {
       expect(result.response?.headers.get('Content-Type')).toBe('application/json')
 
       const body = (await result.response?.json()) as JsonBody
-      expect(body.error).toBe('Too Many Requests')
-      expect(body.retryAfter).toBeDefined()
-      expect(body.resetAt).toBeDefined()
+      expect(body['error']).toBe('Too Many Requests')
+      expect(body['retryAfter']).toBeDefined()
+      expect(body['resetAt']).toBeDefined()
     })
 
     it('includes limit type in error message', async () => {
@@ -423,7 +423,7 @@ describe('Rate Limit Middleware', () => {
       const result = await middleware(request2, mockEnv, mockCtx)
 
       const body = (await result.response?.json()) as JsonBody
-      expect(body.message).toContain('ip')
+      expect(body['message']).toContain('ip')
     })
   })
 

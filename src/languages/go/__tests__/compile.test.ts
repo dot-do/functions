@@ -78,7 +78,7 @@ func main() {}
     const exports = instance.exports
 
     expect(exports).toHaveProperty('multiply')
-    expect(typeof exports.multiply).toBe('function')
+    expect(typeof exports['multiply']).toBe('function')
   })
 
   it('executes compiled WASM function correctly', async () => {
@@ -97,7 +97,7 @@ func main() {}
     // Instantiate and execute the function
     const module = await WebAssembly.compile(result.wasm)
     const instance = await WebAssembly.instantiate(module)
-    const addFn = instance.exports.add as (a: number, b: number) => number
+    const addFn = instance.exports['add'] as (a: number, b: number) => number
 
     expect(addFn(2, 3)).toBe(5)
     expect(addFn(10, 20)).toBe(30)
@@ -137,9 +137,9 @@ func main() {}
     expect(exports).toHaveProperty('multiply')
 
     // All functions should work correctly
-    const add = exports.add as (a: number, b: number) => number
-    const subtract = exports.subtract as (a: number, b: number) => number
-    const multiply = exports.multiply as (a: number, b: number) => number
+    const add = exports['add'] as (a: number, b: number) => number
+    const subtract = exports['subtract'] as (a: number, b: number) => number
+    const multiply = exports['multiply'] as (a: number, b: number) => number
 
     expect(add(5, 3)).toBe(8)
     expect(subtract(10, 4)).toBe(6)

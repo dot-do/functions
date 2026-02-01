@@ -256,8 +256,8 @@ describe('Log Aggregation - Function Execution Logs Capture', () => {
 
     expect(logEntry.level).toBe('error')
     expect(logEntry.message).toContain('Test error message')
-    expect(logEntry.metadata?.stack).toBeDefined()
-    expect(logEntry.metadata?.errorName).toBe('Error')
+    expect(logEntry.metadata?.['stack']).toBeDefined()
+    expect(logEntry.metadata?.['errorName']).toBe('Error')
   })
 
   it('should capture logs with correlation ID across multiple operations', async () => {
@@ -393,11 +393,11 @@ describe('Log Aggregation - Structured JSON Log Format', () => {
       metadata: complexMetadata,
     })
 
-    expect(logEntry.metadata?.array).toEqual([1, 2, 3])
-    expect(logEntry.metadata?.nested).toEqual({ deep: { value: 'test' } })
-    expect(logEntry.metadata?.nullValue).toBeNull()
-    expect(logEntry.metadata?.boolValue).toBe(true)
-    expect(logEntry.metadata?.numberValue).toBe(42.5)
+    expect(logEntry.metadata?.['array']).toEqual([1, 2, 3])
+    expect(logEntry.metadata?.['nested']).toEqual({ deep: { value: 'test' } })
+    expect(logEntry.metadata?.['nullValue']).toBeNull()
+    expect(logEntry.metadata?.['boolValue']).toBe(true)
+    expect(logEntry.metadata?.['numberValue']).toBe(42.5)
   })
 
   it('should handle large log messages', async () => {
@@ -416,7 +416,7 @@ describe('Log Aggregation - Structured JSON Log Format', () => {
     // Should either store the full message or truncate with indicator
     expect(logEntry.message.length).toBeLessThanOrEqual(100000)
     if (logEntry.message.length < largeMessage.length) {
-      expect(logEntry.metadata?.truncated).toBe(true)
+      expect(logEntry.metadata?.['truncated']).toBe(true)
     }
   })
 
@@ -1845,7 +1845,7 @@ describe('Log Aggregation - Log Search/Query Capabilities', () => {
     })
 
     expect(result.entries.length).toBe(1)
-    expect(result.entries[0].metadata?.userId).toBe('usr-12345')
+    expect(result.entries[0].metadata?.['userId']).toBe('usr-12345')
   })
 
   it('should support regex search', async () => {
@@ -1911,7 +1911,7 @@ describe('Log Aggregation - Log Search/Query Capabilities', () => {
     })
 
     expect(result.entries.length).toBe(1)
-    expect(result.entries[0].metadata?.statusCode).toBe(500)
+    expect(result.entries[0].metadata?.['statusCode']).toBe(500)
   })
 
   it('should support full-text search with ranking', async () => {

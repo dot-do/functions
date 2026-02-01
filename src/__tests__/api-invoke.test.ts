@@ -100,7 +100,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.message).toBe('Hello from test-func')
+      expect(body['message']).toBe('Hello from test-func')
     })
 
     it('should return function response with correct content-type', async () => {
@@ -176,8 +176,8 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.receivedData).toBe('test')
-      expect(body.receivedValue).toBe(42)
+      expect(body['receivedData']).toBe('test')
+      expect(body['receivedValue']).toBe(42)
     })
 
     it('should handle JSON request body', async () => {
@@ -197,7 +197,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
       // Without method specified, the function is invoked directly
       // The function receives the original request (body may be consumed for JSON check)
       const body = (await response.json()) as JsonBody
-      expect(body.message).toBe('Hello from test-func')
+      expect(body['message']).toBe('Hello from test-func')
     })
 
     it('should handle empty request body', async () => {
@@ -213,7 +213,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.input).toEqual({})
+      expect(body['input']).toEqual({})
     })
 
     it('should handle non-JSON request body', async () => {
@@ -253,7 +253,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.received).toBe('plain text body')
+      expect(body['received']).toBe('plain text body')
     })
 
     it('should return 400 for malformed JSON body', async () => {
@@ -269,7 +269,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('Invalid JSON')
+      expect(body['error']).toContain('Invalid JSON')
     })
 
     it('should forward headers to function', async () => {
@@ -310,7 +310,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.customHeader).toBe('my-custom-value')
+      expect(body['customHeader']).toBe('my-custom-value')
     })
 
     it('should forward query parameters to function', async () => {
@@ -351,8 +351,8 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.foo).toBe('hello')
-      expect(body.bar).toBe('world')
+      expect(body['foo']).toBe('hello')
+      expect(body['bar']).toBe('world')
     })
   })
 
@@ -371,7 +371,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
       // Function returns its message field
-      expect(body.message).toBe('Hello from test-func')
+      expect(body['message']).toBe('Hello from test-func')
     })
 
     it('should preserve function response headers', async () => {
@@ -447,8 +447,8 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.result).toBe('Hello World')
-      expect(body.status).toBe(200)
+      expect(body['result']).toBe('Hello World')
+      expect(body['status']).toBe(200)
     })
   })
 
@@ -464,7 +464,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(typeof body.loadTimeMs).toBe('number')
+      expect(typeof body['loadTimeMs']).toBe('number')
     })
 
     it('should return fromCache indicator in function info', async () => {
@@ -478,7 +478,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(typeof body.fromCache).toBe('boolean')
+      expect(typeof body['fromCache']).toBe('boolean')
     })
 
     it('should indicate cold start on first invocation (fromCache: false)', async () => {
@@ -493,7 +493,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
       // First invocation should not be from cache
-      expect(body.fromCache).toBe(false)
+      expect(body['fromCache']).toBe(false)
     })
 
     it('should return consistent loadTimeMs across requests', async () => {
@@ -509,8 +509,8 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(typeof body.loadTimeMs).toBe('number')
-      expect(body.loadTimeMs).toBeGreaterThanOrEqual(0)
+      expect(typeof body['loadTimeMs']).toBe('number')
+      expect(body['loadTimeMs']).toBeGreaterThanOrEqual(0)
     })
 
     it('should return timing info in function info response', async () => {
@@ -586,7 +586,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(500)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBeTruthy()
+      expect(body['error']).toBeTruthy()
     })
 
     it('should return 500 for uncaught function errors', async () => {
@@ -616,7 +616,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBe('Bad request')
+      expect(body['error']).toBe('Bad request')
     })
 
     it('should include error details in response', async () => {
@@ -632,8 +632,8 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(500)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBeTruthy()
-      expect(typeof body.error).toBe('string')
+      expect(body['error']).toBeTruthy()
+      expect(typeof body['error']).toBe('string')
     })
 
     it('should return JSON error response for runtime errors', async () => {
@@ -665,7 +665,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
       expect(response.status).toBe(500)
       const body = (await response.json()) as JsonBody
       // Should not contain stack trace paths
-      expect(String(body.error)).not.toMatch(/at\s+\S+\s+\(/)
+      expect(String(body['error'])).not.toMatch(/at\s+\S+\s+\(/)
     })
   })
 
@@ -697,7 +697,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(404)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBeTruthy()
+      expect(body['error']).toBeTruthy()
     })
 
     it('should return 404 when function metadata exists but code is missing', async () => {
@@ -726,7 +726,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(404)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('not found')
+      expect(body['error']).toContain('not found')
     })
   })
 
@@ -789,7 +789,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.version).toBe('2.0.0')
+      expect(body['version']).toBe('2.0.0')
     })
 
     it('should invoke function successfully (version query param test placeholder)', async () => {
@@ -807,7 +807,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.version).toBeDefined()
+      expect(body['version']).toBeDefined()
     })
 
     it('should return 404 for non-existent function (version not found case)', async () => {
@@ -835,7 +835,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('versioned-func')
+      expect(body['id']).toBe('versioned-func')
     })
 
     it('should handle function invocation with valid function ID format', async () => {
@@ -1264,7 +1264,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('test-func')
+      expect(body['id']).toBe('test-func')
     })
 
     it('should track invocation duration via loadTimeMs', async () => {
@@ -1278,8 +1278,8 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(typeof body.loadTimeMs).toBe('number')
-      expect(body.loadTimeMs).toBeGreaterThanOrEqual(0)
+      expect(typeof body['loadTimeMs']).toBe('number')
+      expect(body['loadTimeMs']).toBeGreaterThanOrEqual(0)
     })
 
     it('should track success via 200 status', async () => {
@@ -1308,9 +1308,9 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
       const response = await worker.fetch(request, mockEnv, mockCtx)
       const body = (await response.json()) as JsonBody
 
-      expect(typeof body.fromCache).toBe('boolean')
+      expect(typeof body['fromCache']).toBe('boolean')
       // With per-request FunctionLoader instances, each load is fresh
-      expect(body.fromCache).toBe(false)
+      expect(body['fromCache']).toBe(false)
     })
 
     it('should return function info via GET endpoint', async () => {
@@ -1324,8 +1324,8 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.id).toBe('test-func')
-      expect(body.status).toBe('loaded')
+      expect(body['id']).toBe('test-func')
+      expect(body['status']).toBe('loaded')
     })
 
     it('should track error via 500 status', async () => {
@@ -1401,7 +1401,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.result).toBe('Hello World')
+      expect(body['result']).toBe('Hello World')
     })
 
     it('should accept custom data from function response', async () => {
@@ -1444,8 +1444,8 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.customMetric).toBe(42)
-      expect(body.customLabel).toBe('test')
+      expect(body['customMetric']).toBe(42)
+      expect(body['customLabel']).toBe('test')
     })
   })
 
@@ -1519,7 +1519,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
       for (let i = 0; i < responses.length; i++) {
         expect(responses[i].status).toBe(200)
         const body = (await responses[i].json()) as JsonBody
-        expect(body.uniqueId).toBe(String(i))
+        expect(body['uniqueId']).toBe(String(i))
       }
     })
 
@@ -1578,8 +1578,8 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
       const body1 = (await response1.json()) as JsonBody
       const body2 = (await response2.json()) as JsonBody
 
-      expect(body1.message).toBe('Hello from test-func')
-      expect(body2.func).toBe('second')
+      expect(body1['message']).toBe('Hello from test-func')
+      expect(body2['func']).toBe('second')
     })
 
     it('should handle rate limits across sequential requests', async () => {
@@ -1668,7 +1668,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.requestId).toBe('my-trace-id')
+      expect(body['requestId']).toBe('my-trace-id')
     })
 
     it('should propagate request ID to function', async () => {
@@ -1710,7 +1710,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.hasRequestId).toBe(true)
+      expect(body['hasRequestId']).toBe(true)
     })
 
     it('should handle trace context headers', async () => {
@@ -1755,8 +1755,8 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.traceparent).toBe('00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01')
-      expect(body.tracestate).toBe('congo=t61rcWkgMzE')
+      expect(body['traceparent']).toBe('00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01')
+      expect(body['tracestate']).toBe('congo=t61rcWkgMzE')
     })
   })
 
@@ -1805,7 +1805,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
       expect(response.status).toBe(200)
       // Response is wrapped in JSON, so result contains the streamed content
       const body = (await response.json()) as JsonBody
-      expect(body.result).toBe('chunk1chunk2')
+      expect(body['result']).toBe('chunk1chunk2')
     })
 
     it('should handle Transfer-Encoding correctly', async () => {
@@ -1866,8 +1866,8 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body.length).toBe(5)
-      expect(body.firstByte).toBe(0x48)
+      expect(body['length']).toBe(5)
+      expect(body['firstByte']).toBe(0x48)
     })
 
     it('should handle binary response body', async () => {
@@ -1909,7 +1909,7 @@ describe('POST /functions/:id/invoke - Function Invocation Endpoint', () => {
       expect(response.status).toBe(200)
       // Binary response is wrapped in JSON with result field
       const body = (await response.json()) as JsonBody
-      expect(body.result).toBeDefined()
+      expect(body['result']).toBeDefined()
     })
   })
 

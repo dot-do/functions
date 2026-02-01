@@ -216,7 +216,7 @@ describe('E2E: Execute Compiled WASM and Get Correct Result', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const answer = exports.answer as () => number
+    const answer = exports['answer'] as () => number
     expect(answer()).toBe(42)
   })
 
@@ -229,7 +229,7 @@ describe('E2E: Execute Compiled WASM and Get Correct Result', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const add = exports.add as (a: number, b: number) => number
+    const add = exports['add'] as (a: number, b: number) => number
     expect(add(2, 3)).toBe(5)
     expect(add(10, 20)).toBe(30)
     expect(add(-5, 5)).toBe(0)
@@ -246,7 +246,7 @@ describe('E2E: Execute Compiled WASM and Get Correct Result', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const subtract = exports.subtract as (a: number, b: number) => number
+    const subtract = exports['subtract'] as (a: number, b: number) => number
     expect(subtract(10, 3)).toBe(7)
     expect(subtract(5, 10)).toBe(-5)
     expect(subtract(0, 0)).toBe(0)
@@ -261,7 +261,7 @@ describe('E2E: Execute Compiled WASM and Get Correct Result', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const multiply = exports.multiply as (a: number, b: number) => number
+    const multiply = exports['multiply'] as (a: number, b: number) => number
     expect(multiply(6, 7)).toBe(42)
     expect(multiply(0, 100)).toBe(0)
     expect(multiply(-3, 4)).toBe(-12)
@@ -277,7 +277,7 @@ describe('E2E: Execute Compiled WASM and Get Correct Result', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const compute = exports.compute as (x: number) => number
+    const compute = exports['compute'] as (x: number) => number
     expect(compute(5)).toBe(11)
     expect(compute(10)).toBe(21)
     expect(compute(0)).toBe(1)
@@ -293,7 +293,7 @@ describe('E2E: Execute Compiled WASM and Get Correct Result', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const identity = exports.identity as (x: number) => number
+    const identity = exports['identity'] as (x: number) => number
     expect(identity(42)).toBe(42)
     expect(identity(0)).toBe(0)
     expect(identity(-999)).toBe(-999)
@@ -318,9 +318,9 @@ describe('E2E: Execute Compiled WASM and Get Correct Result', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const add = exports.add as (a: number, b: number) => number
-    const multiply = exports.multiply as (a: number, b: number) => number
-    const square = exports.square as (x: number) => number
+    const add = exports['add'] as (a: number, b: number) => number
+    const multiply = exports['multiply'] as (a: number, b: number) => number
+    const square = exports['square'] as (x: number) => number
 
     expect(add(3, 4)).toBe(7)
     expect(multiply(3, 4)).toBe(12)
@@ -336,7 +336,7 @@ describe('E2E: Execute Compiled WASM and Get Correct Result', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const add = exports.overflow_add as (a: number, b: number) => number
+    const add = exports['overflow_add'] as (a: number, b: number) => number
     // i32 max is 2147483647
     const result = add(2147483647, 1)
     // Should wrap to -2147483648
@@ -352,7 +352,7 @@ describe('E2E: Execute Compiled WASM and Get Correct Result', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const negative = exports.negative as () => number
+    const negative = exports['negative'] as () => number
     expect(negative()).toBe(-42)
   })
 
@@ -365,7 +365,7 @@ describe('E2E: Execute Compiled WASM and Get Correct Result', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const zero = exports.zero as () => number
+    const zero = exports['zero'] as () => number
     expect(zero()).toBe(0)
   })
 })
@@ -491,8 +491,8 @@ describe('E2E: Support #[no_mangle] Exports', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    expect(exports.exact_export_name).toBeDefined()
-    expect(typeof exports.exact_export_name).toBe('function')
+    expect(exports['exact_export_name']).toBeDefined()
+    expect(typeof exports['exact_export_name']).toBe('function')
   })
 
   it('exports function with snake_case name', async () => {
@@ -504,8 +504,8 @@ describe('E2E: Support #[no_mangle] Exports', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    expect(exports.my_snake_case_function).toBeDefined()
-    const fn = exports.my_snake_case_function as () => number
+    expect(exports['my_snake_case_function']).toBeDefined()
+    const fn = exports['my_snake_case_function'] as () => number
     expect(fn()).toBe(42)
   })
 
@@ -518,8 +518,8 @@ describe('E2E: Support #[no_mangle] Exports', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    expect(exports.x).toBeDefined()
-    const fn = exports.x as () => number
+    expect(exports['x']).toBeDefined()
+    const fn = exports['x'] as () => number
     expect(fn()).toBe(1)
   })
 
@@ -532,8 +532,8 @@ describe('E2E: Support #[no_mangle] Exports', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    expect(exports.func123).toBeDefined()
-    const fn = exports.func123 as () => number
+    expect(exports['func123']).toBeDefined()
+    const fn = exports['func123'] as () => number
     expect(fn()).toBe(123)
   })
 
@@ -561,10 +561,10 @@ describe('E2E: Support #[no_mangle] Exports', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const zero = exports.zero_args as () => number
-    const one = exports.one_arg as (x: number) => number
-    const two = exports.two_args as (a: number, b: number) => number
-    const three = exports.three_args as (a: number, b: number, c: number) => number
+    const zero = exports['zero_args'] as () => number
+    const one = exports['one_arg'] as (x: number) => number
+    const two = exports['two_args'] as (a: number, b: number) => number
+    const three = exports['three_args'] as (a: number, b: number, c: number) => number
 
     expect(zero()).toBe(0)
     expect(one(42)).toBe(42)
@@ -586,8 +586,8 @@ describe('E2E: Support #[no_mangle] Exports', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    expect(exports.exported).toBeDefined()
-    expect(exports.internal).toBeUndefined()
+    expect(exports['exported']).toBeDefined()
+    expect(exports['internal']).toBeUndefined()
   })
 
   it('respects extern "C" ABI requirement', async () => {
@@ -599,7 +599,7 @@ describe('E2E: Support #[no_mangle] Exports', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const fn = exports.c_abi_function as (a: number, b: number) => number
+    const fn = exports['c_abi_function'] as (a: number, b: number) => number
     expect(fn(10, 20)).toBe(30)
   })
 
@@ -612,8 +612,8 @@ describe('E2E: Support #[no_mangle] Exports', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    expect(exports._private_looking).toBeDefined()
-    const fn = exports._private_looking as () => number
+    expect(exports['_private_looking']).toBeDefined()
+    const fn = exports['_private_looking'] as () => number
     expect(fn()).toBe(42)
   })
 })
@@ -879,7 +879,7 @@ describe('E2E: Memory Limits', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const fn = exports.memory_test as () => number
+    const fn = exports['memory_test'] as () => number
     expect(fn()).toBe(42)
   })
 
@@ -906,7 +906,7 @@ describe('E2E: Memory Limits', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const fn = exports.large_value as () => number
+    const fn = exports['large_value'] as () => number
     expect(fn()).toBe(2147483647) // i32 max
   })
 
@@ -919,7 +919,7 @@ describe('E2E: Memory Limits', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const fn = exports.min_value as () => number
+    const fn = exports['min_value'] as () => number
     expect(fn()).toBe(-2147483648) // i32 min
   })
 
@@ -1008,7 +1008,7 @@ describe('E2E: Stack Overflow Handling', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const fn = exports.many_params as (a: number, b: number, c: number, d: number, e: number) => number
+    const fn = exports['many_params'] as (a: number, b: number, c: number, d: number, e: number) => number
     expect(fn(1, 2, 3, 4, 5)).toBe(15)
   })
 
@@ -1022,7 +1022,7 @@ describe('E2E: Stack Overflow Handling', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const fn = exports.nested as (x: number) => number
+    const fn = exports['nested'] as (x: number) => number
     expect(fn(42)).toBe(42)
   })
 
@@ -1045,9 +1045,9 @@ describe('E2E: Stack Overflow Handling', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const s1 = exports.step1 as () => number
-    const s2 = exports.step2 as () => number
-    const s3 = exports.step3 as () => number
+    const s1 = exports['step1'] as () => number
+    const s2 = exports['step2'] as () => number
+    const s3 = exports['step3'] as () => number
 
     // Call many times to simulate stack usage
     for (let i = 0; i < 1000; i++) {
@@ -1066,7 +1066,7 @@ describe('E2E: Stack Overflow Handling', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const fn = exports.sum_eight as (...args: number[]) => number
+    const fn = exports['sum_eight'] as (...args: number[]) => number
     expect(fn(1, 2, 3, 4, 5, 6, 7, 8)).toBe(36)
   })
 
@@ -1092,7 +1092,7 @@ describe('E2E: Stack Overflow Handling', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const add = exports.add as (a: number, b: number) => number
+    const add = exports['add'] as (a: number, b: number) => number
 
     // Execute 10000 times to check for memory stability
     for (let i = 0; i < 10000; i++) {
@@ -1118,7 +1118,7 @@ describe('E2E: Edge Cases and Integration', () => {
 
     const module = await WebAssembly.compile(result.wasm)
     const instance = await WebAssembly.instantiate(module)
-    const fn = instance.exports.opt_test as () => number
+    const fn = instance.exports['opt_test'] as () => number
 
     expect(fn()).toBe(42)
   })
@@ -1134,7 +1134,7 @@ describe('E2E: Edge Cases and Integration', () => {
 
     const module = await WebAssembly.compile(result.wasm)
     const instance = await WebAssembly.instantiate(module)
-    const fn = instance.exports.opt_test as () => number
+    const fn = instance.exports['opt_test'] as () => number
 
     expect(fn()).toBe(42)
   })
@@ -1187,7 +1187,7 @@ describe('E2E: Edge Cases and Integration', () => {
     `
     const { exports } = await compileAndInstantiate(rustCode)
 
-    const fn = exports.multiline as (x: number) => number
+    const fn = exports['multiline'] as (x: number) => number
     expect(fn(42)).toBe(42)
   })
 
@@ -1234,7 +1234,7 @@ describe('E2E: Edge Cases and Integration', () => {
     ])
 
     for (const instance of instances) {
-      const fn = instance.exports.counter as () => number
+      const fn = instance.exports['counter'] as () => number
       expect(fn()).toBe(1)
     }
   })

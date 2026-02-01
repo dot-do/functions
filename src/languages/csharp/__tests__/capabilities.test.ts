@@ -33,37 +33,37 @@ import {
 describe('Built-in Capabilities', () => {
   describe('BUILTIN_CAPABILITIES', () => {
     it('includes core capability', () => {
-      expect(BUILTIN_CAPABILITIES.core).toBeDefined()
-      expect(BUILTIN_CAPABILITIES.core.id).toBe('core')
-      expect(BUILTIN_CAPABILITIES.core.dependencies).toHaveLength(0)
+      expect(BUILTIN_CAPABILITIES['core']).toBeDefined()
+      expect(BUILTIN_CAPABILITIES['core'].id).toBe('core')
+      expect(BUILTIN_CAPABILITIES['core'].dependencies).toHaveLength(0)
     })
 
     it('includes collections capability', () => {
-      expect(BUILTIN_CAPABILITIES.collections).toBeDefined()
-      expect(BUILTIN_CAPABILITIES.collections.dependencies).toContain('core')
+      expect(BUILTIN_CAPABILITIES['collections']).toBeDefined()
+      expect(BUILTIN_CAPABILITIES['collections'].dependencies).toContain('core')
     })
 
     it('includes linq capability', () => {
-      expect(BUILTIN_CAPABILITIES.linq).toBeDefined()
-      expect(BUILTIN_CAPABILITIES.linq.dependencies).toContain('collections')
+      expect(BUILTIN_CAPABILITIES['linq']).toBeDefined()
+      expect(BUILTIN_CAPABILITIES['linq'].dependencies).toContain('collections')
     })
 
     it('includes json capability', () => {
-      expect(BUILTIN_CAPABILITIES.json).toBeDefined()
-      expect(BUILTIN_CAPABILITIES.json.namespaces).toContain('System.Text.Json')
+      expect(BUILTIN_CAPABILITIES['json']).toBeDefined()
+      expect(BUILTIN_CAPABILITIES['json'].namespaces).toContain('System.Text.Json')
     })
 
     it('includes async capability', () => {
-      expect(BUILTIN_CAPABILITIES.async).toBeDefined()
-      expect(BUILTIN_CAPABILITIES.async.namespaces).toContain('System.Threading.Tasks')
+      expect(BUILTIN_CAPABILITIES['async']).toBeDefined()
+      expect(BUILTIN_CAPABILITIES['async'].namespaces).toContain('System.Threading.Tasks')
     })
 
     it('marks http as privileged', () => {
-      expect(BUILTIN_CAPABILITIES.http.privileged).toBe(true)
+      expect(BUILTIN_CAPABILITIES['http'].privileged).toBe(true)
     })
 
     it('marks reflection as privileged', () => {
-      expect(BUILTIN_CAPABILITIES.reflection.privileged).toBe(true)
+      expect(BUILTIN_CAPABILITIES['reflection'].privileged).toBe(true)
     })
 
     it('has memory footprint estimates', () => {
@@ -304,10 +304,10 @@ describe('Capability Broker', () => {
   describe('listByCategory', () => {
     it('filters by category', () => {
       // Register some capabilities
-      broker.register(BUILTIN_CAPABILITIES.core)
-      broker.register(BUILTIN_CAPABILITIES.collections)
-      broker.register(BUILTIN_CAPABILITIES.linq)
-      broker.register(BUILTIN_CAPABILITIES.json)
+      broker.register(BUILTIN_CAPABILITIES['core'])
+      broker.register(BUILTIN_CAPABILITIES['collections'])
+      broker.register(BUILTIN_CAPABILITIES['linq'])
+      broker.register(BUILTIN_CAPABILITIES['json'])
 
       const serialization = broker.listByCategory('serialization')
       expect(serialization.some((c) => c.id === 'json')).toBe(true)
@@ -316,7 +316,7 @@ describe('Capability Broker', () => {
 
   describe('request', () => {
     it('requests a capability instance', async () => {
-      broker.register(BUILTIN_CAPABILITIES.core)
+      broker.register(BUILTIN_CAPABILITIES['core'])
       const instance = await broker.request('core')
 
       expect(instance).toBeDefined()
@@ -324,7 +324,7 @@ describe('Capability Broker', () => {
     })
 
     it('loads capability on request', async () => {
-      broker.register(BUILTIN_CAPABILITIES.core)
+      broker.register(BUILTIN_CAPABILITIES['core'])
       const instance = await broker.request('core')
 
       await instance.load()
@@ -338,8 +338,8 @@ describe('Capability Broker', () => {
 
   describe('requestMultiple', () => {
     it('requests multiple capabilities', async () => {
-      broker.register(BUILTIN_CAPABILITIES.core)
-      broker.register(BUILTIN_CAPABILITIES.collections)
+      broker.register(BUILTIN_CAPABILITIES['core'])
+      broker.register(BUILTIN_CAPABILITIES['collections'])
 
       const instances = await broker.requestMultiple(['core', 'collections'])
 
@@ -351,7 +351,7 @@ describe('Capability Broker', () => {
 
   describe('release', () => {
     it('releases a capability', async () => {
-      broker.register(BUILTIN_CAPABILITIES.core)
+      broker.register(BUILTIN_CAPABILITIES['core'])
       await broker.request('core')
       await expect(broker.release('core')).resolves.not.toThrow()
     })
@@ -360,16 +360,16 @@ describe('Capability Broker', () => {
   describe('isAvailable', () => {
     it('checks availability', () => {
       expect(broker.isAvailable('unknown')).toBe(false)
-      broker.register(BUILTIN_CAPABILITIES.core)
+      broker.register(BUILTIN_CAPABILITIES['core'])
       expect(broker.isAvailable('core')).toBe(true)
     })
   })
 
   describe('resolveDependencies', () => {
     it('resolves capability dependencies', () => {
-      broker.register(BUILTIN_CAPABILITIES.core)
-      broker.register(BUILTIN_CAPABILITIES.collections)
-      broker.register(BUILTIN_CAPABILITIES.linq)
+      broker.register(BUILTIN_CAPABILITIES['core'])
+      broker.register(BUILTIN_CAPABILITIES['collections'])
+      broker.register(BUILTIN_CAPABILITIES['linq'])
 
       const deps = broker.resolveDependencies('linq')
 
@@ -482,7 +482,7 @@ describe('Capability Composer', () => {
       const footprint = composer.base(['core', 'json']).getMemoryFootprint()
 
       const expected =
-        BUILTIN_CAPABILITIES.core.memoryFootprint + BUILTIN_CAPABILITIES.json.memoryFootprint
+        BUILTIN_CAPABILITIES['core'].memoryFootprint + BUILTIN_CAPABILITIES['json'].memoryFootprint
 
       expect(footprint).toBe(expected)
     })

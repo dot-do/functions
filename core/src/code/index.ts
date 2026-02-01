@@ -21,8 +21,12 @@ import type {
   ExecutionContext,
   Duration,
   JsonSchema,
+  CodeLanguage,
 } from '../types.js'
 import { functionId as toFunctionId, type FunctionId } from '../branded-types.js'
+
+// Re-export CodeLanguage from types (which gets it from schemas - single source of truth)
+export type { CodeLanguage } from '../types.js'
 
 // =============================================================================
 // CODE FUNCTION DEFINITION
@@ -45,15 +49,8 @@ export interface CodeFunctionDefinition<
   sandbox?: SandboxConfig
 }
 
-export type CodeLanguage =
-  | 'typescript'
-  | 'javascript'
-  | 'rust'
-  | 'go'
-  | 'python'
-  | 'zig'
-  | 'assemblyscript'
-  | 'csharp'
+// CodeLanguage is imported from types.ts (derived from Zod schema)
+// Re-exported above for backwards compatibility
 
 export type CodeSource =
   | { type: 'inline'; code: string }
@@ -61,6 +58,10 @@ export type CodeSource =
   | { type: 'url'; url: string }
   | { type: 'registry'; functionId: FunctionId; version?: string }
   | { type: 'assets'; functionId: FunctionId; version?: string }
+  /** Pre-compiled WASM binary stored in KV (via deploy API) */
+  | { type: 'wasm'; functionId: FunctionId; version?: string }
+  /** Inline pre-compiled WASM binary (base64-encoded or Uint8Array) */
+  | { type: 'inline-wasm'; binary: string | Uint8Array }
 
 // =============================================================================
 // CODE FUNCTION CONFIG

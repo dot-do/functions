@@ -229,10 +229,10 @@ describe('Generative Functions E2E', () => {
       expect([200, 501]).toContain(response.status)
       if (response.status === 200) {
         const body = await response.json() as Record<string, unknown>
-        expect(body.sentiment).toBe('positive')
-        expect(body.confidence).toBeGreaterThan(0.9)
-        expect(body._meta).toBeDefined()
-        expect((body._meta as Record<string, unknown>).executorType).toBe('generative')
+        expect(body['sentiment']).toBe('positive')
+        expect(body['confidence']).toBeGreaterThan(0.9)
+        expect(body['_meta']).toBeDefined()
+        expect((body['_meta'] as Record<string, unknown>)['executorType']).toBe('generative')
       }
     })
 
@@ -252,7 +252,7 @@ describe('Generative Functions E2E', () => {
 
       expect(response.status).toBe(404)
       const body = await response.json() as Record<string, unknown>
-      expect(body.error).toContain('not found')
+      expect(body['error']).toContain('not found')
     })
 
     it('should return proper error response for invalid input', async () => {
@@ -320,12 +320,12 @@ describe('Generative Functions E2E', () => {
 
       if (response.status === 200) {
         const body = await response.json() as Record<string, unknown>
-        const meta = body._meta as Record<string, unknown>
+        const meta = body['_meta'] as Record<string, unknown>
 
         // Basic metadata should be present
         expect(meta).toBeDefined()
-        expect(meta.duration).toBeDefined()
-        expect(typeof meta.duration).toBe('number')
+        expect(meta['duration']).toBeDefined()
+        expect(typeof meta['duration']).toBe('number')
 
         // Enhanced generative metadata (RED PHASE - not yet implemented)
         // Uncomment when tier dispatcher returns generative execution info
@@ -357,7 +357,7 @@ describe('Generative Functions E2E', () => {
 
       expect(response.status).toBe(400)
       const body = await response.json() as Record<string, unknown>
-      expect(body.error).toContain('JSON')
+      expect(body['error']).toContain('JSON')
     })
 
     it('should support version parameter in request', async () => {
@@ -594,11 +594,11 @@ describe('Generative Functions E2E', () => {
 
       if (response.status === 200) {
         const body = await response.json() as Record<string, unknown>
-        const meta = body._meta as Record<string, unknown>
+        const meta = body['_meta'] as Record<string, unknown>
 
         // Basic metadata should exist
         expect(meta).toBeDefined()
-        expect(meta.duration).toBeDefined()
+        expect(meta['duration']).toBeDefined()
 
         // RED PHASE: Enhanced cascade metrics not yet implemented
         // When implemented, uncomment:
@@ -632,8 +632,8 @@ describe('Generative Functions E2E', () => {
 
       expect(result.status).toBe('completed')
       expect(result.output).toBeDefined()
-      expect((result.output as Record<string, unknown>).sentiment).toBe('positive')
-      expect((result.output as Record<string, unknown>).confidence).toBeGreaterThan(0.9)
+      expect((result.output as Record<string, unknown>)['sentiment']).toBe('positive')
+      expect((result.output as Record<string, unknown>)['confidence']).toBeGreaterThan(0.9)
       expect(result.generativeExecution).toBeDefined()
       expect(result.generativeExecution.model).toContain('claude')
     })
@@ -664,9 +664,9 @@ describe('Generative Functions E2E', () => {
       expect(result.status).toBe('completed')
       expect(result.output).toBeDefined()
       const output = result.output as Record<string, unknown>
-      expect(output.summary).toBeDefined()
-      expect(Array.isArray(output.keyPoints)).toBe(true)
-      expect((output.keyPoints as string[]).length).toBeGreaterThan(0)
+      expect(output['summary']).toBeDefined()
+      expect(Array.isArray(output['keyPoints'])).toBe(true)
+      expect((output['keyPoints'] as string[]).length).toBeGreaterThan(0)
     })
 
     it('should execute entity extraction end-to-end', async () => {
@@ -691,8 +691,8 @@ describe('Generative Functions E2E', () => {
       expect(result.status).toBe('completed')
       expect(result.output).toBeDefined()
       const output = result.output as Record<string, unknown>
-      expect(Array.isArray(output.entities)).toBe(true)
-      expect((output.entities as unknown[]).length).toBe(4)
+      expect(Array.isArray(output['entities'])).toBe(true)
+      expect((output['entities'] as unknown[]).length).toBe(4)
     })
 
     it('should handle complex nested output schemas', async () => {
@@ -750,8 +750,8 @@ describe('Generative Functions E2E', () => {
 
       expect(result.status).toBe('completed')
       const output = result.output as Record<string, unknown>
-      expect(output.analysis).toBeDefined()
-      expect((output.analysis as Record<string, unknown>).score).toBe(85)
+      expect(output['analysis']).toBeDefined()
+      expect((output['analysis'] as Record<string, unknown>)['score']).toBe(85)
     })
   })
 
@@ -1137,7 +1137,7 @@ describe('Generative Functions E2E', () => {
       const result = await executor.execute(definition, { text: 'Test' })
 
       expect(result.status).toBe('completed')
-      expect((result.output as Record<string, unknown>).sentiment).toBe('positive')
+      expect((result.output as Record<string, unknown>)['sentiment']).toBe('positive')
     })
 
     it('should report model used in result', async () => {

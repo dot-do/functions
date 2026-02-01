@@ -86,7 +86,7 @@ describe('Deploy-Time TypeScript Compilation', () => {
       const body = (await response.json()) as JsonBody
 
       expect(response.status).toBe(200)
-      expect(body.id).toBe('ts-function')
+      expect(body['id']).toBe('ts-function')
 
       // Verify compiled JS is stored (without type annotations)
       const storedCode = await mockCodeStorage.get('code:ts-function', 'text')
@@ -157,8 +157,8 @@ describe('Deploy-Time TypeScript Compilation', () => {
 
       expect(response.status).toBe(200)
       // Response should include compilation info
-      expect(body.compiled).toBe(true)
-      expect(body.compiledAt).toBeDefined()
+      expect(body['compiled']).toBe(true)
+      expect(body['compiledAt']).toBeDefined()
     })
 
     it('should store both source and compiled code', async () => {
@@ -220,7 +220,7 @@ describe('Deploy-Time TypeScript Compilation', () => {
       const body = (await response.json()) as JsonBody
 
       expect(response.status).toBe(200)
-      expect(body.id).toBe('js-function')
+      expect(body['id']).toBe('js-function')
 
       // JS should be stored as-is (trimmed/normalized is OK)
       const storedCode = await mockCodeStorage.get('code:js-function', 'text')
@@ -252,7 +252,7 @@ describe('Deploy-Time TypeScript Compilation', () => {
 
       expect(response.status).toBe(200)
       // Response should indicate no compilation was performed
-      expect(body.compiled).toBe(false)
+      expect(body['compiled']).toBe(false)
     })
 
     it('should not store :source key for JavaScript', async () => {
@@ -302,9 +302,9 @@ describe('Deploy-Time TypeScript Compilation', () => {
       const body = (await response.json()) as JsonBody
 
       expect(response.status).toBe(400)
-      expect(body.error).toBeDefined()
-      expect(typeof body.error).toBe('string')
-      expect((body.error as string).toLowerCase()).toContain('compil')
+      expect(body['error']).toBeDefined()
+      expect(typeof body['error']).toBe('string')
+      expect((body['error'] as string).toLowerCase()).toContain('compil')
     })
 
     it('should not store code when compilation fails', async () => {
@@ -387,8 +387,8 @@ describe('Deploy-Time TypeScript Compilation', () => {
 
       expect(response.status).toBe(400)
       // Error should include location info
-      expect(body.line).toBeDefined()
-      expect(body.column).toBeDefined()
+      expect(body['line']).toBeDefined()
+      expect(body['column']).toBeDefined()
     })
   })
 
@@ -880,10 +880,10 @@ describe('Deploy-Time TypeScript Compilation', () => {
         unknown
       >
       expect(metadata).toBeDefined()
-      expect(metadata.compiled).toBe(true)
-      expect(metadata.compiledAt).toBeDefined()
-      expect(metadata.sourceSize).toBeDefined()
-      expect(metadata.compiledSize).toBeDefined()
+      expect(metadata['compiled']).toBe(true)
+      expect(metadata['compiledAt']).toBeDefined()
+      expect(metadata['sourceSize']).toBeDefined()
+      expect(metadata['compiledSize']).toBeDefined()
     })
 
     it('should not include compilation metadata for JavaScript functions', async () => {
@@ -913,8 +913,8 @@ describe('Deploy-Time TypeScript Compilation', () => {
         unknown
       >
       expect(metadata).toBeDefined()
-      expect(metadata.compiled).toBe(false)
-      expect(metadata.compiledAt).toBeUndefined()
+      expect(metadata['compiled']).toBe(false)
+      expect(metadata['compiledAt']).toBeUndefined()
     })
   })
 })

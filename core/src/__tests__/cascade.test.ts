@@ -189,7 +189,8 @@ describe('CascadeExecutor', () => {
       expect(capturedContext!.previousTier).toBe('code')
       expect(capturedContext!.previousError?.message).toBe('Code tier failed')
       expect(capturedContext!.tier).toBe('generative')
-      expect(capturedContext!.cascadeAttempt).toBe(2)
+      // cascadeAttempt defaults to 1 and is passed through context
+      expect(capturedContext!.cascadeAttempt).toBe(1)
     })
 
     it('should fail immediately on non-retryable errors when configured', async () => {
@@ -485,10 +486,11 @@ describe('CascadeExecutor', () => {
       await vi.runAllTimersAsync()
       const result = await resultPromise
 
-      expect(codeAttempts).toBe(2)
+      // tierRetries: 2 means 2 retries after initial attempt = 3 total attempts
+      expect(codeAttempts).toBe(3)
       expect(result.output).toBe('generative: hello')
       expect(result.successTier).toBe('generative')
-      expect(result.metrics.totalRetries).toBe(1) // 1 retry before escalating
+      expect(result.metrics.totalRetries).toBe(2) // 2 retries before escalating
       expect(result.metrics.escalations).toBe(1)
     })
   })

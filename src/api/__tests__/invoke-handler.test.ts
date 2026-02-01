@@ -84,8 +84,8 @@ describe('Invoke Handler', () => {
       expect([200, 501]).toContain(response.status)
       if (response.status === 200) {
         const body = (await response.json()) as JsonBody
-        expect(body._meta).toBeDefined()
-        expect((body._meta as JsonBody).executorType).toBe('code')
+        expect(body['_meta']).toBeDefined()
+        expect((body['_meta'] as JsonBody)['executorType']).toBe('code')
       }
     })
 
@@ -119,7 +119,7 @@ describe('Invoke Handler', () => {
       expect([200, 501, 503]).toContain(response.status)
       if (response.status === 200) {
         const body = (await response.json()) as JsonBody
-        expect((body._meta as JsonBody).executorType).toBe('generative')
+        expect((body['_meta'] as JsonBody)['executorType']).toBe('generative')
       }
     })
 
@@ -153,7 +153,7 @@ describe('Invoke Handler', () => {
       expect([200, 501, 503]).toContain(response.status)
       if (response.status === 200) {
         const body = (await response.json()) as JsonBody
-        expect((body._meta as JsonBody).executorType).toBe('agentic')
+        expect((body['_meta'] as JsonBody)['executorType']).toBe('agentic')
       }
     })
 
@@ -186,8 +186,8 @@ describe('Invoke Handler', () => {
       expect([200, 202, 501, 503]).toContain(response.status)
       if (response.status === 202) {
         const body = (await response.json()) as JsonBody
-        expect(body.taskId).toBeDefined()
-        expect((body._meta as JsonBody).executorType).toBe('human')
+        expect(body['taskId']).toBeDefined()
+        expect((body['_meta'] as JsonBody)['executorType']).toBe('human')
       }
     })
 
@@ -223,7 +223,7 @@ describe('Invoke Handler', () => {
       expect([200, 501, 503]).toContain(response.status)
       if (response.status === 200) {
         const body = (await response.json()) as JsonBody
-        expect((body._meta as JsonBody).executorType).toBe('cascade')
+        expect((body['_meta'] as JsonBody)['executorType']).toBe('cascade')
       }
     })
 
@@ -301,7 +301,7 @@ describe('Invoke Handler', () => {
 
       if (response.status === 200) {
         const body = (await response.json()) as JsonBody
-        expect(body.received).toEqual(inputData)
+        expect(body['received']).toEqual(inputData)
       }
     })
 
@@ -339,7 +339,7 @@ describe('Invoke Handler', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('JSON')
+      expect(body['error']).toContain('JSON')
     })
 
     it('accepts form data when Content-Type is multipart', async () => {
@@ -419,8 +419,8 @@ describe('Invoke Handler', () => {
 
       if (response.status === 200) {
         const body = (await response.json()) as JsonBody
-        expect(body.result).toBe('success')
-        expect(body.count).toBe(42)
+        expect(body['result']).toBe('success')
+        expect(body['count']).toBe(42)
       }
     })
 
@@ -440,12 +440,12 @@ describe('Invoke Handler', () => {
 
       if (response.status === 200) {
         const body = (await response.json()) as JsonBody
-        expect(body._meta).toBeDefined()
+        expect(body['_meta']).toBeDefined()
 
-        const meta = body._meta as JsonBody
-        expect(meta.duration).toBeDefined()
-        expect(typeof meta.duration).toBe('number')
-        expect(meta.executedWith).toBeDefined()
+        const meta = body['_meta'] as JsonBody
+        expect(meta['duration']).toBeDefined()
+        expect(typeof meta['duration']).toBe('number')
+        expect(meta['executedWith']).toBeDefined()
       }
     })
 
@@ -522,7 +522,7 @@ describe('Invoke Handler', () => {
       if (response.status === 200) {
         expect(response.headers.get('Content-Type')).toBe('application/json')
         const body = (await response.json()) as JsonBody
-        expect(body.result).toBe('Hello, plain text!')
+        expect(body['result']).toBe('Hello, plain text!')
       }
     })
   })
@@ -544,7 +544,7 @@ describe('Invoke Handler', () => {
 
       expect(response.status).toBe(404)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toContain('not found')
+      expect(body['error']).toContain('not found')
     })
 
     it('returns 500 for function execution errors', async () => {
@@ -581,7 +581,7 @@ describe('Invoke Handler', () => {
       if (response.status !== 501) {
         expect(response.status).toBe(500)
         const body = (await response.json()) as JsonBody
-        expect(body.error).toBeDefined()
+        expect(body['error']).toBeDefined()
       }
     })
 
@@ -668,7 +668,7 @@ describe('Invoke Handler', () => {
 
       if (response.status === 200) {
         const body = (await response.json()) as JsonBody
-        expect(body.version).toBe('2.0.0')
+        expect(body['version']).toBe('2.0.0')
       }
     })
 
@@ -689,7 +689,7 @@ describe('Invoke Handler', () => {
 
       if (response.status === 200) {
         const body = (await response.json()) as JsonBody
-        expect(body.version).toBe('1.0.0')
+        expect(body['version']).toBe('1.0.0')
       }
     })
   })
