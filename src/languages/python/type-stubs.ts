@@ -228,7 +228,7 @@ export function generateJSTypeDefinitions(code: string): string {
       bool: 'boolean',
       None: 'null',
       NoneType: 'null',
-      Any: 'any',
+      Any: 'unknown',
       bytes: 'Uint8Array',
     }
 

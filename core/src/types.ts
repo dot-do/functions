@@ -15,6 +15,10 @@
  */
 
 import { assertNever } from './utils.js'
+import type { FunctionId, ExecutionId, WorkflowId } from './branded-types.js'
+
+// Re-export branded types for convenience
+export type { FunctionId, ExecutionId, WorkflowId } from './branded-types.js'
 
 // =============================================================================
 // FUNCTION TYPE DISCRIMINATOR
@@ -32,7 +36,7 @@ export interface FunctionDefinition<
   TConfig = unknown,
 > {
   /** Unique function identifier */
-  id: string
+  id: FunctionId
 
   /** Human-readable name */
   name: string
@@ -73,10 +77,10 @@ export type FunctionResultStatus = 'completed' | 'failed' | 'timeout' | 'cancell
 
 export interface FunctionResult<TOutput = unknown> {
   /** Unique execution ID */
-  executionId: string
+  executionId: ExecutionId
 
   /** Function ID that was executed */
-  functionId: string
+  functionId: FunctionId
 
   /** Function version */
   functionVersion: string
@@ -155,8 +159,8 @@ export interface ExecutionMetadata {
 }
 
 export interface WorkflowContext {
-  workflowId: string
-  runId: string
+  workflowId: WorkflowId
+  runId: ExecutionId
   stepId: string
 }
 
@@ -243,7 +247,7 @@ export interface FunctionExecutor<
 
 export interface ExecutionContext {
   /** Execution ID (generated if not provided) */
-  executionId?: string
+  executionId?: ExecutionId
 
   /** Trace ID for distributed tracing */
   traceId?: string
@@ -284,16 +288,16 @@ export interface FunctionRegistry {
   ): void
 
   /** Get a function by ID */
-  get(functionId: string): RegisteredFunction | undefined
+  get(functionId: FunctionId): RegisteredFunction | undefined
 
   /** Get a function by ID and version */
-  getVersion(functionId: string, version: string): RegisteredFunction | undefined
+  getVersion(functionId: FunctionId, version: string): RegisteredFunction | undefined
 
   /** List all registered functions */
   list(filter?: FunctionFilter): RegisteredFunction[]
 
   /** Unregister a function */
-  unregister(functionId: string): boolean
+  unregister(functionId: FunctionId): boolean
 }
 
 export interface RegisteredFunction<
@@ -317,7 +321,7 @@ export interface FunctionFilter {
 
 export interface FunctionInvocation<TInput = unknown, TConfig = unknown> {
   /** Function ID to invoke */
-  functionId: string
+  functionId: FunctionId
 
   /** Function version (default: latest) */
   version?: string

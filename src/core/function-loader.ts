@@ -1,6 +1,7 @@
 import type { WorkerStub, CacheStats, FunctionMetadata } from './types'
 import { validateFunctionId } from './function-registry'
 import { NotFoundError } from './errors'
+import { evaluate, type SandboxEnv, type EvaluateResult } from 'ai-evaluate'
 
 /**
  * Interface for the function registry dependency
@@ -205,6 +206,13 @@ export interface FunctionLoaderConfig {
   gracefulDegradation?: boolean
   /** Fallback version to use on failure (e.g., 'latest-stable') */
   fallbackVersion?: string
+  /**
+   * Sandbox environment for secure code evaluation via ai-evaluate.
+   *
+   * This should contain the LOADER (worker_loaders) binding for production use.
+   * Required for evaluateModule to work - if not provided, evaluation will fail.
+   */
+  sandboxEnv?: SandboxEnv
 }
 
 /**
@@ -327,6 +335,9 @@ export class FunctionLoader implements IFunctionLoader {
   private gracefulDegradation: boolean
   private fallbackVersion?: string
 
+  // Sandbox environment for ai-evaluate
+  private sandboxEnv?: SandboxEnv
+
   // Cache for loaded function stubs
   private cache: Map<string, CacheEntry> = new Map()
 
@@ -358,6 +369,7 @@ export class FunctionLoader implements IFunctionLoader {
     if (config.fallbackVersion !== undefined) {
       this.fallbackVersion = config.fallbackVersion
     }
+    this.sandboxEnv = config.sandboxEnv
 
     // Initialize retry config with defaults
     this.retryConfig = {
@@ -839,29 +851,149 @@ export class FunctionLoader implements IFunctionLoader {
   }
 
   /**
-   * Evaluate module code and extract the default export.
-   * In a production environment, this would use Cloudflare's module system.
+   * Evaluate module code and extract the default export using ai-evaluate.
+   *
+   * Uses the ai-evaluate package for secure sandboxed code execution via
+   * Cloudflare worker_loaders. This is the correct architecture for dynamic
+   * code evaluation in Cloudflare Workers.
+   *
+   * @param code - The module code to evaluate (must come from trusted CodeStorage)
+   * @returns The evaluated module exports
+   * @throws Error if sandboxEnv is not configured
    */
-  private evaluateModule(code: string): Record<string, Function | string> {
-    // Create a safe evaluation context
-    // This is a simplified implementation for testing
-    // Real implementation would use Cloudflare's isolated execution
+  private async evaluateModuleAsync(code: string): Promise<Record<string, Function | string>> {
+    // Require sandboxEnv to be configured
+    if (!this.sandboxEnv) {
+      throw new Error(
+        'Sandbox environment not configured. ' +
+          'Set sandboxEnv in FunctionLoaderConfig with LOADER binding for ai-evaluate.'
+      )
+    }
+
+    // Basic code validation
+    if (!code || typeof code !== 'string') {
+      throw new Error('Invalid code: must be a non-empty string')
+    }
+
     try {
-      // Transform ES module syntax to something we can evaluate
-      // Handle "export default { ... }" pattern
-      const transformed = code.replace(/export\s+default\s+/g, 'return ').trim()
+      // Use ai-evaluate for secure sandboxed execution
+      const result: EvaluateResult = await evaluate(
+        {
+          module: code,
+          // Return the module's default export
+          script: `
+            const mod = typeof exports !== 'undefined' ? exports : {};
+            const defaultExport = mod.default || mod;
+            return defaultExport;
+          `,
+          timeout: this.timeout,
+          fetch: false, // Block network access during module evaluation
+        },
+        this.sandboxEnv
+      )
 
-      // Create and execute a function that returns the module
-      const moduleFactory = new Function(transformed)
-      const module = moduleFactory()
+      if (!result.success) {
+        console.warn('Module evaluation failed:', result.error)
+        return { __loadError: result.error || 'Unknown evaluation error' }
+      }
 
-      return module || {}
+      // Return the evaluated module or empty object
+      return (result.value as Record<string, Function | string>) || {}
     } catch (error) {
       // If evaluation fails, return module with error information
       const message = error instanceof Error ? error.message : String(error)
       console.warn('Module evaluation failed:', message)
       return { __loadError: message }
     }
+  }
+
+  /**
+   * Synchronous wrapper for evaluateModuleAsync for backwards compatibility.
+   * This creates a stub that will evaluate the module on first use.
+   *
+   * @param code - The module code to evaluate
+   * @returns A proxy object that evaluates the module on first property access
+   */
+  private evaluateModule(code: string): Record<string, Function | string> {
+    // For synchronous compatibility, we return handlers that will evaluate async
+    // This works because the handlers themselves are async (fetch, connect, etc.)
+    const sandboxEnv = this.sandboxEnv
+    const timeout = this.timeout
+
+    // Cache for the evaluated module
+    let modulePromise: Promise<Record<string, Function | string>> | null = null
+
+    const getModule = async (): Promise<Record<string, Function | string>> => {
+      if (!modulePromise) {
+        modulePromise = this.evaluateModuleAsync(code)
+      }
+      return modulePromise
+    }
+
+    // Return an object with handlers that evaluate the module lazily
+    return {
+      async fetch(request: Request): Promise<Response> {
+        if (!sandboxEnv) {
+          return new Response(JSON.stringify({ error: 'Sandbox environment not configured' }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+
+        try {
+          // Use ai-evaluate to run the fetch handler
+          const result = await evaluate(
+            {
+              module: code,
+              script: `
+                const mod = typeof exports !== 'undefined' ? exports : {};
+                const handler = mod.default || mod;
+                if (handler && typeof handler.fetch === 'function') {
+                  const request = new Request('${request.url}', {
+                    method: '${request.method}',
+                    headers: ${JSON.stringify(Object.fromEntries(request.headers.entries()))},
+                  });
+                  return handler.fetch(request);
+                }
+                throw new Error('No fetch handler found in module');
+              `,
+              timeout: timeout,
+            },
+            sandboxEnv
+          )
+
+          if (!result.success) {
+            return new Response(JSON.stringify({ error: result.error }), {
+              status: 500,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          }
+
+          // If the result is already a Response-like object, return it
+          const value = result.value as { body?: string; status?: number; headers?: Record<string, string> }
+          if (value && typeof value === 'object') {
+            return new Response(
+              value.body || JSON.stringify(value),
+              {
+                status: value.status || 200,
+                headers: value.headers || { 'Content-Type': 'application/json' },
+              }
+            )
+          }
+
+          return new Response(JSON.stringify(value), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return new Response(JSON.stringify({ error: message }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+      },
+    } as Record<string, Function | string>
   }
 
   /**

@@ -239,7 +239,14 @@ export function parsePyprojectToml(content: string): DependencyParseResult {
     if (parsed.tool?.poetry?.dependencies) {
       for (const [name, spec] of Object.entries(parsed.tool.poetry.dependencies)) {
         if (name === 'python') {
-          pythonVersion = typeof spec === 'string' ? spec : (spec as any).version
+          if (typeof spec === 'string') {
+            pythonVersion = spec
+          } else if (typeof spec === 'object' && spec !== null && 'version' in spec) {
+            const specObj = spec as { version: unknown }
+            if (typeof specObj.version === 'string') {
+              pythonVersion = specObj.version
+            }
+          }
           continue
         }
 
@@ -371,11 +378,56 @@ function convertPoetryVersionSpec(spec: string): string {
 }
 
 /**
+ * Type for TOML values - can be primitives, arrays, or nested objects
+ */
+type TomlValue = string | number | boolean | TomlValue[] | TomlObject
+
+/**
+ * Type for parsed TOML object structure
+ */
+interface TomlObject {
+  [key: string]: TomlValue | undefined
+}
+
+/**
+ * Interface for pyproject.toml structure (PEP 621 and Poetry)
+ * This is a more specific type layered on top of TomlObject for type-safe access
+ */
+interface PyprojectToml {
+  project?: {
+    name?: string
+    'requires-python'?: string
+    dependencies?: string[]
+    'optional-dependencies'?: Record<string, string[]>
+    scripts?: Record<string, string>
+    'gui-scripts'?: Record<string, string>
+    'entry-points'?: Record<string, Record<string, string>>
+  }
+  tool?: {
+    poetry?: {
+      name?: string
+      python?: string
+      dependencies?: Record<string, unknown>
+      'dev-dependencies'?: Record<string, unknown>
+      group?: {
+        dev?: {
+          dependencies?: Record<string, unknown>
+        }
+      }
+      scripts?: Record<string, string>
+    }
+  }
+  // Allow additional TOML keys
+  [key: string]: unknown
+}
+
+/**
  * Simple TOML parser for basic pyproject.toml files
  * This handles the subset of TOML needed for dependency parsing
+ * Returns a PyprojectToml which is a more specific type for pyproject.toml files
  */
-function parseTomlSimple(content: string): Record<string, any> {
-  const result: Record<string, any> = {}
+function parseTomlSimple(content: string): PyprojectToml {
+  const result: PyprojectToml = {}
   let currentSection: string[] = []
 
   const lines = content.split('\n')
@@ -444,7 +496,7 @@ function parseTomlSimple(content: string): Record<string, any> {
 /**
  * Parse a TOML value
  */
-function parseTomlValue(value: string): unknown {
+function parseTomlValue(value: string): TomlValue {
   value = value.trim()
 
   // Handle strings
@@ -454,7 +506,6 @@ function parseTomlValue(value: string): unknown {
 
   // Handle multi-line strings
   if (value.startsWith('"""') || value.startsWith("'''")) {
-    const quote = value.substring(0, 3)
     return value.slice(3, -3)
   }
 
@@ -464,7 +515,7 @@ function parseTomlValue(value: string): unknown {
     if (!inner) return []
 
     // Simple array parsing (handles strings and basic values)
-    const items: unknown[] = []
+    const items: TomlValue[] = []
     let current = ''
     let inString = false
     let stringChar = ''
@@ -506,7 +557,7 @@ function parseTomlValue(value: string): unknown {
     const inner = value.slice(1, -1).trim()
     if (!inner) return {}
 
-    const result: Record<string, unknown> = {}
+    const result: TomlObject = {}
     const pairs = inner.split(',')
     for (const pair of pairs) {
       const eqIndex = pair.indexOf('=')
@@ -532,15 +583,24 @@ function parseTomlValue(value: string): unknown {
 
 /**
  * Set a nested value in an object
+ * Works with any object that has string keys
  */
-function setNestedValue(obj: Record<string, any>, path: string[], value: unknown): void {
-  let current = obj
+function setNestedValue(obj: Record<string, unknown>, path: string[], value: TomlValue): void {
+  let current: Record<string, unknown> = obj
   for (let i = 0; i < path.length - 1; i++) {
     const key = path[i]
-    if (!(key in current)) {
+    if (!(key in current) || current[key] === undefined) {
       current[key] = {}
     }
-    current = current[key]
+    const next = current[key]
+    // Ensure we're navigating into an object
+    if (typeof next === 'object' && next !== null && !Array.isArray(next)) {
+      current = next as Record<string, unknown>
+    } else {
+      // Create new object if current value is not an object
+      current[key] = {}
+      current = current[key] as Record<string, unknown>
+    }
   }
   current[path[path.length - 1]] = value
 }

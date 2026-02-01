@@ -203,8 +203,22 @@ export interface PyodideExecutionResult {
   metrics?: ExecutionMetrics
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type PyodideInterface = any
+/**
+ * Interface for the Pyodide runtime module
+ * This represents the external Pyodide API we use internally
+ */
+interface PyodideInterface {
+  runPython(code: string, options?: { globals?: unknown }): unknown
+  runPythonAsync(code: string, options?: { globals?: unknown }): Promise<unknown>
+  loadPackage(packages: string | string[]): Promise<void>
+  pyimport(module: string): { install(packages: string | string[]): Promise<void> }
+  globals: Map<string, unknown>
+  toPy(obj: unknown): unknown
+  isPyProxy?(obj: unknown): boolean
+  _module?: {
+    HEAPU8?: { byteLength: number }
+  }
+}
 
 /**
  * Pyodide runtime instance wrapper
@@ -649,7 +663,9 @@ export async function loadPyodideRuntime(
           if (indexURL) {
             loadOptions.indexURL = indexURL
           }
-          return pyodideModule.loadPyodide(loadOptions)
+          // Cast to PyodideInterface since the external Pyodide types may differ slightly
+          const loaded = await pyodideModule.loadPyodide(loadOptions)
+          return loaded as unknown as PyodideInterface
         }
       } catch {
         // Fallback: try loading from CDN via fetch
@@ -831,7 +847,8 @@ export async function executePyodide(
   }
 
   // Create isolated namespace if requested
-  let namespace = pyodide.globals
+  // The namespace is used to isolate the Python execution context
+  let namespace: unknown = pyodide.globals
   if (isolate) {
     namespace = pyodide.runPython('dict()')
   }
@@ -983,9 +1000,10 @@ _handler_check_result
 import asyncio
 asyncio.iscoroutinefunction(${handlerName})
 `
-    isAsync = isolate
+    const asyncResult = isolate
       ? pyodide.runPython(asyncCheckCode, { globals: namespace })
       : pyodide.runPython(asyncCheckCode)
+    isAsync = asyncResult === true
   } catch {
     // Assume sync if check fails
   }

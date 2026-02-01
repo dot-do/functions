@@ -19,6 +19,7 @@ import type {
   TokenUsage,
   JsonSchema,
 } from '../types.js'
+import { functionId as toFunctionId, type FunctionId } from '../branded-types.js'
 
 // =============================================================================
 // GENERATIVE FUNCTION DEFINITION
@@ -167,7 +168,7 @@ export function defineGenerativeFunction<TInput, TOutput>(
 // =============================================================================
 
 export function generativeFunction<TOutput>(
-  id: string,
+  id: string | FunctionId,
   prompt: string,
   outputSchema: JsonSchema,
   options?: {
@@ -177,8 +178,9 @@ export function generativeFunction<TOutput>(
     examples?: GenerativeExample[]
   }
 ): GenerativeFunctionDefinition<Record<string, unknown>, TOutput> {
+  const funcId = typeof id === 'string' ? toFunctionId(id) : id
   const config: Omit<GenerativeFunctionDefinition<Record<string, unknown>, TOutput>, 'type'> = {
-    id,
+    id: funcId,
     name: options?.name ?? id,
     version: '1.0.0',
     userPrompt: prompt,

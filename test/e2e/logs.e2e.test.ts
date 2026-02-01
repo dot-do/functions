@@ -32,6 +32,7 @@ import {
   deleteFunction,
   getFunctionLogs,
 } from './config'
+import { waitForLogs as waitForLogsUtil, waitForCondition } from './utils'
 
 // ============================================================================
 // Types
@@ -126,10 +127,15 @@ async function getFunctionLogsRaw(
 }
 
 /**
- * Wait for logs to be captured after invocation
+ * Wait for logs to be captured after invocation by polling
+ * Uses the utility function for reliable polling instead of fixed delays
  */
-async function waitForLogs(delayMs: number = 2000): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, delayMs))
+async function waitForLogs(functionId: string, options?: { minCount?: number; timeout?: number }): Promise<void> {
+  const { minCount = 1, timeout = 10000 } = options || {}
+  await waitForLogsUtil(
+    () => getFunctionLogs(functionId, { limit: 100 }),
+    { minCount, timeout, interval: 500, description: 'function logs' }
+  )
 }
 
 // ============================================================================
@@ -280,9 +286,9 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
       // Invoke to generate logs
       await invokeFunction(logTestFunctionId, {})
 
-      // Wait for logs to be captured
-      await waitForLogs()
-    }, E2E_CONFIG.deployInvokeTimeout + 3000)
+      // Wait for logs to be captured by polling
+      await waitForLogs(logTestFunctionId)
+    }, E2E_CONFIG.deployInvokeTimeout + 15000)
 
     it('retrieves logs for a deployed function', async () => {
       const logs = await getFunctionLogs(logTestFunctionId, { limit: 100 })
@@ -320,13 +326,13 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
     it('includes logs from recent invocations', async () => {
       // Invoke again to ensure fresh logs
       await invokeFunction(logTestFunctionId, {})
-      await waitForLogs()
+      await waitForLogs(logTestFunctionId)
 
       const logs = await getFunctionLogs(logTestFunctionId, { limit: 100 })
 
       // Should have logs from recent invocations
       expect(logs.length).toBeGreaterThan(0)
-    }, E2E_CONFIG.invokeTimeout + 3000)
+    }, E2E_CONFIG.invokeTimeout + 15000)
   })
 
   // ==========================================================================
@@ -360,8 +366,8 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
 
       // Invoke to generate logs
       await invokeFunction(formatTestFunctionId, {})
-      await waitForLogs()
-    }, E2E_CONFIG.deployInvokeTimeout + 3000)
+      await waitForLogs(formatTestFunctionId)
+    }, E2E_CONFIG.deployInvokeTimeout + 15000)
 
     it('log entries contain timestamp field', async () => {
       const logs = await getFunctionLogs(formatTestFunctionId, { limit: 100 })
@@ -538,8 +544,9 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
         await new Promise((resolve) => setTimeout(resolve, 500))
       }
 
-      await waitForLogs(3000)
-    }, E2E_CONFIG.deployInvokeTimeout + 15000)
+      // Wait for logs to be captured (expect at least 5 entries from the batches)
+      await waitForLogs(paginationFunctionId, { minCount: 5, timeout: 15000 })
+    }, E2E_CONFIG.deployInvokeTimeout + 25000)
 
     // ========================================================================
     // Limit Parameter Tests
@@ -960,7 +967,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
         // Expected to fail
       }
 
-      await waitForLogs()
+      await waitForLogs(errorFunctionId)
 
       const logs = await getFunctionLogs(errorFunctionId, { limit: 100 })
 
@@ -975,7 +982,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
           l.message.includes('Intentional test error')
       )
       expect(errorLogs.length).toBeGreaterThan(0)
-    }, E2E_CONFIG.deployInvokeTimeout + 3000)
+    }, E2E_CONFIG.deployInvokeTimeout + 15000)
 
     it('logs are scoped to specific function', async () => {
       const functionA = generateTestFunctionId()
@@ -1018,7 +1025,11 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
       await invokeFunction(functionA, {})
       await invokeFunction(functionB, {})
 
-      await waitForLogs()
+      // Wait for logs from both functions
+      await Promise.all([
+        waitForLogs(functionA),
+        waitForLogs(functionB),
+      ])
 
       // Get logs for function A
       const logsA = await getFunctionLogs(functionA, { limit: 100 })
@@ -1058,7 +1069,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
       })
 
       await invokeFunction(rapidFunctionId, {})
-      await waitForLogs()
+      await waitForLogs(rapidFunctionId)
 
       // Make 10 rapid consecutive requests
       const promises = Array.from({ length: 10 }, () =>
@@ -1077,7 +1088,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
       for (const logs of results) {
         expect(logs.length).toBe(firstResultCount)
       }
-    }, E2E_CONFIG.deployInvokeTimeout + 5000)
+    }, E2E_CONFIG.deployInvokeTimeout + 15000)
 
     it('handles very long log messages', async () => {
       const longLogFunctionId = generateTestFunctionId()
@@ -1102,7 +1113,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
       })
 
       await invokeFunction(longLogFunctionId, {})
-      await waitForLogs()
+      await waitForLogs(longLogFunctionId)
 
       const logs = await getFunctionLogs(longLogFunctionId, { limit: 100 })
 
@@ -1114,7 +1125,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
         (l) => l.message.includes('xxx') || l.message.length > 100
       )
       expect(longLog).toBeDefined()
-    }, E2E_CONFIG.deployInvokeTimeout + 3000)
+    }, E2E_CONFIG.deployInvokeTimeout + 15000)
 
     it('logs include JSON objects when logged with console.log', async () => {
       const jsonLogFunctionId = generateTestFunctionId()
@@ -1138,7 +1149,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
       })
 
       await invokeFunction(jsonLogFunctionId, {})
-      await waitForLogs()
+      await waitForLogs(jsonLogFunctionId)
 
       const logs = await getFunctionLogs(jsonLogFunctionId, { limit: 100 })
 
@@ -1147,7 +1158,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
         (l) => l.message.includes('key') && l.message.includes('value')
       )
       expect(jsonLog).toBeDefined()
-    }, E2E_CONFIG.deployInvokeTimeout + 3000)
+    }, E2E_CONFIG.deployInvokeTimeout + 15000)
   })
 
   // ==========================================================================
@@ -1178,7 +1189,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
 
       // Generate some logs
       await invokeFunction(perfFunctionId, {})
-      await waitForLogs()
+      await waitForLogs(perfFunctionId, { minCount: 1 })
 
       const startTime = Date.now()
       await getFunctionLogs(perfFunctionId, { limit: 100 })
@@ -1186,7 +1197,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
 
       // Should complete within 5 seconds
       expect(elapsed).toBeLessThan(5000)
-    }, E2E_CONFIG.deployInvokeTimeout + 10000)
+    }, E2E_CONFIG.deployInvokeTimeout + 20000)
 
     it('pagination does not significantly slow down response', async () => {
       const paginatedPerfFunctionId = generateTestFunctionId()
@@ -1214,7 +1225,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
       for (let i = 0; i < 3; i++) {
         await invokeFunction(paginatedPerfFunctionId, {})
       }
-      await waitForLogs()
+      await waitForLogs(paginatedPerfFunctionId, { minCount: 3 })
 
       // Time fetching multiple pages
       const startTime = Date.now()
@@ -1234,6 +1245,6 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Logs Retrieval', () => {
 
       // Two pages should still be fast
       expect(elapsed).toBeLessThan(5000)
-    }, E2E_CONFIG.deployInvokeTimeout + 15000)
+    }, E2E_CONFIG.deployInvokeTimeout + 25000)
   })
 })

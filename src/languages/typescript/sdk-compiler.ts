@@ -378,7 +378,7 @@ function parseParameter(param: string): FunctionParameter {
         optional: false,
       }
     }
-    return { name: param, type: 'any', optional: false }
+    return { name: param, type: 'unknown', optional: false }
   }
 
   // Handle regular parameters: name?: Type = defaultValue
@@ -396,8 +396,8 @@ function parseParameter(param: string): FunctionParameter {
     return { name, type, optional: !!defaultValue, defaultValue }
   }
 
-  // Just a name with no type
-  return { name: param, type: 'any', optional: false }
+  // Just a name with no type - use unknown for type safety
+  return { name: param, type: 'unknown', optional: false }
 }
 
 /**

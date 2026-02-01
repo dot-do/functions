@@ -10,7 +10,14 @@
 
 // Polyfill Symbol.dispose for environments that don't support it yet
 if (!Symbol.dispose) {
-  ;(Symbol as any).dispose = Symbol.for('dispose')
+  // TypeScript doesn't allow direct assignment to Symbol constructor properties,
+  // so we use Object.defineProperty for the polyfill
+  Object.defineProperty(Symbol, 'dispose', {
+    value: Symbol.for('dispose'),
+    writable: false,
+    enumerable: false,
+    configurable: false
+  })
 }
 
 /**

@@ -7,6 +7,7 @@ import {
   isGenerativeFunction,
   isAgenticFunction,
   isHumanFunction,
+  functionId,
   type AnyFunctionDefinition,
   type CodeFunctionDefinition,
   type GenerativeFunctionDefinition,
@@ -16,7 +17,7 @@ import {
 
 // Test fixtures
 const codeFunction: CodeFunctionDefinition = {
-  id: 'test-code',
+  id: functionId('test-code'),
   name: 'Test Code Function',
   version: '1.0.0',
   type: 'code',
@@ -25,7 +26,7 @@ const codeFunction: CodeFunctionDefinition = {
 }
 
 const generativeFunction: GenerativeFunctionDefinition = {
-  id: 'test-generative',
+  id: functionId('test-generative'),
   name: 'Test Generative Function',
   version: '1.0.0',
   type: 'generative',
@@ -34,7 +35,7 @@ const generativeFunction: GenerativeFunctionDefinition = {
 }
 
 const agenticFunction: AgenticFunctionDefinition = {
-  id: 'test-agentic',
+  id: functionId('test-agentic'),
   name: 'Test Agentic Function',
   version: '1.0.0',
   type: 'agentic',
@@ -44,7 +45,7 @@ const agenticFunction: AgenticFunctionDefinition = {
 }
 
 const humanFunction: HumanFunctionDefinition = {
-  id: 'test-human',
+  id: functionId('test-human'),
   name: 'Test Human Function',
   version: '1.0.0',
   type: 'human',

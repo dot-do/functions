@@ -169,8 +169,16 @@ interface MockDurableObjectState {
  *
  * Stores metrics in memory with support for various query methods
  * and export formats (Prometheus, OpenMetrics, JSON).
+ *
+ * Uses a rolling window pattern to prevent unbounded memory growth.
+ * Old entries are automatically pruned when limits are exceeded.
  */
 export class MetricsCollector {
+  /** Maximum number of invocation records to keep */
+  private readonly MAX_INVOCATIONS = 10000
+  /** Maximum number of rate limit hit records to keep */
+  private readonly MAX_RATE_LIMIT_HITS = 1000
+
   private invocations: InvocationRecord[] = []
   private rateLimitHits: RateLimitHit[] = []
   private state: MockDurableObjectState
@@ -183,6 +191,9 @@ export class MetricsCollector {
 
   /**
    * Record a function invocation
+   *
+   * Automatically prunes old entries when the maximum limit is exceeded
+   * to prevent unbounded memory growth.
    */
   recordInvocation(functionId: string, options: InvocationOptions): void {
     const record: InvocationRecord = {
@@ -202,10 +213,18 @@ export class MetricsCollector {
     }
 
     this.invocations.push(record)
+
+    // Prune old entries if limit exceeded (keep most recent entries)
+    if (this.invocations.length > this.MAX_INVOCATIONS) {
+      this.invocations = this.invocations.slice(-this.MAX_INVOCATIONS)
+    }
   }
 
   /**
    * Record a rate limit hit
+   *
+   * Automatically prunes old entries when the maximum limit is exceeded
+   * to prevent unbounded memory growth.
    */
   recordRateLimitHit(functionId: string, clientIp: string): void {
     this.rateLimitHits.push({
@@ -213,6 +232,11 @@ export class MetricsCollector {
       clientIp,
       timestamp: Date.now(),
     })
+
+    // Prune old entries if limit exceeded (keep most recent entries)
+    if (this.rateLimitHits.length > this.MAX_RATE_LIMIT_HITS) {
+      this.rateLimitHits = this.rateLimitHits.slice(-this.MAX_RATE_LIMIT_HITS)
+    }
   }
 
   /**

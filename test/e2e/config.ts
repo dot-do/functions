@@ -10,6 +10,7 @@ import {
   clearTokenCache,
   type AuthStrategy,
 } from './auth'
+import { waitForCondition } from './utils'
 
 /**
  * E2E Test Configuration
@@ -310,10 +311,27 @@ export async function deployAndUploadFunction(params: {
     }
   }
 
-  // Wait for KV propagation before returning
-  // Cloudflare KV has eventual consistency, so we need to wait a bit
-  // for the code to be available across all edge locations
-  await new Promise(resolve => setTimeout(resolve, 2000))
+  // Wait for KV propagation by polling the function info endpoint
+  // Cloudflare KV has eventual consistency, so we poll until the function is available
+  await waitForCondition(
+    async () => {
+      try {
+        const response = await fetch(`${E2E_CONFIG.baseUrl}/functions/${params.id}/info`, {
+          headers: await getE2EAuthHeaders(),
+        })
+        if (!response.ok) return false
+        const info = await response.json() as { version?: string }
+        return info.version === (params.version || '1.0.0')
+      } catch {
+        return false
+      }
+    },
+    {
+      timeout: 15000,
+      interval: 500,
+      description: `function ${params.id} to be available with version ${params.version || '1.0.0'}`,
+    }
+  )
 
   return result
 }

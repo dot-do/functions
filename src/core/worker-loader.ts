@@ -13,6 +13,7 @@
 
 import type { WorkerStub, CacheStats, WorkerLoaderOptions } from './types'
 import type { CircuitBreakerConfig, CircuitBreakerState, CircuitState } from './function-loader'
+import { evaluate, type SandboxEnv, type EvaluateResult } from 'ai-evaluate'
 
 /**
  * Logger interface for WorkerLoader debugging
@@ -778,118 +779,100 @@ export class WorkerLoader {
         }
       }
 
-      // In-process evaluation fallback (for test environments)
-      // Set up SDK globals if configured
+      // In-process evaluation fallback using ai-evaluate
+      // This provides sandboxed execution even without Miniflare
       const sdkConfig = funcOptions?.sdk
-      if (sdkConfig) {
-        (globalThis as Record<string, unknown>).__SDK_CONFIG__ = sdkConfig;
-        (globalThis as Record<string, unknown>).$ = {};
-        (globalThis as Record<string, unknown>).db = {};
-        (globalThis as Record<string, unknown>).ai = {};
-        (globalThis as Record<string, unknown>).api = {}
-      }
-
-      // Check if network should be blocked
       const blockNetwork = funcOptions?.fetch === null
-
-      // Transform user code to capture export default
-      const transformedCode = code.replace(
-        /export\s+default\s+/g,
-        'module.exports = '
-      )
-
-      // Create exports container
-      const exports: Record<string, unknown> = {}
-      const moduleObj = { exports }
-
-      // Parse and execute the user's code to get the default export
-      let userDefault: { fetch?: (request: Request) => Promise<Response> } | null = null
-      let compilationError: string | null = null
-
-      try {
-        // Execute the module code to populate exports and capture default
-        // Note: The code runs in the current context. Dynamic imports like import('fs')
-        // will fail in Workerd because Node.js modules are not available.
-        const moduleFunction = new Function('exports', 'module', 'Request', 'Response', transformedCode)
-        moduleFunction(exports, moduleObj, Request, Response)
-        userDefault = moduleObj.exports as { fetch?: (request: Request) => Promise<Response> }
-        Object.assign(exports, moduleObj.exports)
-      } catch (error) {
-        // Code compilation error - will be returned on fetch
-        // Include the error name (e.g., "SyntaxError") in the message for better diagnostics
-        const err = error as Error
-        compilationError = err.name ? `${err.name}: ${err.message}` : (err.message || String(error))
-        this.logger.error('Code compilation error', { id, error: compilationError })
-      }
-
-      // Create a sandboxed fetch wrapper that blocks network if configured
-      const sandboxedFetch = blockNetwork
-        ? async () => { throw new Error('Network access is disabled in this sandbox. fetch() calls are blocked.') }
-        : globalThis.fetch
-
-      // Create a stub that executes user code with sandbox protections
-      // Logs array to capture console output - shared with result
-      const capturedLogs: Array<{ level: string; message: string }> = []
-
-      // Set up console capture for the stub
-      const originalConsole = {
-        log: console.log,
-        warn: console.warn,
-        error: console.error,
-        info: console.info,
-        debug: console.debug,
-      }
-
-      const captureConsole = () => {
-        console.log = (...args: unknown[]) => {
-          capturedLogs.push({ level: 'log', message: args.map(String).join(' ') })
-          originalConsole.log(...args)
-        }
-        console.warn = (...args: unknown[]) => {
-          capturedLogs.push({ level: 'warn', message: args.map(String).join(' ') })
-          originalConsole.warn(...args)
-        }
-        console.error = (...args: unknown[]) => {
-          capturedLogs.push({ level: 'error', message: args.map(String).join(' ') })
-          originalConsole.error(...args)
-        }
-        console.info = (...args: unknown[]) => {
-          capturedLogs.push({ level: 'info', message: args.map(String).join(' ') })
-          originalConsole.info(...args)
-        }
-        console.debug = (...args: unknown[]) => {
-          capturedLogs.push({ level: 'debug', message: args.map(String).join(' ') })
-          originalConsole.debug(...args)
-        }
-      }
-
-      const restoreConsole = () => {
-        console.log = originalConsole.log
-        console.warn = originalConsole.warn
-        console.error = originalConsole.error
-        console.info = originalConsole.info
-        console.debug = originalConsole.debug
-      }
+      const executionTimeout = funcOptions?.timeout ?? this.options.timeout
 
       // Reference to this loader for updating result
       const loaderRef = this
       const functionId = id
+      const userCode = code
 
-      // Capture the timeout for this function
-      const executionTimeout = funcOptions?.timeout ?? this.options.timeout
-
+      // Create a stub that executes user code via ai-evaluate
       const stub: WorkerStub = {
         id,
         fetch: async (request: Request) => {
-          // Record start time for execution duration
           const startTime = Date.now()
 
-          // If there was a compilation error, return it
-          if (compilationError) {
+          try {
+            // Use ai-evaluate for sandboxed execution
+            const result: EvaluateResult = await evaluate(
+              {
+                module: userCode,
+                script: `
+                  const mod = typeof exports !== 'undefined' ? exports : {};
+                  const handler = mod.default || mod;
+                  if (handler && typeof handler.fetch === 'function') {
+                    const req = new Request('${request.url}', {
+                      method: '${request.method}',
+                      headers: ${JSON.stringify(Object.fromEntries(request.headers.entries()))},
+                    });
+                    return handler.fetch(req);
+                  }
+                  return { exports: Object.keys(mod) };
+                `,
+                timeout: executionTimeout,
+                fetch: blockNetwork ? false : true,
+                sdk: sdkConfig ? { context: 'local' } : undefined,
+              },
+              // Use loaderBinding as SandboxEnv if available
+              loaderRef.loaderBinding ? { LOADER: loaderRef.loaderBinding } as SandboxEnv : undefined
+            )
+
             const duration = Date.now() - startTime
+
+            // Update logs in loaded functions
+            const existingResult = loaderRef.loadedFunctions.get(functionId)
+            if (existingResult) {
+              existingResult.logs = result.logs.map(l => ({ level: l.level, message: l.message }))
+            }
+
+            if (!result.success) {
+              return new Response(JSON.stringify({
+                success: false,
+                error: result.error,
+              }), {
+                status: 500,
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-Execution-Duration': String(duration),
+                },
+              })
+            }
+
+            // If the result is a Response-like object, convert it
+            const value = result.value as { body?: string; status?: number; headers?: Record<string, string> } | Response
+            if (value && typeof value === 'object') {
+              if ('body' in value || 'status' in value) {
+                return new Response(
+                  value.body || JSON.stringify(value),
+                  {
+                    status: value.status || 200,
+                    headers: {
+                      ...(value.headers || { 'Content-Type': 'application/json' }),
+                      'X-Execution-Duration': String(duration),
+                    },
+                  }
+                )
+              }
+            }
+
+            return new Response(JSON.stringify(value), {
+              status: 200,
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Execution-Duration': String(duration),
+              },
+            })
+          } catch (error) {
+            const duration = Date.now() - startTime
+            const err = error as Error
             return new Response(JSON.stringify({
               success: false,
-              error: compilationError,
+              error: err.message || String(error),
+              stack: err.stack,
             }), {
               status: 500,
               headers: {
@@ -898,94 +881,8 @@ export class WorkerLoader {
               },
             })
           }
-
-          // Execute the user's fetch handler if available
-          if (userDefault && typeof userDefault.fetch === 'function') {
-            // Store original fetch and replace with sandboxed version
-            const originalFetch = globalThis.fetch
-            if (blockNetwork) {
-              (globalThis as Record<string, unknown>).fetch = sandboxedFetch
-            }
-
-            // Start capturing console output
-            captureConsole()
-
-            // Create a timeout promise that rejects after the configured timeout
-            const timeoutPromise = new Promise<Response>((_, reject) => {
-              setTimeout(() => {
-                reject(new Error('Execution timeout exceeded'))
-              }, executionTimeout)
-            })
-
-            try {
-              // Race the user's fetch handler against the timeout
-              const response = await Promise.race([
-                userDefault.fetch(request),
-                timeoutPromise
-              ])
-
-              // Update the loadedFunctions result with captured logs
-              const existingResult = loaderRef.loadedFunctions.get(functionId)
-              if (existingResult) {
-                existingResult.logs = [...capturedLogs]
-              }
-
-              // Calculate execution duration and add to response headers
-              const duration = Date.now() - startTime
-              const newHeaders = new Headers(response.headers)
-              newHeaders.set('X-Execution-Duration', String(duration))
-
-              return new Response(response.body, {
-                status: response.status,
-                statusText: response.statusText,
-                headers: newHeaders,
-              })
-            } catch (userError) {
-              // Return sandbox/user errors as JSON error response with stack trace
-              const err = userError as Error
-              const errorMessage = err.message || String(userError)
-              const stack = err.stack
-
-              // Update the loadedFunctions result with captured logs
-              const existingResult = loaderRef.loadedFunctions.get(functionId)
-              if (existingResult) {
-                existingResult.logs = [...capturedLogs]
-              }
-
-              const duration = Date.now() - startTime
-              return new Response(JSON.stringify({
-                success: false,
-                error: errorMessage,
-                stack: stack,
-              }), {
-                status: 500,
-                headers: {
-                  'Content-Type': 'application/json',
-                  'X-Execution-Duration': String(duration),
-                },
-              })
-            } finally {
-              // Restore original fetch and console
-              if (blockNetwork) {
-                (globalThis as Record<string, unknown>).fetch = originalFetch
-              }
-              restoreConsole()
-            }
-          }
-
-          // No fetch handler - return default response
-          const duration = Date.now() - startTime
-          return new Response(JSON.stringify({
-            exports: Object.keys(exports),
-            moduleExports: Object.keys(moduleObj.exports),
-          }), {
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Execution-Duration': String(duration),
-            },
-          })
         },
-        connect: async () => new Response('Not supported in test mode'),
+        connect: async () => new Response('Not supported in development mode'),
         scheduled: async () => {},
         queue: async () => {},
       }
@@ -999,16 +896,16 @@ export class WorkerLoader {
       this.recordSuccess(id)
 
       const loadTime = Date.now() - start
-      this.logger.info('Function loaded via in-process evaluation', { id, loadTimeMs: loadTime })
+      this.logger.info('Function loaded via ai-evaluate sandbox', { id, loadTimeMs: loadTime })
 
-      // Execute script and/or tests if provided
+      // Execute script and/or tests if provided using ai-evaluate
       let scriptValue: unknown
       let testResults: LoadFunctionResult['testResults'] | undefined
       let scriptTestSuccess = true
 
-      if ((script || tests) && !compilationError) {
+      if (script || tests) {
         const evalResult = await this.evaluateInProcess({
-          code: transformedCode,
+          code: code,
           tests,
           script,
           sdk: sdkConfig,
@@ -1019,8 +916,7 @@ export class WorkerLoader {
       }
 
       const result: LoadFunctionResult = {
-        success: !compilationError && scriptTestSuccess,
-        error: compilationError ?? undefined,
+        success: scriptTestSuccess,
         value: scriptValue,
         logs: [],
         testResults,
@@ -1320,8 +1216,8 @@ globalThis.api = {};
   }
 
   /**
-   * In-process evaluation for test environments where Miniflare is not available.
-   * This provides a simpler execution model for unit testing.
+   * In-process evaluation for test environments using ai-evaluate.
+   * This provides sandboxed execution via worker_loaders.
    */
   private async evaluateInProcess(options: {
     code: string
@@ -1335,239 +1231,182 @@ globalThis.api = {};
     testResults?: LoadFunctionResult['testResults']
   }> {
     const { code, tests, script, sdk } = options
-    const logs: Array<{ level: string; message: string }> = []
-
-    // Create exports container
-    const exports: Record<string, unknown> = {}
-    const module = { exports }
-
-    // Set up SDK globals if configured
-    if (sdk) {
-      (globalThis as Record<string, unknown>).__SDK_CONFIG__ = sdk;
-      (globalThis as Record<string, unknown>).$ = {};
-      (globalThis as Record<string, unknown>).db = {};
-      (globalThis as Record<string, unknown>).ai = {};
-      (globalThis as Record<string, unknown>).api = {}
-    }
 
     try {
-      // Execute the module code to populate exports
-      const moduleFunction = new Function('exports', 'module', code)
-      moduleFunction(exports, module)
+      // Use ai-evaluate for sandboxed execution
+      const result: EvaluateResult = await evaluate(
+        {
+          module: code,
+          tests: tests,
+          script: script,
+          timeout: this.options.timeout,
+          fetch: true,
+          sdk: sdk ? { context: 'local' } : undefined,
+        },
+        // Use loaderBinding as SandboxEnv if available
+        this.loaderBinding ? { LOADER: this.loaderBinding } as SandboxEnv : undefined
+      )
 
-      // Merge module.exports into exports
-      Object.assign(exports, module.exports)
-
-      // Run tests if provided
+      // Convert ai-evaluate test results to our format
       let testResults: LoadFunctionResult['testResults'] | undefined
-
-      if (tests) {
-        testResults = await this.runInProcessTests(tests, exports)
+      if (result.testResults) {
+        testResults = {
+          total: result.testResults.total,
+          passed: result.testResults.passed,
+          failed: result.testResults.failed,
+          tests: result.testResults.tests.map(t => ({
+            name: t.name,
+            passed: t.passed,
+            error: t.error,
+          })),
+        }
       }
 
-      // Run script if provided
-      let value: unknown
-
-      if (script) {
-        // Create a context with exports available
-        const scriptContext: Record<string, unknown> = { ...exports }
-        const scriptFunction = new Function(
-          ...Object.keys(scriptContext),
-          script
-        )
-        value = await scriptFunction(...Object.values(scriptContext))
+      return {
+        success: result.success,
+        value: result.value,
+        logs: result.logs.map(l => ({ level: l.level, message: l.message })),
+        testResults,
       }
-
-      const success = testResults ? testResults.failed === 0 : true
-
-      return { success, value, logs, testResults }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
-      logs.push({ level: 'error', message: errorMessage })
-      return { success: false, logs }
+      return {
+        success: false,
+        logs: [{ level: 'error', message: errorMessage }],
+      }
     }
   }
 
   /**
-   * Run vitest-style tests in-process against module exports.
+   * Run vitest-style tests using ai-evaluate.
+   * Tests are executed in a sandboxed environment via worker_loaders.
    */
   private async runInProcessTests(
     testCode: string,
     moduleExports: Record<string, unknown>
   ): Promise<NonNullable<LoadFunctionResult['testResults']>> {
-    const tests: Array<{ name: string; fn: () => void | Promise<void> }> = []
-    const describes: string[] = []
+    try {
+      // Build module code that exports the existing exports
+      const moduleCode = `
+        export default ${JSON.stringify(moduleExports)};
+        ${Object.entries(moduleExports)
+          .map(([key, value]) => `export const ${key} = ${JSON.stringify(value)};`)
+          .join('\n')}
+      `
 
-    // Test framework implementation
-    const describe = (name: string, fn: () => void) => {
-      describes.push(name)
-      fn()
-      describes.pop()
-    }
+      // Use ai-evaluate for sandboxed test execution
+      const result: EvaluateResult = await evaluate(
+        {
+          module: moduleCode,
+          tests: testCode,
+          timeout: this.options.timeout,
+          fetch: true,
+        },
+        // Use loaderBinding as SandboxEnv if available
+        this.loaderBinding ? { LOADER: this.loaderBinding } as SandboxEnv : undefined
+      )
 
-    const it = (name: string, fn: () => void | Promise<void>) => {
-      const fullName = [...describes, name].join(' > ')
-      tests.push({ name: fullName, fn })
-    }
+      // Convert ai-evaluate test results to our format
+      if (result.testResults) {
+        return {
+          total: result.testResults.total,
+          passed: result.testResults.passed,
+          failed: result.testResults.failed,
+          tests: result.testResults.tests.map(t => ({
+            name: t.name,
+            passed: t.passed,
+            error: t.error,
+          })),
+        }
+      }
 
-    const test = it
-
-    const expect = (actual: unknown) => ({
-      toBe(expected: unknown) {
-        if (actual !== expected) {
-          throw new Error(`Expected ${JSON.stringify(expected)} but got ${JSON.stringify(actual)}`)
-        }
-      },
-      toEqual(expected: unknown) {
-        if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-          throw new Error(`Expected ${JSON.stringify(expected)} but got ${JSON.stringify(actual)}`)
-        }
-      },
-      toBeTruthy() {
-        if (!actual) {
-          throw new Error(`Expected truthy value but got ${JSON.stringify(actual)}`)
-        }
-      },
-      toBeFalsy() {
-        if (actual) {
-          throw new Error(`Expected falsy value but got ${JSON.stringify(actual)}`)
-        }
-      },
-      toContain(expected: string) {
-        if (!String(actual).includes(expected)) {
-          throw new Error(`Expected ${JSON.stringify(actual)} to contain ${JSON.stringify(expected)}`)
-        }
-      },
-      toMatch(pattern: RegExp) {
-        if (!pattern.test(String(actual))) {
-          throw new Error(`Expected ${JSON.stringify(actual)} to match ${pattern}`)
-        }
-      },
-      toThrow(expected?: string) {
-        let threw = false
-        let error: Error | null = null
-        try {
-          (actual as () => void)()
-        } catch (e) {
-          threw = true
-          error = e as Error
-        }
-        if (!threw) {
-          throw new Error('Expected function to throw but it did not')
-        }
-        if (expected && !String(error?.message).includes(expected)) {
-          throw new Error(`Expected error message to contain ${expected} but got ${error?.message}`)
-        }
-      },
-    })
-
-    // Create execution context with exports available as globals
-    const contextKeys = Object.keys(moduleExports)
-    const contextValues = Object.values(moduleExports)
-
-    // Execute test code to register tests
-    const testFunction = new Function(
-      'describe', 'it', 'test', 'expect',
-      ...contextKeys,
-      testCode
-    )
-    testFunction(describe, it, test, expect, ...contextValues)
-
-    // Run all registered tests
-    const results: NonNullable<LoadFunctionResult['testResults']> = {
-      total: tests.length,
-      passed: 0,
-      failed: 0,
-      tests: [],
-    }
-
-    for (const t of tests) {
-      try {
-        await t.fn()
-        results.passed++
-        results.tests.push({ name: t.name, passed: true })
-      } catch (e) {
-        results.failed++
-        results.tests.push({
-          name: t.name,
-          passed: false,
-          error: e instanceof Error ? e.message : String(e),
-        })
+      // No test results - return empty
+      return {
+        total: 0,
+        passed: 0,
+        failed: 0,
+        tests: [],
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      return {
+        total: 1,
+        passed: 0,
+        failed: 1,
+        tests: [{ name: 'Test execution', passed: false, error: errorMessage }],
       }
     }
-
-    return results
   }
 
   /**
-   * Execute user code with timeout handling.
-   * Parses the user code to extract the default export's fetch handler and executes it.
+   * Execute user code with timeout handling using ai-evaluate.
+   * Uses sandboxed execution via worker_loaders.
    */
   private async executeUserCode(code: string, request: Request, signal: AbortSignal): Promise<Response> {
-    // Create a promise that races the execution against the abort signal
-    return new Promise<Response>((resolve, reject) => {
-      // Set up abort handler
+    // Check if already aborted
+    if (signal.aborted) {
+      throw new Error('Execution timeout exceeded')
+    }
+
+    try {
+      // Use ai-evaluate for sandboxed execution
+      const result: EvaluateResult = await evaluate(
+        {
+          module: code,
+          script: `
+            const mod = typeof exports !== 'undefined' ? exports : {};
+            const handler = mod.default || mod;
+            if (handler && typeof handler.fetch === 'function') {
+              const req = new Request('${request.url}', {
+                method: '${request.method}',
+                headers: ${JSON.stringify(Object.fromEntries(request.headers.entries()))},
+              });
+              return handler.fetch(req);
+            }
+            throw new Error('No fetch handler found in module');
+          `,
+          timeout: this.options.timeout,
+          fetch: true,
+        },
+        // Use loaderBinding as SandboxEnv if available
+        this.loaderBinding ? { LOADER: this.loaderBinding } as SandboxEnv : undefined
+      )
+
       if (signal.aborted) {
-        reject(new Error('Execution timeout exceeded'))
-        return
+        throw new Error('Execution timeout exceeded')
       }
 
-      const abortHandler = () => {
-        reject(new Error('Execution timeout exceeded'))
-      }
-      signal.addEventListener('abort', abortHandler, { once: true })
-
-      // Execute the user code
-      const executeAsync = async () => {
-        try {
-          // Create exports container
-          const exports: Record<string, unknown> = {}
-          const module = { exports }
-
-          // Parse and execute the module code to get the default export
-          // We need to handle ES module syntax: export default { async fetch() {} }
-          // Transform it to CommonJS-style for evaluation
-          let transformedCode = code
-
-          // Handle 'export default' pattern
-          if (code.includes('export default')) {
-            transformedCode = code.replace(/export\s+default\s+/, 'module.exports = ')
-          }
-
-          // Execute the code to get exports
-          const moduleFunction = new Function('exports', 'module', 'Request', 'Response', transformedCode)
-          moduleFunction(exports, module, Request, Response)
-
-          // Get the default export (fetch handler)
-          const handler = module.exports as { fetch?: (request: Request) => Promise<Response> }
-
-          if (!handler || typeof handler.fetch !== 'function') {
-            signal.removeEventListener('abort', abortHandler)
-            resolve(new Response(JSON.stringify({
-              error: 'No fetch handler found in module',
-            }), {
-              status: 500,
-              headers: { 'Content-Type': 'application/json' },
-            }))
-            return
-          }
-
-          // Execute the fetch handler
-          const response = await handler.fetch(request)
-          signal.removeEventListener('abort', abortHandler)
-          resolve(response)
-        } catch (error) {
-          signal.removeEventListener('abort', abortHandler)
-          if (signal.aborted) {
-            reject(new Error('Execution timeout exceeded'))
-          } else {
-            reject(error)
-          }
-        }
+      if (!result.success) {
+        return new Response(JSON.stringify({
+          error: result.error,
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        })
       }
 
-      executeAsync()
-    })
+      // If the result is a Response-like object, convert it
+      const value = result.value as { body?: string; status?: number; headers?: Record<string, string> }
+      if (value && typeof value === 'object') {
+        return new Response(
+          value.body || JSON.stringify(value),
+          {
+            status: value.status || 200,
+            headers: value.headers || { 'Content-Type': 'application/json' },
+          }
+        )
+      }
+
+      return new Response(JSON.stringify(value), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    } catch (error) {
+      if (signal.aborted) {
+        throw new Error('Execution timeout exceeded')
+      }
+      throw error
+    }
   }
 
   /**

@@ -113,7 +113,7 @@ describe('LRU Cache Performance', () => {
       const smallLoader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 100,
+                maxCacheSize: 100,
         retry: { maxRetries: 0 }, // Disable retries for faster tests
       })
       const smallTime = await measureEvictionTime(smallLoader, 100)
@@ -122,7 +122,7 @@ describe('LRU Cache Performance', () => {
       const largeLoader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 10000,
+                maxCacheSize: 10000,
         retry: { maxRetries: 0 },
       })
       const largeTime = await measureEvictionTime(largeLoader, 10000)
@@ -143,7 +143,7 @@ describe('LRU Cache Performance', () => {
       const loader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 1000,
+                maxCacheSize: 1000,
         retry: { maxRetries: 0 },
       })
 
@@ -188,7 +188,7 @@ describe('LRU Cache Performance', () => {
       const loader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 5,
+                maxCacheSize: 5,
         retry: { maxRetries: 0 },
       })
 
@@ -227,7 +227,7 @@ describe('LRU Cache Performance', () => {
       const loader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 3,
+                maxCacheSize: 3,
         retry: { maxRetries: 0 },
       })
 
@@ -266,7 +266,7 @@ describe('LRU Cache Performance', () => {
       const loader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 3,
+                maxCacheSize: 3,
         retry: { maxRetries: 0 },
       })
 
@@ -300,7 +300,7 @@ describe('LRU Cache Performance', () => {
       const loader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 10,
+                maxCacheSize: 10,
         retry: { maxRetries: 0 },
       })
 
@@ -326,7 +326,7 @@ describe('LRU Cache Performance', () => {
       const loader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 20,
+                maxCacheSize: 20,
         retry: { maxRetries: 0 },
       })
 
@@ -364,7 +364,7 @@ describe('LRU Cache Performance', () => {
       const loader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 5,
+                maxCacheSize: 5,
         retry: { maxRetries: 0 },
       })
 
@@ -401,7 +401,7 @@ describe('LRU Cache Performance', () => {
       const loader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 10,
+                maxCacheSize: 10,
         retry: { maxRetries: 0 },
       })
 
@@ -424,7 +424,7 @@ describe('LRU Cache Performance', () => {
       const loader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 100,
+                maxCacheSize: 100,
         retry: { maxRetries: 0 },
       })
 

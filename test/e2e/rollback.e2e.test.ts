@@ -30,6 +30,7 @@ import {
   invokeFunction,
   deleteFunction,
 } from './config'
+import { waitForFunctionResult } from './utils'
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -364,14 +365,16 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Rollback', () => {
       // Rollback to v1.0.0
       await rollbackFunction(verifyFunctionId, '1.0.0')
 
-      // Wait for propagation
-      await new Promise((resolve) => setTimeout(resolve, 1000))
+      // Poll for propagation instead of fixed delay
+      result = await waitForFunctionResult(
+        () => invokeFunction<{ version: string; data: string }>(verifyFunctionId),
+        (r) => r.version === '1.0.0',
+        { timeout: 10000, interval: 500, description: 'function to rollback to v1.0.0' }
+      )
 
-      // Now invoking should return v1.0.0
-      result = await invokeFunction<{ version: string; data: string }>(verifyFunctionId)
       expect(result.version).toBe('1.0.0')
       expect(result.data).toBe('v1-data')
-    }, E2E_CONFIG.invokeTimeout * 2 + 2000)
+    }, E2E_CONFIG.invokeTimeout * 2 + 15000)
 
     it('function info shows rolled-back version as current', async () => {
       const info = await getFunctionInfo(verifyFunctionId)
@@ -554,13 +557,15 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Rollback', () => {
       // Rollback to v1.0.0
       await rollbackFunction(functionId, '1.0.0')
 
-      // Wait for propagation
-      await new Promise((resolve) => setTimeout(resolve, 1000))
+      // Poll for propagation instead of fixed delay
+      result = await waitForFunctionResult(
+        () => invokeFunction<{ version: string }>(functionId),
+        (r) => r.version === '1.0.0',
+        { timeout: 10000, interval: 500, description: 'function to rollback to v1.0.0' }
+      )
 
-      // Now it should work again
-      result = await invokeFunction<{ version: string }>(functionId)
       expect(result.version).toBe('1.0.0')
-    }, E2E_CONFIG.deployTimeout * 2 + E2E_CONFIG.invokeTimeout * 3 + 2000)
+    }, E2E_CONFIG.deployTimeout * 2 + E2E_CONFIG.invokeTimeout * 3 + 15000)
 
     it('multiple rollbacks in sequence', async () => {
       const functionId = generateTestFunctionId()
@@ -580,24 +585,33 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Rollback', () => {
       let result = await invokeFunction<{ version: string }>(functionId)
       expect(result.version).toBe('3.0.0')
 
-      // Rollback to v2.0.0
+      // Rollback to v2.0.0 and poll for propagation
       await rollbackFunction(functionId, '2.0.0')
-      await new Promise((resolve) => setTimeout(resolve, 500))
-      result = await invokeFunction<{ version: string }>(functionId)
+      result = await waitForFunctionResult(
+        () => invokeFunction<{ version: string }>(functionId),
+        (r) => r.version === '2.0.0',
+        { timeout: 10000, interval: 500, description: 'function to rollback to v2.0.0' }
+      )
       expect(result.version).toBe('2.0.0')
 
-      // Rollback to v1.0.0
+      // Rollback to v1.0.0 and poll for propagation
       await rollbackFunction(functionId, '1.0.0')
-      await new Promise((resolve) => setTimeout(resolve, 500))
-      result = await invokeFunction<{ version: string }>(functionId)
+      result = await waitForFunctionResult(
+        () => invokeFunction<{ version: string }>(functionId),
+        (r) => r.version === '1.0.0',
+        { timeout: 10000, interval: 500, description: 'function to rollback to v1.0.0' }
+      )
       expect(result.version).toBe('1.0.0')
 
-      // Rollback back to v3.0.0
+      // Rollback back to v3.0.0 and poll for propagation
       await rollbackFunction(functionId, '3.0.0')
-      await new Promise((resolve) => setTimeout(resolve, 500))
-      result = await invokeFunction<{ version: string }>(functionId)
+      result = await waitForFunctionResult(
+        () => invokeFunction<{ version: string }>(functionId),
+        (r) => r.version === '3.0.0',
+        { timeout: 10000, interval: 500, description: 'function to rollback to v3.0.0' }
+      )
       expect(result.version).toBe('3.0.0')
-    }, E2E_CONFIG.deployTimeout * 3 + E2E_CONFIG.invokeTimeout * 4 + 5000)
+    }, E2E_CONFIG.deployTimeout * 3 + E2E_CONFIG.invokeTimeout * 4 + 45000)
 
     it('deploy new version after rollback', async () => {
       const functionId = generateTestFunctionId()
@@ -680,21 +694,24 @@ describe.skipIf(!shouldRunE2E())('E2E: Function Rollback', () => {
         version: '2.0.0',
       })
 
-      // Rollback to v1.0.0
+      // Rollback to v1.0.0 and poll for propagation
       await rollbackFunction(functionId, '1.0.0')
-      await new Promise((resolve) => setTimeout(resolve, 1000))
 
       // v1.0.0 behavior should be restored (including parsing body)
-      const result = await invokeFunction<{
-        version: string
-        config: string
-        receivedKey?: string
-      }>(functionId, { key: 'test-value' })
+      const result = await waitForFunctionResult(
+        () => invokeFunction<{
+          version: string
+          config: string
+          receivedKey?: string
+        }>(functionId, { key: 'test-value' }),
+        (r) => r.version === '1.0.0',
+        { timeout: 10000, interval: 500, description: 'function to rollback to v1.0.0' }
+      )
 
       expect(result.version).toBe('1.0.0')
       expect(result.config).toBe('v1-config')
       expect(result.receivedKey).toBe('test-value')
-    }, E2E_CONFIG.deployTimeout * 2 + E2E_CONFIG.invokeTimeout + 2000)
+    }, E2E_CONFIG.deployTimeout * 2 + E2E_CONFIG.invokeTimeout + 15000)
   })
 
   // ===========================================================================

@@ -225,8 +225,10 @@ export class CascadeExecutor<TInput = unknown, TOutput = unknown> {
           previousTier = tier
 
           // Extract partial result if available
-          if ((error as any)?.partialResult !== undefined) {
-            previousResult = (error as any).partialResult
+          // Error objects may have a partialResult property attached for partial success scenarios
+          const errorWithPartial = error as Error & { partialResult?: unknown }
+          if (errorWithPartial?.partialResult !== undefined) {
+            previousResult = errorWithPartial.partialResult
           }
 
           // If this is not the last retry attempt, continue retrying

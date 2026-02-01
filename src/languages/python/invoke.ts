@@ -45,6 +45,18 @@ export class PythonTimeoutError extends Error {
 }
 
 /**
+ * Validates that a string is a valid Python identifier.
+ * Python identifiers must start with a letter or underscore,
+ * followed by letters, digits, or underscores.
+ *
+ * @param name - The string to validate
+ * @returns true if the name is a valid Python identifier, false otherwise
+ */
+export function isValidPythonIdentifier(name: string): boolean {
+  return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)
+}
+
+/**
  * Invokes a Python function with the specified handler and arguments.
  *
  * @param code - The Python source code containing the handler function
@@ -168,6 +180,11 @@ function killProcess(process: ChildProcessWithoutNullStreams): void {
  * Builds the Python wrapper script that executes user code and returns JSON result.
  */
 function buildPythonWrapper(code: string, handlerName: string, args: unknown[]): string {
+  // Validate handler name to prevent code injection
+  if (!isValidPythonIdentifier(handlerName)) {
+    throw new Error(`Invalid handler name: ${handlerName}. Must be a valid Python identifier.`)
+  }
+
   // Serialize arguments to JSON for passing to Python
   const argsJson = JSON.stringify(args)
 

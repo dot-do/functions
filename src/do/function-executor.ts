@@ -184,6 +184,138 @@ interface Env {
 }
 
 // ============================================================================
+// SQL QUERY HELPERS
+// ============================================================================
+
+/**
+ * SQL parameter value types supported by the query builders.
+ * These map to SQLite's native types.
+ */
+export type SqlValue = string | number | boolean | null
+
+/**
+ * Named SQL parameters object.
+ * Keys are column names, values are the corresponding SQL values.
+ */
+export interface SqlParams {
+  [key: string]: SqlValue
+}
+
+/**
+ * Result of building a parameterized query.
+ * Contains the SQL string with placeholders and the ordered values array.
+ */
+export interface BuiltQuery {
+  /** The SQL query string with ? placeholders */
+  sql: string
+  /** The ordered parameter values matching the placeholders */
+  values: SqlValue[]
+}
+
+/**
+ * Build a parameterized INSERT query from named parameters.
+ *
+ * This prevents parameter ordering mistakes by using an object-based approach
+ * where column names and values are kept together.
+ *
+ * @example
+ * ```typescript
+ * const { sql, values } = buildInsertQuery('users', {
+ *   id: 'abc123',
+ *   name: 'John',
+ *   age: 30
+ * })
+ * // sql: "INSERT INTO users (id, name, age) VALUES (?, ?, ?)"
+ * // values: ['abc123', 'John', 30]
+ * ```
+ */
+export function buildInsertQuery(table: string, params: SqlParams): BuiltQuery {
+  const keys = Object.keys(params)
+  const placeholders = keys.map(() => '?').join(', ')
+  return {
+    sql: `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`,
+    values: keys.map(k => params[k])
+  }
+}
+
+/**
+ * Build a parameterized UPDATE query from named parameters.
+ *
+ * This prevents parameter ordering mistakes by using an object-based approach
+ * where column names and values are kept together.
+ *
+ * @example
+ * ```typescript
+ * const { sql, values } = buildUpdateQuery('users',
+ *   { name: 'Jane', age: 31 },  // SET params
+ *   { id: 'abc123' }            // WHERE params
+ * )
+ * // sql: "UPDATE users SET name = ?, age = ? WHERE id = ?"
+ * // values: ['Jane', 31, 'abc123']
+ * ```
+ */
+export function buildUpdateQuery(
+  table: string,
+  setParams: SqlParams,
+  whereParams: SqlParams
+): BuiltQuery {
+  const setKeys = Object.keys(setParams)
+  const whereKeys = Object.keys(whereParams)
+
+  const setClause = setKeys.map(k => `${k} = ?`).join(', ')
+  const whereClause = whereKeys.map(k => `${k} = ?`).join(' AND ')
+
+  return {
+    sql: `UPDATE ${table} SET ${setClause} WHERE ${whereClause}`,
+    values: [
+      ...setKeys.map(k => setParams[k]),
+      ...whereKeys.map(k => whereParams[k])
+    ]
+  }
+}
+
+/**
+ * Build a parameterized DELETE query from named parameters.
+ *
+ * @example
+ * ```typescript
+ * const { sql, values } = buildDeleteQuery('users', { id: 'abc123' })
+ * // sql: "DELETE FROM users WHERE id = ?"
+ * // values: ['abc123']
+ * ```
+ */
+export function buildDeleteQuery(table: string, whereParams: SqlParams): BuiltQuery {
+  const keys = Object.keys(whereParams)
+  const whereClause = keys.map(k => `${k} = ?`).join(' AND ')
+  return {
+    sql: `DELETE FROM ${table} WHERE ${whereClause}`,
+    values: keys.map(k => whereParams[k])
+  }
+}
+
+/**
+ * Build a parameterized DELETE query with a comparison operator.
+ *
+ * @example
+ * ```typescript
+ * const { sql, values } = buildDeleteQueryWithOperator('logs', 'start_time', '<', cutoffTime)
+ * // sql: "DELETE FROM logs WHERE start_time < ?"
+ * // values: [cutoffTime]
+ * ```
+ */
+export function buildDeleteQueryWithOperator(
+  table: string,
+  column: string,
+  operator: '<' | '>' | '<=' | '>=' | '=' | '!=',
+  value: SqlValue
+): BuiltQuery {
+  return {
+    sql: `DELETE FROM ${table} WHERE ${column} ${operator} ?`,
+    values: [value]
+  }
+}
+
+// ============================================================================
 // FUNCTION EXECUTOR DURABLE OBJECT
 // ============================================================================
 
@@ -670,21 +802,26 @@ export class FunctionExecutor {
 
   /**
    * Persist the start of an execution
+   *
+   * Uses buildInsertQuery helper to ensure parameter safety and prevent
+   * ordering mistakes with positional SQL parameters.
    */
   private persistLogStart(executionId: string, functionId: string, startTime: number): void {
-    this.ctx.storage.sql.exec(
-      `INSERT INTO execution_logs (id, function_id, start_time, success, console_output)
-       VALUES (?, ?, ?, ?, ?)`,
-      executionId,
-      functionId,
-      startTime,
-      0, // Not yet successful
-      '[]'
-    )
+    const { sql, values } = buildInsertQuery('execution_logs', {
+      id: executionId,
+      function_id: functionId,
+      start_time: startTime,
+      success: 0, // Not yet successful
+      console_output: '[]'
+    })
+    this.ctx.storage.sql.exec(sql, ...values)
   }
 
   /**
    * Persist the end of an execution
+   *
+   * Uses buildUpdateQuery helper to ensure parameter safety and prevent
+   * ordering mistakes with positional SQL parameters.
    */
   private persistLogEnd(
     executionId: string,
@@ -694,18 +831,19 @@ export class FunctionExecutor {
     consoleOutput: ConsoleOutput[],
     metrics: ExecutionMetrics
   ): void {
-    this.ctx.storage.sql.exec(
-      `UPDATE execution_logs
-       SET end_time = ?, duration = ?, success = ?, error = ?, console_output = ?, metrics = ?
-       WHERE id = ?`,
-      endTime,
-      metrics.durationMs,
-      success ? 1 : 0,
-      error,
-      JSON.stringify(consoleOutput),
-      JSON.stringify(metrics),
-      executionId
+    const { sql, values } = buildUpdateQuery(
+      'execution_logs',
+      {
+        end_time: endTime,
+        duration: metrics.durationMs,
+        success: success ? 1 : 0,
+        error: error,
+        console_output: JSON.stringify(consoleOutput),
+        metrics: JSON.stringify(metrics)
+      },
+      { id: executionId }
     )
+    this.ctx.storage.sql.exec(sql, ...values)
   }
 
   /**
@@ -780,16 +918,21 @@ export class FunctionExecutor {
 
   /**
    * Cleanup old logs based on retention policy
+   *
+   * Uses buildDeleteQueryWithOperator helper for parameter safety.
    */
   async cleanupOldLogs(): Promise<void> {
     this.initializeSchema()
 
     const cutoffTime = Date.now() - this.config.logRetentionMs
 
-    this.ctx.storage.sql.exec(
-      `DELETE FROM execution_logs WHERE start_time < ?`,
+    const { sql, values } = buildDeleteQueryWithOperator(
+      'execution_logs',
+      'start_time',
+      '<',
       cutoffTime
     )
+    this.ctx.storage.sql.exec(sql, ...values)
   }
 
   // ===========================================================================

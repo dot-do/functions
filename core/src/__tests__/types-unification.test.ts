@@ -35,6 +35,7 @@ import {
   type FunctionInvocation,
   parseDuration,
 } from '../types.js'
+import { functionId, executionId } from '../branded-types.js'
 
 // After unification, these should also be exported from core/src/types.ts
 // Import Worker Loader types that will be consolidated
@@ -70,7 +71,7 @@ describe('Type Unification', () => {
 
     it('should export FunctionDefinition interface with required fields', () => {
       const def: FunctionDefinition = {
-        id: 'test-func',
+        id: functionId('test-func'),
         name: 'Test Function',
         version: '1.0.0',
         type: 'code',
@@ -87,8 +88,8 @@ describe('Type Unification', () => {
 
       statuses.forEach(status => {
         const result: FunctionResult = {
-          executionId: 'exec-1',
-          functionId: 'func-1',
+          executionId: executionId('exec-1'),
+          functionId: functionId('func-1'),
           functionVersion: '1.0.0',
           status,
           metrics: {
@@ -338,7 +339,7 @@ describe('Type Unification', () => {
 
     it('should allow ExecutionContext to work with both abstract and runtime types', () => {
       const context: ExecutionContext = {
-        executionId: 'exec-1',
+        executionId: executionId('exec-1'),
         traceId: 'trace-1',
         timeout: '30s',
       }

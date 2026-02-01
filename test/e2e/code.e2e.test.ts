@@ -25,6 +25,7 @@ import {
   deleteFunction,
   getFunctionLogs,
 } from './config'
+import { waitForLogs } from './utils'
 
 /**
  * Helper to get function info via API
@@ -188,10 +189,11 @@ describe.skipIf(!shouldRunE2E())('E2E: Code Function Lifecycle', () => {
       // First invoke to generate some logs
       await invokeFunction(lifecycleFunctionId, { name: 'LogTest' })
 
-      // Wait a bit for logs to be captured
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-
-      const logs = await getFunctionLogs(lifecycleFunctionId, { limit: 10 })
+      // Poll for logs to be captured (avoids flaky fixed delays)
+      const logs = await waitForLogs(
+        () => getFunctionLogs(lifecycleFunctionId, { limit: 10 }),
+        { timeout: 10000, interval: 500, minCount: 0, description: 'function logs' }
+      )
 
       expect(Array.isArray(logs)).toBe(true)
       // Logs may or may not be present depending on implementation
@@ -201,7 +203,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Code Function Lifecycle', () => {
         expect(logs[0]).toHaveProperty('level')
         expect(logs[0]).toHaveProperty('message')
       }
-    }, E2E_CONFIG.invokeTimeout)
+    }, E2E_CONFIG.invokeTimeout + 5000)
 
     it('deletes the function', async () => {
       await deleteFunction(lifecycleFunctionId)
@@ -494,17 +496,18 @@ describe.skipIf(!shouldRunE2E())('E2E: Code Function Lifecycle', () => {
       // Invoke to trigger the error
       await invokeFunctionRaw(functionId, {})
 
-      // Wait for logs to be captured
-      await new Promise((resolve) => setTimeout(resolve, 2000))
-
-      const logs = await getFunctionLogs(functionId, { limit: 50 })
+      // Poll for logs to be captured (avoids flaky fixed delays)
+      const logs = await waitForLogs(
+        () => getFunctionLogs(functionId, { limit: 50 }),
+        { timeout: 10000, interval: 500, minCount: 1, description: 'error logs' }
+      )
 
       // Logs should contain the error
       const errorLogs = logs.filter((log) =>
         log.level === 'error' || log.message.includes('error') || log.message.includes('Error')
       )
       expect(errorLogs.length).toBeGreaterThan(0)
-    }, E2E_CONFIG.deployInvokeTimeout + 5000)
+    }, E2E_CONFIG.deployInvokeTimeout + 15000)
 
     it('handles syntax errors at deploy time gracefully', async () => {
       const functionId = generateTestFunctionId()

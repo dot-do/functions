@@ -22,6 +22,7 @@ import type {
   JsonSchema,
 } from '../types.js'
 import type { AIModel } from '../generative/index.js'
+import type { FunctionId } from '../branded-types.js'
 
 // =============================================================================
 // AGENTIC FUNCTION DEFINITION
@@ -81,7 +82,7 @@ export interface ToolDefinition {
 
   /** Tool implementation reference */
   implementation:
-    | { type: 'function'; functionId: string }       // Another function
+    | { type: 'function'; functionId: FunctionId }   // Another function
     | { type: 'api'; endpoint: string }              // HTTP API call
     | { type: 'inline'; handler: string }            // Inline code
     | { type: 'builtin'; name: BuiltinTool }         // Built-in tool

@@ -21,6 +21,7 @@ import type {
   ExecutionContext,
   JsonSchema,
 } from '../types.js'
+import { functionId as toFunctionId, type FunctionId } from '../branded-types.js'
 
 // =============================================================================
 // HUMAN FUNCTION DEFINITION
@@ -409,7 +410,7 @@ export function defineHumanFunction<TInput, TOutput>(
 // =============================================================================
 
 export function approvalFunction<TInput>(
-  id: string,
+  id: string | FunctionId,
   title: string,
   options?: {
     description?: string
@@ -418,6 +419,7 @@ export function approvalFunction<TInput>(
     sla?: SLAConfig
   }
 ): HumanFunctionDefinition<TInput, { approved: boolean; comment?: string }> {
+  const funcId = typeof id === 'string' ? toFunctionId(id) : id
   const ui: HumanUI = {
     title,
     quickActions: [
@@ -454,7 +456,7 @@ export function approvalFunction<TInput>(
   }
 
   const config: Omit<HumanFunctionDefinition<TInput, { approved: boolean; comment?: string }>, 'type'> = {
-    id,
+    id: funcId,
     name: title,
     version: '1.0.0',
     interactionType: 'approval',
@@ -474,7 +476,7 @@ export function approvalFunction<TInput>(
 // =============================================================================
 
 export function inputFunction<TOutput>(
-  id: string,
+  id: string | FunctionId,
   title: string,
   form: FormField[],
   options?: {
@@ -483,6 +485,7 @@ export function inputFunction<TOutput>(
     context?: UIContext[]
   }
 ): HumanFunctionDefinition<unknown, TOutput> {
+  const funcId = typeof id === 'string' ? toFunctionId(id) : id
   const ui: HumanUI = {
     title,
     form,
@@ -495,7 +498,7 @@ export function inputFunction<TOutput>(
   }
 
   const config: Omit<HumanFunctionDefinition<unknown, TOutput>, 'type'> = {
-    id,
+    id: funcId,
     name: title,
     version: '1.0.0',
     interactionType: 'input',

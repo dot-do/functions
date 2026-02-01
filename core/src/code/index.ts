@@ -22,6 +22,7 @@ import type {
   Duration,
   JsonSchema,
 } from '../types.js'
+import { functionId as toFunctionId, type FunctionId } from '../branded-types.js'
 
 // =============================================================================
 // CODE FUNCTION DEFINITION
@@ -58,8 +59,8 @@ export type CodeSource =
   | { type: 'inline'; code: string }
   | { type: 'r2'; bucket: string; key: string }
   | { type: 'url'; url: string }
-  | { type: 'registry'; functionId: string; version?: string }
-  | { type: 'assets'; functionId: string; version?: string }
+  | { type: 'registry'; functionId: FunctionId; version?: string }
+  | { type: 'assets'; functionId: FunctionId; version?: string }
 
 // =============================================================================
 // CODE FUNCTION CONFIG
@@ -170,7 +171,7 @@ export function defineCodeFunction<TInput, TOutput>(
 // =============================================================================
 
 export function inlineFunction<TInput, TOutput>(
-  id: string,
+  id: string | FunctionId,
   code: string,
   options?: {
     name?: string
@@ -179,8 +180,9 @@ export function inlineFunction<TInput, TOutput>(
     outputSchema?: JsonSchema
   }
 ): CodeFunctionDefinition<TInput, TOutput> {
+  const funcId = typeof id === 'string' ? toFunctionId(id) : id
   const config: Omit<CodeFunctionDefinition<TInput, TOutput>, 'type'> = {
-    id,
+    id: funcId,
     name: options?.name ?? id,
     version: '1.0.0',
     language: options?.language ?? 'typescript',

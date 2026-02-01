@@ -43,6 +43,7 @@ export default defineConfig({
       'src/core/__tests__/kv-registry.test.ts',
       'src/core/__tests__/lru-benchmark.test.ts',
       'src/core/__tests__/rate-limiter.test.ts',
+      'src/core/__tests__/routing-utils.test.ts',
       'src/core/__tests__/ts-strip.test.ts',
       'src/core/cascade-constants.test.ts',
       // Schema tests

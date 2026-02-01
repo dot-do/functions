@@ -22,6 +22,7 @@ import {
   shouldRunE2E,
   deleteFunction,
 } from './config'
+import { waitForCondition } from './utils'
 
 // ============================================================================
 // Human Function Types
@@ -1287,8 +1288,14 @@ describe.skipIf(!shouldRunE2E())('E2E: Human Function Deploy and Invoke', () => 
       // Verify task has expiration time
       expect(invokeResult.expiresAt).toBeDefined()
 
-      // Wait for timeout (10 seconds + buffer)
-      await new Promise((resolve) => setTimeout(resolve, 12000))
+      // Poll for task to expire instead of fixed delay
+      await waitForCondition(
+        async () => {
+          const status = await getTaskStatus(invokeResult.taskId)
+          return status.status === 'expired'
+        },
+        { timeout: 20000, interval: 1000, description: 'task to expire' }
+      )
 
       // Check status - should be expired
       const taskStatus = await getTaskStatus(invokeResult.taskId)
@@ -1313,8 +1320,14 @@ describe.skipIf(!shouldRunE2E())('E2E: Human Function Deploy and Invoke', () => 
       const invokeResult = await invokeHumanFunction(functionId)
       createdTasks.push(invokeResult.taskId)
 
-      // Wait for expiration
-      await new Promise((resolve) => setTimeout(resolve, 12000))
+      // Poll for task to expire instead of fixed delay
+      await waitForCondition(
+        async () => {
+          const status = await getTaskStatus(invokeResult.taskId)
+          return status.status === 'expired'
+        },
+        { timeout: 20000, interval: 1000, description: 'task to expire' }
+      )
 
       // Try to submit response - should fail
       await expect(

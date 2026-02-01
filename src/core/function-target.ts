@@ -120,6 +120,14 @@ export interface AggregatedMetrics {
   totalBytesSent: number
   /** Total bytes received */
   totalBytesReceived: number
+  /** Number of requests dropped due to capacity limits */
+  droppedRequests: number
+  /** Number of stale requests cleaned up */
+  staleRequestsCleanedUp: number
+  /** Current number of in-flight requests */
+  currentInFlightRequests: number
+  /** Current pending batch size */
+  currentPendingBatchSize: number
 }
 
 /**
@@ -519,7 +527,12 @@ function createPipelineProxy(
     },
   }
 
-  return new Proxy(thenable as any, {
+  // Cast thenable to PipelineThenable for type-safe proxy handling
+  const typedThenable: PipelineThenable = thenable
+
+  // Create a typed proxy handler to avoid using 'any' in the Proxy constructor
+  // The Proxy transforms a PipelineThenable into a PipelinedPromise by intercepting property access
+  const proxyHandler: ProxyHandler<PipelineThenable> = {
     get(innerTarget, prop) {
       // Return built-in Promise methods directly
       if (prop === 'then' || prop === 'catch' || prop === 'finally') {
@@ -538,7 +551,7 @@ function createPipelineProxy(
 
       // Handle other properties - chain as new pipeline operation
       if (typeof prop === 'string') {
-        const { target: funcTarget, operations: ops, lastId: currentLastId } = innerTarget.__state as PipelineState
+        const { target: funcTarget, operations: ops, lastId: currentLastId } = innerTarget.__state
         // Return a function that creates a new operation
         return (...args: unknown[]) => {
           const opId = generateRequestId()
@@ -553,7 +566,22 @@ function createPipelineProxy(
 
       return undefined
     },
-  }) as PipelinedPromise
+  }
+
+  // The proxy is cast through unknown because the Proxy transforms the type from
+  // PipelineThenable to PipelinedPromise via its handler
+  return new Proxy(typedThenable, proxyHandler) as unknown as PipelinedPromise
+}
+
+/**
+ * Base thenable type for pipeline proxy
+ * This is the internal structure before proxying
+ */
+interface PipelineThenable {
+  __state: PipelineState
+  then(onfulfilled?: (value: unknown) => unknown, onrejected?: (reason: unknown) => unknown): Promise<unknown>
+  catch(onrejected?: (reason: unknown) => unknown): Promise<unknown>
+  finally(onfinally?: () => void): Promise<unknown>
 }
 
 /**
@@ -663,6 +691,13 @@ interface PendingBatchItem {
  * - Performance metrics
  */
 export class FunctionTarget extends RpcTarget {
+  // Memory safety limits
+  private static readonly MAX_IN_FLIGHT_REQUESTS = 10000
+  private static readonly MAX_PENDING_BATCH = 10000
+  private static readonly STALE_REQUEST_THRESHOLD_MS = 60000 // 1 minute
+  private static readonly CLEANUP_INTERVAL_MS = 30000 // 30 seconds
+  private static readonly WARN_THRESHOLD_PERCENT = 0.8 // Warn at 80% capacity
+
   private stub: WorkerStub
   private _options: ResolvedFunctionTargetOptions
   private _disposed: boolean = false
@@ -679,6 +714,9 @@ export class FunctionTarget extends RpcTarget {
   private _pendingBatch: PendingBatchItem[] = []
   private _batchTimer: ReturnType<typeof setTimeout> | null = null
 
+  // Cleanup timer for stale requests
+  private _cleanupTimer: ReturnType<typeof setInterval> | null = null
+
   // Metrics
   private _latencySamples: number[] = []
   private _totalRequests: number = 0
@@ -686,6 +724,8 @@ export class FunctionTarget extends RpcTarget {
   private _batchedRequests: number = 0
   private _totalBytesSent: number = 0
   private _totalBytesReceived: number = 0
+  private _droppedRequests: number = 0
+  private _staleRequestsCleanedUp: number = 0
 
   constructor(stub: WorkerStub, options: FunctionTargetOptions = {}) {
     super()
@@ -712,6 +752,71 @@ export class FunctionTarget extends RpcTarget {
 
     // Initialize tracing
     this._traceId = options.parentTraceId ?? generateTraceId()
+
+    // Start periodic cleanup for stale requests
+    this._cleanupTimer = setInterval(() => {
+      this.cleanupStaleRequests()
+    }, FunctionTarget.CLEANUP_INTERVAL_MS)
+
+    // Prevent cleanup timer from keeping the process alive
+    if (typeof this._cleanupTimer.unref === 'function') {
+      this._cleanupTimer.unref()
+    }
+  }
+
+  /**
+   * Clean up stale in-flight requests to prevent memory leaks
+   */
+  private cleanupStaleRequests(): void {
+    const now = Date.now()
+    let cleanedCount = 0
+
+    for (const [key, request] of this._inFlightRequests) {
+      if (now - request.timestamp > FunctionTarget.STALE_REQUEST_THRESHOLD_MS) {
+        this._inFlightRequests.delete(key)
+        cleanedCount++
+      }
+    }
+
+    if (cleanedCount > 0) {
+      this._staleRequestsCleanedUp += cleanedCount
+      console.warn(
+        `[FunctionTarget] Cleaned up ${cleanedCount} stale in-flight requests. ` +
+        `Total cleaned: ${this._staleRequestsCleanedUp}`
+      )
+    }
+  }
+
+  /**
+   * Check if in-flight requests are approaching capacity and log warning
+   */
+  private checkInFlightCapacity(): void {
+    const currentSize = this._inFlightRequests.size
+    const warnThreshold = FunctionTarget.MAX_IN_FLIGHT_REQUESTS * FunctionTarget.WARN_THRESHOLD_PERCENT
+
+    if (currentSize >= warnThreshold) {
+      console.warn(
+        `[FunctionTarget] In-flight requests at ${currentSize}/${FunctionTarget.MAX_IN_FLIGHT_REQUESTS} ` +
+        `(${Math.round((currentSize / FunctionTarget.MAX_IN_FLIGHT_REQUESTS) * 100)}% capacity). ` +
+        `Consider reducing request rate or increasing timeout.`
+      )
+    }
+  }
+
+  /**
+   * Check if pending batch is approaching capacity and log warning
+   */
+  private checkPendingBatchCapacity(): void {
+    const currentSize = this._pendingBatch.length
+    const warnThreshold = FunctionTarget.MAX_PENDING_BATCH * FunctionTarget.WARN_THRESHOLD_PERCENT
+
+    if (currentSize >= warnThreshold) {
+      console.warn(
+        `[FunctionTarget] Pending batch at ${currentSize}/${FunctionTarget.MAX_PENDING_BATCH} ` +
+        `(${Math.round((currentSize / FunctionTarget.MAX_PENDING_BATCH) * 100)}% capacity). ` +
+        `Consider reducing batch window or request rate.`
+      )
+    }
   }
 
   /**
@@ -777,6 +882,10 @@ export class FunctionTarget extends RpcTarget {
       p99LatencyMs: len > 0 ? (samples[Math.floor(len * 0.99)] ?? 0) : 0,
       totalBytesSent: this._totalBytesSent,
       totalBytesReceived: this._totalBytesReceived,
+      droppedRequests: this._droppedRequests,
+      staleRequestsCleanedUp: this._staleRequestsCleanedUp,
+      currentInFlightRequests: this._inFlightRequests.size,
+      currentPendingBatchSize: this._pendingBatch.length,
     }
   }
 
@@ -790,6 +899,8 @@ export class FunctionTarget extends RpcTarget {
     this._batchedRequests = 0
     this._totalBytesSent = 0
     this._totalBytesReceived = 0
+    this._droppedRequests = 0
+    this._staleRequestsCleanedUp = 0
   }
 
   /**
@@ -910,9 +1021,28 @@ export class FunctionTarget extends RpcTarget {
       ? this.enqueueForBatch(requestBody, span)
       : this.executeRequest(requestBody, span)
 
-    // Track for deduplication
+    // Track for deduplication (with capacity check)
     if (this._options.enableDeduplication) {
       const requestKey = generateRequestKey(methodName, args)
+
+      // Check capacity before adding
+      this.checkInFlightCapacity()
+
+      // Enforce maximum limit - if at capacity, clean up stale entries first
+      if (this._inFlightRequests.size >= FunctionTarget.MAX_IN_FLIGHT_REQUESTS) {
+        this.cleanupStaleRequests()
+
+        // If still at capacity after cleanup, skip tracking (request will still execute)
+        if (this._inFlightRequests.size >= FunctionTarget.MAX_IN_FLIGHT_REQUESTS) {
+          console.warn(
+            `[FunctionTarget] In-flight requests at maximum capacity (${FunctionTarget.MAX_IN_FLIGHT_REQUESTS}). ` +
+            `Skipping deduplication tracking for this request.`
+          )
+          this._droppedRequests++
+          return createPropertyProxy(promise, [])
+        }
+      }
+
       const inFlight: InFlightRequest = {
         promise,
         requestKey,
@@ -939,6 +1069,19 @@ export class FunctionTarget extends RpcTarget {
    * Enqueue a request for batching
    */
   private enqueueForBatch(requestBody: RpcRequest, span: SpanContext): Promise<unknown> {
+    // Check capacity before adding to batch
+    this.checkPendingBatchCapacity()
+
+    // Enforce maximum limit on pending batch
+    if (this._pendingBatch.length >= FunctionTarget.MAX_PENDING_BATCH) {
+      console.warn(
+        `[FunctionTarget] Pending batch at maximum capacity (${FunctionTarget.MAX_PENDING_BATCH}). ` +
+        `Flushing batch before adding new request.`
+      )
+      // Force flush to make room
+      this.flushBatch()
+    }
+
     return new Promise((resolve, reject) => {
       const item: PendingBatchItem = {
         request: requestBody,
@@ -1273,6 +1416,12 @@ export class FunctionTarget extends RpcTarget {
    */
   [Symbol.dispose](): void {
     this._disposed = true
+
+    // Stop cleanup timer
+    if (this._cleanupTimer) {
+      clearInterval(this._cleanupTimer)
+      this._cleanupTimer = null
+    }
 
     // Flush pending batch
     if (this._batchTimer) {

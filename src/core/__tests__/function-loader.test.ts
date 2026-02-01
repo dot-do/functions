@@ -175,6 +175,8 @@ describe('FunctionLoader', () => {
     loader = new FunctionLoader({
       registry: mockRegistry,
       codeStorage: mockCodeStorage,
+      // Note: sandboxEnv is not set, so evaluateModule will return handlers that error
+      // Tests that need actual code execution should provide a mock sandboxEnv
       retry: {
         maxRetries: 3,
         initialDelayMs: 100,
@@ -570,7 +572,7 @@ describe('FunctionLoader', () => {
       const configuredLoader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 100,
+                maxCacheSize: 100,
         timeout: 5000,
       })
 
@@ -581,7 +583,7 @@ describe('FunctionLoader', () => {
       const smallCacheLoader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 1,
+                maxCacheSize: 1,
       })
 
       // Load first function
@@ -865,7 +867,7 @@ describe('FunctionLoader', () => {
       const fallbackLoader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        gracefulDegradation: true,
+                gracefulDegradation: true,
         fallbackVersion: '0.9.0',
         retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0, backoffMultiplier: 1, jitter: false },
       })
@@ -1222,7 +1224,7 @@ describe('FunctionLoader', () => {
         codeStorage: {
           get: vi.fn(async () => largeCode),
         },
-        maxCacheSize: 3,
+                maxCacheSize: 3,
         retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0, backoffMultiplier: 1, jitter: false },
       })
 
@@ -1249,7 +1251,7 @@ describe('FunctionLoader', () => {
       const rapidLoader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 5,
+                maxCacheSize: 5,
         retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0, backoffMultiplier: 1, jitter: false },
       })
 
@@ -1311,7 +1313,7 @@ describe('FunctionLoader', () => {
       const concurrentLoader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 10,
+                maxCacheSize: 10,
         retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0, backoffMultiplier: 1, jitter: false },
       })
 
@@ -1379,7 +1381,7 @@ describe('FunctionLoader', () => {
       const exactCapacityLoader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 5,
+                maxCacheSize: 5,
         retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0, backoffMultiplier: 1, jitter: false },
       })
 
@@ -1458,7 +1460,7 @@ describe('FunctionLoader', () => {
       const overflowLoader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 3,
+                maxCacheSize: 3,
         retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0, backoffMultiplier: 1, jitter: false },
       })
 
@@ -1511,7 +1513,7 @@ describe('FunctionLoader', () => {
       const lruLoader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        maxCacheSize: 3,
+                maxCacheSize: 3,
         retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0, backoffMultiplier: 1, jitter: false },
       })
 
@@ -1617,7 +1619,7 @@ describe('FunctionLoader', () => {
         codeStorage: {
           get: vi.fn(async (id: string) => createModerateCode(id)),
         },
-        maxCacheSize: 5,
+                maxCacheSize: 5,
         retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0, backoffMultiplier: 1, jitter: false },
       })
 
@@ -1758,7 +1760,7 @@ describe('FunctionLoader', () => {
       const limitedLoader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0, backoffMultiplier: 1, jitter: false },
+                retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0, backoffMultiplier: 1, jitter: false },
         circuitBreaker: {
           failureThreshold: 3,
           resetTimeoutMs: 1000,
@@ -1819,7 +1821,7 @@ describe('FunctionLoader', () => {
       const limitedLoader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0, backoffMultiplier: 1, jitter: false },
+                retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0, backoffMultiplier: 1, jitter: false },
         circuitBreaker: {
           failureThreshold: 3,
           resetTimeoutMs: 1000,
@@ -1873,7 +1875,7 @@ describe('FunctionLoader', () => {
       const limitedLoader = new FunctionLoader({
         registry: mockRegistry,
         codeStorage: mockCodeStorage,
-        retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0, backoffMultiplier: 1, jitter: false },
+                retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0, backoffMultiplier: 1, jitter: false },
         circuitBreaker: {
           failureThreshold: 3,
           resetTimeoutMs: 1000,
