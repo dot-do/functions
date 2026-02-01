@@ -1,0 +1,54 @@
+{
+  "name": "@dotdo/functions",
+  "version": "0.0.1",
+  "description": "Abstract function types for 4 execution paradigms: Code, Generative, Agentic, Human",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./code": {
+      "types": "./dist/code/index.d.ts",
+      "import": "./dist/code/index.js"
+    },
+    "./generative": {
+      "types": "./dist/generative/index.d.ts",
+      "import": "./dist/generative/index.js"
+    },
+    "./agentic": {
+      "types": "./dist/agentic/index.d.ts",
+      "import": "./dist/agentic/index.js"
+    },
+    "./human": {
+      "types": "./dist/human/index.d.ts",
+      "import": "./dist/human/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ai-evaluate": "^2.1.5",
+    "ai-functions": "^0.1.0",
+    "digital-workers": "^0.1.0",
+    "human-in-the-loop": "^0.1.0",
+    "autonomous-agents": "^0.1.0"
+  },
+  "keywords": [
+    "functions",
+    "serverless",
+    "ai",
+    "agentic",
+    "human-in-the-loop"
+  ],
+  "license": "MIT"
+}

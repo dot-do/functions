@@ -15,7 +15,8 @@ const SEMVER_RANGE_PATTERN = /^(\^|~|>=?|<=?|=)?(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z0
 
 /**
  * Validate function ID format.
- * Must be 1-255 characters, alphanumeric with hyphens and underscores, no leading/trailing hyphens or underscores.
+ * Must be 1-64 characters, start with a letter, alphanumeric with single hyphens and underscores,
+ * no leading/trailing/consecutive hyphens or underscores.
  *
  * @param id - The function ID to validate
  * @throws ValidationError if the ID format is invalid
@@ -25,21 +26,28 @@ export function validateFunctionId(id: string): void {
     throw new ValidationError('Invalid function ID: ID is required', { field: 'id' })
   }
 
-  if (id.length > 255) {
-    throw new ValidationError('Invalid function ID: ID must be 255 characters or less', { field: 'id', length: id.length })
+  if (id.length > 64) {
+    throw new ValidationError('Invalid function ID: ID must be 64 characters or less', { field: 'id', length: id.length })
   }
 
-  // Single character IDs must be alphanumeric
-  if (id.length === 1) {
-    if (!/^[a-zA-Z0-9]$/.test(id)) {
-      throw new ValidationError('Invalid function ID: must be alphanumeric', { field: 'id', value: id })
-    }
-    return
+  // Must start with a letter (not a number)
+  if (!/^[a-zA-Z]/.test(id)) {
+    throw new ValidationError('Invalid function ID: must start with a letter', { field: 'id', value: id })
   }
 
-  // Multi-character IDs: alphanumeric + hyphens + underscores, no leading/trailing hyphens or underscores
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*[a-zA-Z0-9]$/.test(id)) {
-    throw new ValidationError('Invalid function ID: must be alphanumeric with hyphens and underscores, no leading/trailing hyphens or underscores', { field: 'id', value: id })
+  // Must not start or end with hyphen or underscore
+  if (/^[-_]|[-_]$/.test(id)) {
+    throw new ValidationError('Invalid function ID: cannot start or end with hyphen or underscore', { field: 'id', value: id })
+  }
+
+  // Must not have consecutive hyphens or underscores
+  if (/--|__/.test(id)) {
+    throw new ValidationError('Invalid function ID: cannot have consecutive hyphens or underscores', { field: 'id', value: id })
+  }
+
+  // Must only contain alphanumeric, hyphens, and underscores
+  if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(id)) {
+    throw new ValidationError('Invalid function ID: must contain only letters, numbers, hyphens, and underscores', { field: 'id', value: id })
   }
 }
 

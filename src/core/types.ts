@@ -179,16 +179,28 @@ export interface VersionHistory {
 
 /**
  * Parse a semantic version string into components.
+ * Strictly validates semantic versioning (no leading zeros, no 'v' prefix).
  *
  * @param version - The version string (e.g., "1.2.3", "1.0.0-beta.1+build.123")
  * @returns Parsed semantic version or null if invalid
  */
 export function parseVersion(version: string): SemanticVersion | null {
+  // Reject versions that start with 'v' prefix
+  if (version.startsWith('v') || version.startsWith('V')) {
+    return null
+  }
+
   // Semantic version regex: major.minor.patch[-prerelease][+build]
-  const regex = /^(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z0-9.-]+))?(?:\+([a-zA-Z0-9.-]+))?$/
+  // Uses non-capturing groups for zero prevention: no leading zeros except for 0 itself
+  const regex = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([a-zA-Z0-9.-]+))?(?:\+([a-zA-Z0-9.-]+))?$/
   const match = version.match(regex)
 
   if (!match) {
+    return null
+  }
+
+  // Validate prerelease - must not be empty (trailing dash like "1.0.0-" is invalid)
+  if (match[4] !== undefined && match[4] === '') {
     return null
   }
 

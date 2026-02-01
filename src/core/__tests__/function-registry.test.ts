@@ -1033,20 +1033,20 @@ describe('Metadata Validation', () => {
       expect(() => validateFunctionId('')).toThrow('Invalid function ID: ID is required')
     })
 
-    it('should reject function ID longer than 255 characters', () => {
-      const longId = 'a'.repeat(256)
-      expect(() => validateFunctionId(longId)).toThrow('Invalid function ID: ID must be 255 characters or less')
+    it('should reject function ID longer than 64 characters', () => {
+      const longId = 'a'.repeat(65)
+      expect(() => validateFunctionId(longId)).toThrow('Invalid function ID: ID must be 64 characters or less')
     })
 
     it('should reject function ID with leading hyphen', () => {
       expect(() => validateFunctionId('-my-func')).toThrow(
-        'Invalid function ID: must be alphanumeric with hyphens and underscores, no leading/trailing hyphens or underscores'
+        'Invalid function ID: must start with a letter'
       )
     })
 
     it('should reject function ID with trailing hyphen', () => {
       expect(() => validateFunctionId('my-func-')).toThrow(
-        'Invalid function ID: must be alphanumeric with hyphens and underscores, no leading/trailing hyphens or underscores'
+        'Invalid function ID: cannot start or end with hyphen or underscore'
       )
     })
 
@@ -1062,7 +1062,7 @@ describe('Metadata Validation', () => {
     })
 
     it('should reject single character hyphen', () => {
-      expect(() => validateFunctionId('-')).toThrow('Invalid function ID: must be alphanumeric')
+      expect(() => validateFunctionId('-')).toThrow('Invalid function ID: must start with a letter')
     })
   })
 
