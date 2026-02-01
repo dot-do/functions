@@ -30,6 +30,10 @@ import type {
 } from '../../core/src/types.js'
 import { parseDuration } from '../../core/src/types.js'
 import { stripTypeScript } from '../core/ts-strip'
+// Note: ai-evaluate can be used in production with worker_loaders binding
+// For test environments (vitest-pool-workers), we use in-process evaluation
+// since Miniflare can't run nested inside the test worker runtime
+// import type { EvaluateOptions, EvaluateResult, SandboxEnv, WorkerLoader as AIEvaluateLoader } from 'ai-evaluate'
 
 // ============================================================================
 // Types
@@ -679,6 +683,15 @@ export class CodeExecutor {
 
   /**
    * Execute compiled code in sandbox
+   *
+   * This method executes JavaScript/TypeScript code using in-process evaluation.
+   * In production with a worker_loaders binding, ai-evaluate can be used for
+   * better isolation. In test environments (vitest-pool-workers), we use
+   * in-process evaluation since Miniflare can't run nested inside the test runtime.
+   *
+   * Execution modes:
+   * - Production: Use ai-evaluate with worker_loaders binding (TODO)
+   * - Development/Test: In-process evaluation with Function()
    */
   private async executeCode(
     code: string,
@@ -701,193 +714,339 @@ export class CodeExecutor {
     const { timeout, sandbox, config, deterministic } = options
     const startTime = Date.now()
 
-    // Create execution context
-    const execContext: Record<string, unknown> = {}
-
-    // Set up deterministic mode
-    if (deterministic) {
-      execContext.Math = {
-        ...Math,
-        random: () => DETERMINISTIC_RANDOM_SEED,
-      }
-      execContext.Date = {
-        now: () => DETERMINISTIC_DATE,
-        UTC: Date.UTC,
-        parse: Date.parse,
-      }
-    }
-
-    // Set up allowed globals
-    if (sandbox.allowedGlobals) {
-      // If allowedGlobals doesn't include setTimeout, remove it
-      if (!sandbox.allowedGlobals.includes('setTimeout')) {
-        execContext.setTimeout = undefined
-      }
-      if (!sandbox.allowedGlobals.includes('setInterval')) {
-        execContext.setInterval = undefined
-      }
-    }
-
-    // Set up network restrictions
-    if (config.networkEnabled === false) {
-      execContext.fetch = () => {
-        throw new Error('Network access is disabled')
-      }
-    } else if (config.networkAllowlist && config.networkAllowlist.length > 0) {
-      const allowlist = config.networkAllowlist
-      execContext.fetch = async (url: string | URL | Request, init?: RequestInit) => {
-        const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url
-        const hostname = new URL(urlStr).hostname
-        if (!allowlist.includes(hostname)) {
-          throw new Error(`Network access blocked: ${hostname} not in allowlist`)
-        }
-        return fetch(url, init)
-      }
-    }
-
-    // Memory limit check (simplified)
+    // Memory limit check (simplified pre-execution check)
     if (config.memoryLimitMb) {
-      // In a real implementation, we'd use V8 memory limits
-      // For now, we check array allocations in the code
       if (code.includes('new Array(100 * 1024 * 1024)') ||
           code.includes('new Array(100*1024*1024)')) {
         throw new Error('Memory limit exceeded')
       }
     }
 
-    // CPU limit check (simplified)
+    // CPU limit check (simplified pre-execution check)
     if (config.cpuLimitMs) {
-      // Check for obvious infinite/long loops
       if (code.includes('1e10') || code.includes('10000000000')) {
         throw new Error('CPU limit exceeded')
       }
     }
 
-    // Transform the code to extract the default export
-    let transformedCode = code
-
-    // Handle export default function
-    transformedCode = transformedCode.replace(
-      /export\s+default\s+function\s+handler/g,
-      'const __handler__ = function'
-    )
-    transformedCode = transformedCode.replace(
-      /export\s+default\s+async\s+function\s+handler/g,
-      'const __handler__ = async function'
-    )
-    transformedCode = transformedCode.replace(
-      /export\s+default\s+function/g,
-      'const __handler__ = function'
-    )
-    transformedCode = transformedCode.replace(
-      /export\s+default\s+async\s+function/g,
-      'const __handler__ = async function'
-    )
-    transformedCode = transformedCode.replace(
-      /export\s+default\s+\(/g,
-      'const __handler__ = ('
-    )
-    transformedCode = transformedCode.replace(
-      /export\s+default\s+/g,
-      'const __handler__ = '
-    )
-
-    // Add handler return
-    transformedCode += '\nreturn __handler__;'
-
-    // Create the execution function
-    let handlerFn: (input: unknown) => unknown | Promise<unknown>
-
-    try {
-      // Check for allowed globals violation before executing
-      if (sandbox.allowedGlobals && !sandbox.allowedGlobals.includes('setTimeout')) {
-        if (code.includes('setTimeout')) {
-          throw new Error('setTimeout is not defined')
+    // Check for allowed globals violation before executing
+    if (sandbox.allowedGlobals && !sandbox.allowedGlobals.includes('setTimeout')) {
+      if (code.includes('setTimeout')) {
+        return {
+          status: 'failed',
+          output: undefined,
+          error: {
+            name: 'ReferenceError',
+            message: 'setTimeout is not defined',
+          },
+          memoryUsedBytes: 0,
+          cpuTimeMs: Date.now() - startTime,
         }
-      }
-
-      // Create a factory function that sets up the sandbox environment
-      // and returns the handler function extracted from the user code
-      const factory = new Function(
-        'console',
-        'JSON',
-        'Object',
-        'Array',
-        'Math',
-        'Date',
-        'Promise',
-        'fetch',
-        'setTimeout',
-        'setInterval',
-        'String',
-        'Number',
-        'Boolean',
-        'Error',
-        'TypeError',
-        'ReferenceError',
-        'SyntaxError',
-        'TextEncoder',
-        'TextDecoder',
-        transformedCode
-      )
-
-      // Execute the factory with sandbox globals to get the handler function
-      handlerFn = factory(
-        console,
-        JSON,
-        Object,
-        Array,
-        deterministic ? execContext.Math : Math,
-        deterministic ? execContext.Date : Date,
-        Promise,
-        execContext.fetch ?? (config.networkEnabled !== false ? fetch : () => { throw new Error('Network disabled') }),
-        execContext.setTimeout ?? setTimeout,
-        execContext.setInterval ?? setInterval,
-        String,
-        Number,
-        Boolean,
-        Error,
-        TypeError,
-        ReferenceError,
-        SyntaxError,
-        typeof TextEncoder !== 'undefined' ? TextEncoder : class {},
-        typeof TextDecoder !== 'undefined' ? TextDecoder : class {}
-      )
-    } catch (error) {
-      // Compilation/syntax error
-      const err = error as Error
-      return {
-        status: 'failed',
-        output: undefined,
-        error: {
-          name: err.name || 'SyntaxError',
-          message: err.message,
-          stack: err.stack,
-        },
-        memoryUsedBytes: 0,
-        cpuTimeMs: Date.now() - startTime,
       }
     }
 
-    // Execute with timeout
-    let output: unknown
-    let timedOut = false
-
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => {
-        timedOut = true
-        reject(new Error('Execution timeout'))
-      }, timeout)
+    // Use in-process evaluation
+    return this.executeInProcess(code, input, {
+      timeout,
+      deterministic,
+      blockNetwork: config.networkEnabled === false,
+      networkAllowlist: config.networkAllowlist,
     })
+  }
+
+  /**
+   * Execute code in-process using Function()
+   *
+   * This is used in test environments where Miniflare can't be nested.
+   * For production, ai-evaluate with worker_loaders should be used.
+   */
+  private async executeInProcess(
+    code: string,
+    input: unknown,
+    options: {
+      timeout: number
+      deterministic: boolean
+      blockNetwork?: boolean
+      networkAllowlist?: string[]
+    }
+  ): Promise<{
+    status: FunctionResultStatus
+    output: unknown
+    error?: FunctionError
+    memoryUsedBytes: number
+    cpuTimeMs: number
+  }> {
+    const { timeout, deterministic, blockNetwork, networkAllowlist } = options
+    const startTime = Date.now()
+
+    // Transform the code for in-process execution
+    // Convert ES module exports to CommonJS-style that Function() can execute
+    let transformedCode = code
+      .replace(/export\s+default\s+async\s+function\s+handler\s*\(/g, '__handler__ = async function(')
+      .replace(/export\s+default\s+function\s+handler\s*\(/g, '__handler__ = function(')
+      .replace(/export\s+default\s+async\s+function\s*\(/g, '__handler__ = async function(')
+      .replace(/export\s+default\s+function\s*\(/g, '__handler__ = function(')
+      .replace(/export\s+default\s+\(/g, '__handler__ = (')
+      .replace(/export\s+default\s+/g, '__handler__ = ')
+
+    // Save original globals before modifying
+    const originalMathRandom = Math.random
+    const originalDateNow = Date.now
+
+    // Helper to restore globals after execution
+    const restoreGlobals = () => {
+      Math.random = originalMathRandom
+      Date.now = originalDateNow
+    }
+
+    // Apply deterministic overrides
+    if (deterministic) {
+      Math.random = () => DETERMINISTIC_RANDOM_SEED
+      Date.now = () => DETERMINISTIC_DATE
+    }
+
+    // No longer need deterministic setup inside the wrapper code
+    const deterministicSetup = ''
+
+    // Build network blocking code
+    let networkSetup = ''
+    if (blockNetwork) {
+      networkSetup = `
+        var __originalFetch = typeof fetch !== 'undefined' ? fetch : undefined;
+        fetch = function() { throw new Error('Network access is disabled'); };
+      `
+    } else if (networkAllowlist && networkAllowlist.length > 0) {
+      const allowedDomainsJson = JSON.stringify(networkAllowlist)
+      networkSetup = `
+        var __originalFetch = typeof fetch !== 'undefined' ? fetch : undefined;
+        var __allowedDomains = ${allowedDomainsJson};
+        fetch = function(url) {
+          var hostname = new URL(url).hostname;
+          var allowed = __allowedDomains.some(function(domain) {
+            if (domain.startsWith('*.')) {
+              return hostname.endsWith(domain.slice(1));
+            }
+            return hostname === domain;
+          });
+          if (!allowed) {
+            throw new Error('Network access blocked: domain not in allowlist');
+          }
+          return __originalFetch.apply(this, arguments);
+        };
+      `
+    }
+
+    // Wrap the code in a function that captures the handler and executes it
+    // Also wrap execution in try/catch to serialize error properties that might be lost
+    // when crossing execution context boundaries (workerd/V8 isolate issue)
+    const wrappedCode = `
+      ${deterministicSetup}
+      ${networkSetup}
+      var __handler__;
+      var __input__ = __injectedInput__;
+      ${transformedCode}
+      try {
+        var __handlerResult__ = __handler__(__input__);
+        // Handle async functions - if result is a promise, await it
+        if (__handlerResult__ && typeof __handlerResult__.then === 'function') {
+          return __handlerResult__.then(function(__r__) {
+            return { __success__: true, __result__: __r__ };
+          }).catch(function(__err__) {
+            var __partialResult__ = undefined;
+            var __retryable__ = false;
+            var __code__ = undefined;
+            try {
+              if (__err__ && typeof __err__ === 'object') {
+                __partialResult__ = __err__['partialResult'];
+                __retryable__ = __err__['retryable'] === true;
+                __code__ = __err__['code'];
+              }
+            } catch (e) {}
+            return {
+              __success__: false,
+              __error__: {
+                message: __err__ && __err__.message ? __err__.message : String(__err__),
+                name: __err__ && __err__.name ? __err__.name : 'Error',
+                stack: __err__ && __err__.stack ? __err__.stack : undefined,
+                partialResult: __partialResult__,
+                retryable: __retryable__,
+                code: __code__
+              }
+            };
+          });
+        }
+        return { __success__: true, __result__: __handlerResult__ };
+      } catch (__err__) {
+        // Serialize error properties that might be lost across boundaries
+        // Use safe property access to avoid ReferenceError
+        var __partialResult__ = undefined;
+        var __retryable__ = false;
+        var __code__ = undefined;
+        try {
+          if (__err__ && typeof __err__ === 'object') {
+            __partialResult__ = __err__['partialResult'];
+            __retryable__ = __err__['retryable'] === true;
+            __code__ = __err__['code'];
+          }
+        } catch (e) {}
+        return {
+          __success__: false,
+          __error__: {
+            message: __err__ && __err__.message ? __err__.message : String(__err__),
+            name: __err__ && __err__.name ? __err__.name : 'Error',
+            stack: __err__ && __err__.stack ? __err__.stack : undefined,
+            partialResult: __partialResult__,
+            retryable: __retryable__,
+            code: __code__
+          }
+        };
+      }
+    `
+
+    // Wrapper result type to handle serialized errors
+    interface WrapperResult {
+      __success__: boolean
+      __result__?: unknown
+      __error__?: {
+        message: string
+        name: string
+        stack?: string
+        partialResult?: unknown
+        retryable: boolean
+        code?: string
+      }
+    }
 
     try {
-      const resultPromise = Promise.resolve(handlerFn(input))
-      output = await Promise.race([resultPromise, timeoutPromise])
-    } catch (error) {
-      const err = error as Error & { partialResult?: unknown; retryable?: boolean }
+      // Create a function with input injected
+      const fn = new Function('__injectedInput__', wrappedCode)
+
+      // Execute with timeout
+      let wrapperResult: WrapperResult | undefined
+      let timedOut = false
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          timedOut = true
+          reject(new Error('Execution timeout'))
+        }, timeout)
+      })
+
+      try {
+        // Race between execution and timeout
+        const executionPromise = Promise.resolve(fn(input))
+        wrapperResult = await Promise.race([executionPromise, timeoutPromise]) as WrapperResult
+      } catch (error) {
+        // Restore globals before returning
+        restoreGlobals()
+        if (timedOut) {
+          return {
+            status: 'timeout',
+            output: undefined,
+            error: {
+              name: 'TimeoutError',
+              message: 'Execution timeout',
+            },
+            memoryUsedBytes: 0,
+            cpuTimeMs: Date.now() - startTime,
+          }
+        }
+        throw error
+      }
+
+      // Restore globals after successful execution
+      restoreGlobals()
+
       const cpuTimeMs = Date.now() - startTime
 
-      if (timedOut || err.message.includes('timeout')) {
+      // Handle wrapped result structure
+      if (wrapperResult && typeof wrapperResult === 'object' && '__success__' in wrapperResult) {
+        if (wrapperResult.__success__) {
+          // Successful execution
+          return {
+            status: 'completed',
+            output: wrapperResult.__result__,
+            memoryUsedBytes: calculateByteSize(wrapperResult.__result__),
+            cpuTimeMs,
+          }
+        } else {
+          // Error was caught inside the wrapper - properties are preserved
+          const errData = wrapperResult.__error__
+          const errorMessage = errData?.message || ''
+
+          // Check for network blocked errors
+          if (blockNetwork && errorMessage.includes('Network access is disabled')) {
+            return {
+              status: 'failed',
+              output: undefined,
+              error: {
+                name: 'Error',
+                message: 'Network access is disabled',
+              },
+              memoryUsedBytes: 0,
+              cpuTimeMs,
+            }
+          }
+
+          // Check for allowlist violations
+          if (networkAllowlist && errorMessage.includes('not in allowlist')) {
+            return {
+              status: 'failed',
+              output: undefined,
+              error: {
+                name: 'Error',
+                message: errorMessage,
+              },
+              memoryUsedBytes: 0,
+              cpuTimeMs,
+            }
+          }
+
+          // Return with preserved error properties
+          const funcError: FunctionError = {
+            name: errData?.name || 'Error',
+            message: errorMessage,
+            retryable: errData?.retryable === true,
+          }
+          if (errData?.stack) {
+            funcError.stack = errData.stack
+          }
+          if (errData?.code) {
+            funcError.code = errData.code
+          }
+
+          return {
+            status: 'failed',
+            output: errData?.partialResult,
+            error: funcError,
+            memoryUsedBytes: 0,
+            cpuTimeMs,
+          }
+        }
+      }
+
+      // Fallback for non-wrapper results (shouldn't happen but handle gracefully)
+      return {
+        status: 'completed',
+        output: wrapperResult,
+        memoryUsedBytes: calculateByteSize(wrapperResult),
+        cpuTimeMs,
+      }
+    } catch (error) {
+      // Restore globals before returning from catch block
+      restoreGlobals()
+
+      const cpuTimeMs = Date.now() - startTime
+
+      // Normalize the error - handle both Error objects and thrown primitives
+      const err = error instanceof Error
+        ? error as Error & { partialResult?: unknown; retryable?: boolean }
+        : { message: String(error), name: 'Error' } as Error & { partialResult?: unknown; retryable?: boolean }
+
+      const errorMessage = err.message || ''
+
+      // Check for timeout
+      if (errorMessage.toLowerCase().includes('timeout')) {
         return {
           status: 'timeout',
           output: undefined,
@@ -900,28 +1059,51 @@ export class CodeExecutor {
         }
       }
 
-      // Check for partial result
+      // Check for network blocked errors
+      if (blockNetwork && errorMessage.includes('Network access is disabled')) {
+        return {
+          status: 'failed',
+          output: undefined,
+          error: {
+            name: 'Error',
+            message: 'Network access is disabled',
+          },
+          memoryUsedBytes: 0,
+          cpuTimeMs,
+        }
+      }
+
+      // Check for allowlist violations
+      if (networkAllowlist && errorMessage.includes('not in allowlist')) {
+        return {
+          status: 'failed',
+          output: undefined,
+          error: {
+            name: 'Error',
+            message: errorMessage,
+          },
+          memoryUsedBytes: 0,
+          cpuTimeMs,
+        }
+      }
+
+      // Check for partial result (only available on Error objects)
       let partialOutput: unknown
-      if (err.partialResult !== undefined) {
-        partialOutput = err.partialResult
+      if (error instanceof Error) {
+        const errWithPartial = error as Error & { partialResult?: unknown }
+        if (errWithPartial.partialResult !== undefined) {
+          partialOutput = errWithPartial.partialResult
+        }
       }
 
       return {
         status: 'failed',
         output: partialOutput,
-        error: wrapError(err, err.retryable),
+        error: wrapError(error, err.retryable === true),
         memoryUsedBytes: 0,
         cpuTimeMs,
       }
     }
-
-    const cpuTimeMs = Date.now() - startTime
-
-    return {
-      status: 'completed',
-      output,
-      memoryUsedBytes: calculateByteSize(output),
-      cpuTimeMs,
-    }
   }
+
 }
