@@ -13,14 +13,45 @@ import type {
   GenerativeFunctionConfig,
   GenerativeFunctionResult,
   GenerativeFunctionExecutor,
-} from '../../core/src/generative/index.js'
+} from '@dotdo/functions/generative'
 import type {
   ExecutionContext,
   JsonSchema,
   FunctionResultStatus,
-} from '../../core/src/types.js'
-import { parseDuration } from '../../core/src/types.js'
-import * as crypto from 'crypto'
+} from '@dotdo/functions'
+import { parseDuration } from '@dotdo/functions'
+import { TIER_TIMEOUTS, GENERATIVE_CACHE, AI_MODELS } from '../config'
+
+// =============================================================================
+// CLOUDFLARE-COMPATIBLE CRYPTO UTILITIES
+// =============================================================================
+
+/**
+ * Generate a UUID using Web Crypto API (Cloudflare Workers compatible)
+ */
+function generateUUID(): string {
+  // Use crypto.randomUUID if available (modern browsers and Cloudflare Workers)
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  // Fallback for environments without randomUUID
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}
+
+/**
+ * Compute SHA-256 hash using Web Crypto API (Cloudflare Workers compatible)
+ */
+async function sha256(content: string): Promise<string> {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(content)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+}
 
 // =============================================================================
 // TYPES
@@ -163,9 +194,9 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
 
   constructor(options: GenerativeExecutorOptions) {
     this.aiClient = options.aiClient
-    this.maxCacheSize = options.maxCacheSize ?? 1000
+    this.maxCacheSize = options.maxCacheSize ?? GENERATIVE_CACHE.MAX_SIZE
     // Default to 0 (no automatic cleanup) - users can explicitly set interval if needed
-    this.staleCleanupIntervalMs = options.staleCleanupIntervalMs ?? 0
+    this.staleCleanupIntervalMs = options.staleCleanupIntervalMs ?? GENERATIVE_CACHE.STALE_CLEANUP_INTERVAL_MS
 
     // Start proactive cleanup only if explicitly configured
     if (this.staleCleanupIntervalMs > 0) {
@@ -234,11 +265,11 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
     config?: GenerativeFunctionConfig,
     context?: ExecutionContext
   ): Promise<GenerativeFunctionResult<TOutput>> {
-    const executionId = context?.executionId ?? crypto.randomUUID()
+    const executionId = context?.executionId ?? generateUUID()
     const startedAt = Date.now()
 
-    // Determine model to use
-    const model = config?.model ?? definition.model ?? 'claude-3-sonnet'
+    // Determine model to use (from centralized config)
+    const model = config?.model ?? definition.model ?? AI_MODELS.DEFAULT_GENERATIVE_MODEL
 
     // Validate model
     if (!this.isValidModel(model)) {
@@ -259,10 +290,10 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
       ? this.renderPrompt(definition.systemPrompt, input as Record<string, unknown>)
       : undefined
 
-    // Check cache
+    // Check cache (using centralized config for default TTL)
     const cacheEnabled = config?.cacheEnabled ?? false
-    const cacheTtlSeconds = config?.cacheTtlSeconds ?? 3600
-    const cacheKey = this.computeCacheKey(
+    const cacheTtlSeconds = config?.cacheTtlSeconds ?? GENERATIVE_CACHE.DEFAULT_TTL_SECONDS
+    const cacheKey = await this.computeCacheKey(
       definition.id,
       renderedUserPrompt,
       renderedSystemPrompt,
@@ -427,7 +458,7 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
             },
             generativeExecution: {
               model: this.resolveModelId(model),
-              tokens: { input: 0, output: 0, total: 0 },
+              tokens: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
               cached: false,
               stopReason: 'end_turn',
               modelLatencyMs: 0,
@@ -469,7 +500,7 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
       },
       generativeExecution: {
         model: this.resolveModelId(model),
-        tokens: { input: 0, output: 0, total: 0 },
+        tokens: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
         cached: false,
         stopReason: 'end_turn',
         modelLatencyMs: 0,
@@ -545,14 +576,14 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
     return current
   }
 
-  private computeCacheKey(
+  private async computeCacheKey(
     functionId: string,
     userPrompt: string,
     systemPrompt: string | undefined,
     model: string
-  ): string {
+  ): Promise<string> {
     const content = `${functionId}:${model}:${systemPrompt ?? ''}:${userPrompt}`
-    return crypto.createHash('sha256').update(content).digest('hex')
+    return sha256(content)
   }
 
   private getFromCache(key: string): GenerativeFunctionResult<unknown> | null {
@@ -640,8 +671,8 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
         : parseDuration(definition.timeout)
     }
 
-    // Default 30 seconds
-    return 30000
+    // Default generative timeout from centralized config
+    return TIER_TIMEOUTS.GENERATIVE_MS
   }
 
   private buildMessages(
@@ -973,9 +1004,9 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
       generativeExecution: {
         model: modelResult.model,
         tokens: {
-          input: modelResult.inputTokens,
-          output: modelResult.outputTokens,
-          total: modelResult.inputTokens + modelResult.outputTokens,
+          inputTokens: modelResult.inputTokens,
+          outputTokens: modelResult.outputTokens,
+          totalTokens: modelResult.inputTokens + modelResult.outputTokens,
         },
         prompt: {
           system: systemPrompt,

@@ -10,36 +10,29 @@
 
 import type { FunctionMetadata } from '../core/types'
 import { CodeExecutor, type CodeExecutorEnv, type CodeFunctionResultWithCache } from '../tiers/code-executor'
-// NOTE: GenerativeExecutor and AgenticExecutor are commented out due to ai-providers
-// dependency issues with Cloudflare Workers. The executors use Node.js-only APIs.
-// These tiers return 503 until the dependency issue is resolved.
-// import { GenerativeExecutor, type GenerativeExecutorOptions } from '../tiers/generative-executor'
-// import { AgenticExecutor } from '../tiers/agentic-executor'
-
-// Stub types for now
-type GenerativeExecutor = never
-type GenerativeExecutorOptions = never
-type AgenticExecutor = never
+import { GenerativeExecutor, type GenerativeExecutorOptions } from '../tiers/generative-executor'
+import { AgenticExecutor } from '../tiers/agentic-executor'
+import { TIER_TIMEOUT_MAP } from '../config'
 import type {
   CodeFunctionDefinition,
   CodeSource,
-} from '../../core/src/code/index.js'
+} from '@dotdo/functions/code'
 import type {
   GenerativeFunctionDefinition,
   GenerativeFunctionConfig,
   GenerativeFunctionResult,
-} from '../../core/src/generative/index.js'
+} from '@dotdo/functions/generative'
 import type {
   AgenticFunctionDefinition,
   AgenticFunctionConfig,
   AgenticFunctionResult,
-} from '../../core/src/agentic/index.js'
+} from '@dotdo/functions/agentic'
 import type {
   HumanFunctionDefinition,
   HumanFunctionConfig,
   HumanFunctionResult,
-} from '../../core/src/human/index.js'
-import type { ExecutionContext as FunctionExecutionContext } from '../../core/src/types.js'
+} from '@dotdo/functions/human'
+import type { ExecutionContext as FunctionExecutionContext } from '@dotdo/functions'
 
 // =============================================================================
 // TYPES
@@ -61,14 +54,9 @@ export const TIER_MAP: Record<string, TierNumber> = {
 }
 
 /**
- * Default timeouts for each tier
+ * Default timeouts for each tier (imported from centralized config)
  */
-export const TIER_TIMEOUTS: Record<TierNumber, number> = {
-  1: 5000,       // 5 seconds for code
-  2: 30000,      // 30 seconds for generative
-  3: 300000,     // 5 minutes for agentic
-  4: 86400000,   // 24 hours for human
-}
+export const TIER_TIMEOUTS: Record<TierNumber, number> = TIER_TIMEOUT_MAP
 
 /**
  * Extended environment with all tier executor bindings
@@ -239,9 +227,8 @@ export interface ExtendedMetadata extends FunctionMetadata {
  */
 export class TierDispatcher {
   private codeExecutor: CodeExecutor | null = null
-  // NOTE: Generative and Agentic executors are disabled due to ai-providers dependency issues
-  // private generativeExecutor: GenerativeExecutor | null = null
-  // private agenticExecutors: Map<string, AgenticExecutor> = new Map()
+  private generativeExecutor: GenerativeExecutor | null = null
+  private agenticExecutors: Map<string, AgenticExecutor> = new Map()
 
   constructor(private env: TierDispatcherEnv) {
     // Initialize code executor
@@ -252,8 +239,12 @@ export class TierDispatcher {
     }
     this.codeExecutor = new CodeExecutor(codeEnv)
 
-    // NOTE: Generative and Agentic executors are disabled until ai-providers dependency is fixed
-    // These tiers will return 503 Service Unavailable
+    // Initialize generative executor if AI client is available
+    if (env.AI_CLIENT) {
+      this.generativeExecutor = new GenerativeExecutor({
+        aiClient: env.AI_CLIENT as unknown as GenerativeExecutorOptions['aiClient'],
+      })
+    }
   }
 
   /**
@@ -408,24 +399,12 @@ export class TierDispatcher {
 
   /**
    * Dispatch to Generative Executor (Tier 2)
-   * NOTE: Currently disabled due to ai-providers dependency issues with Cloudflare Workers
    */
   private async dispatchGenerative(
     metadata: ExtendedMetadata,
     input: unknown,
     start: number
   ): Promise<DispatchResult> {
-    // NOTE: Generative executor is disabled until ai-providers dependency is fixed
-    return {
-      status: 503,
-      body: {
-        error: 'Generative executor temporarily unavailable. Service under maintenance.',
-        _meta: { duration: Date.now() - start, executorType: 'generative', tier: 2 },
-      },
-    }
-
-    // Original implementation disabled:
-    /*
     if (!this.generativeExecutor || !this.env.AI_CLIENT) {
       return {
         status: 503,
@@ -536,29 +515,16 @@ export class TierDispatcher {
         },
       }
     }
-    */
   }
 
   /**
    * Dispatch to Agentic Executor (Tier 3)
-   * NOTE: Currently disabled due to ai-providers dependency issues with Cloudflare Workers
    */
   private async dispatchAgentic(
     metadata: ExtendedMetadata,
     input: unknown,
     start: number
   ): Promise<DispatchResult> {
-    // NOTE: Agentic executor is disabled until ai-providers dependency is fixed
-    return {
-      status: 503,
-      body: {
-        error: 'Agentic executor temporarily unavailable. Service under maintenance.',
-        _meta: { duration: Date.now() - start, executorType: 'agentic', tier: 3 },
-      },
-    }
-
-    // Original implementation disabled:
-    /*
     if (!this.env.AI_CLIENT?.chat) {
       return {
         status: 503,
@@ -591,8 +557,9 @@ export class TierDispatcher {
     // Get or create agentic executor for this function
     let executor = this.agenticExecutors.get(metadata.id)
     if (!executor) {
-      // @ts-expect-error - AIClient type mismatch
-      executor = new AgenticExecutor(definition, this.env.AI_CLIENT)
+      // Cast AI_CLIENT - the dispatcher's AIClient provides the chat method that AgenticExecutor needs
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      executor = new AgenticExecutor(definition, this.env.AI_CLIENT as any)
       this.agenticExecutors.set(metadata.id, executor)
     }
 
@@ -677,7 +644,6 @@ export class TierDispatcher {
         },
       }
     }
-    */
   }
 
   /**

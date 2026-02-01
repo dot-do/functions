@@ -2,6 +2,8 @@ import type { WorkerStub, CacheStats, FunctionMetadata } from './types'
 import { validateFunctionId } from './function-registry'
 import { NotFoundError } from './errors'
 import { evaluate, type SandboxEnv, type EvaluateResult } from 'ai-evaluate'
+import { createLogger, type Logger, type LoggerConfig } from './logger'
+import { LOADER, RETRY, CIRCUIT_BREAKER, CACHE } from '../config'
 
 /**
  * Interface for the function registry dependency
@@ -213,6 +215,8 @@ export interface FunctionLoaderConfig {
    * Required for evaluateModule to work - if not provided, evaluation will fail.
    */
   sandboxEnv?: SandboxEnv
+  /** Logger configuration or instance */
+  logger?: Logger | LoggerConfig
 }
 
 /**
@@ -338,6 +342,9 @@ export class FunctionLoader implements IFunctionLoader {
   // Sandbox environment for ai-evaluate
   private sandboxEnv?: SandboxEnv
 
+  // Structured logger
+  private logger: Logger
+
   // Cache for loaded function stubs
   private cache: Map<string, CacheEntry> = new Map()
 
@@ -363,29 +370,41 @@ export class FunctionLoader implements IFunctionLoader {
   constructor(config: FunctionLoaderConfig) {
     this.registry = config.registry
     this.codeStorage = config.codeStorage
-    this.maxCacheSize = config.maxCacheSize ?? 1000
-    this.timeout = config.timeout ?? 30000
+    this.maxCacheSize = config.maxCacheSize ?? CACHE.DEFAULT_MAX_SIZE
+    this.timeout = config.timeout ?? LOADER.DEFAULT_TIMEOUT_MS
     this.gracefulDegradation = config.gracefulDegradation ?? true
     if (config.fallbackVersion !== undefined) {
       this.fallbackVersion = config.fallbackVersion
     }
     this.sandboxEnv = config.sandboxEnv
 
-    // Initialize retry config with defaults
+    // Initialize retry config with defaults (from centralized config)
     this.retryConfig = {
-      maxRetries: config.retry?.maxRetries ?? 3,
-      initialDelayMs: config.retry?.initialDelayMs ?? 100,
-      maxDelayMs: config.retry?.maxDelayMs ?? 5000,
-      backoffMultiplier: config.retry?.backoffMultiplier ?? 2,
-      jitter: config.retry?.jitter ?? true,
+      maxRetries: config.retry?.maxRetries ?? RETRY.MAX_RETRIES,
+      initialDelayMs: config.retry?.initialDelayMs ?? RETRY.INITIAL_DELAY_MS,
+      maxDelayMs: config.retry?.maxDelayMs ?? RETRY.MAX_DELAY_MS,
+      backoffMultiplier: config.retry?.backoffMultiplier ?? RETRY.BACKOFF_MULTIPLIER,
+      jitter: config.retry?.jitter ?? RETRY.JITTER_ENABLED,
     }
 
-    // Initialize circuit breaker config with defaults
+    // Initialize circuit breaker config with defaults (from centralized config)
     this.circuitBreakerConfig = {
-      failureThreshold: config.circuitBreaker?.failureThreshold ?? 5,
-      resetTimeoutMs: config.circuitBreaker?.resetTimeoutMs ?? 30000,
-      successThreshold: config.circuitBreaker?.successThreshold ?? 2,
-      maxHalfOpenRequests: config.circuitBreaker?.maxHalfOpenRequests ?? 1,
+      failureThreshold: config.circuitBreaker?.failureThreshold ?? CIRCUIT_BREAKER.FAILURE_THRESHOLD,
+      resetTimeoutMs: config.circuitBreaker?.resetTimeoutMs ?? CIRCUIT_BREAKER.RESET_TIMEOUT_MS,
+      successThreshold: config.circuitBreaker?.successThreshold ?? CIRCUIT_BREAKER.SUCCESS_THRESHOLD,
+      maxHalfOpenRequests: config.circuitBreaker?.maxHalfOpenRequests ?? CIRCUIT_BREAKER.MAX_HALF_OPEN_REQUESTS,
+    }
+
+    // Initialize logger
+    if (config.logger && 'warn' in config.logger && typeof config.logger.warn === 'function') {
+      // It's a Logger instance
+      this.logger = config.logger as Logger
+    } else {
+      // It's a LoggerConfig or undefined
+      this.logger = createLogger({
+        ...(config.logger as LoggerConfig | undefined),
+        context: { component: 'FunctionLoader' },
+      })
     }
   }
 
@@ -633,7 +652,11 @@ export class FunctionLoader implements IFunctionLoader {
         } catch (fallbackError) {
           // Fallback also failed
           const message = fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
-          console.warn('Fallback load failed:', message)
+          this.logger.warn('Fallback load failed', {
+            functionId,
+            fallbackVersion: this.fallbackVersion,
+            error: message,
+          })
         }
       }
 
@@ -893,7 +916,7 @@ export class FunctionLoader implements IFunctionLoader {
       )
 
       if (!result.success) {
-        console.warn('Module evaluation failed:', result.error)
+        this.logger.warn('Module evaluation failed', { error: result.error })
         return { __loadError: result.error || 'Unknown evaluation error' }
       }
 
@@ -902,7 +925,7 @@ export class FunctionLoader implements IFunctionLoader {
     } catch (error) {
       // If evaluation fails, return module with error information
       const message = error instanceof Error ? error.message : String(error)
-      console.warn('Module evaluation failed:', message)
+      this.logger.warn('Module evaluation failed', { error: message })
       return { __loadError: message }
     }
   }

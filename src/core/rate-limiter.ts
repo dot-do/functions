@@ -5,6 +5,8 @@
  * and ensure fair resource usage across all users.
  */
 
+import { RATE_LIMITS } from '../config'
+
 /**
  * Configuration for rate limiting behavior
  */
@@ -290,18 +292,18 @@ export class CompositeRateLimiter {
 }
 
 /**
- * Default rate limit configurations
+ * Default rate limit configurations (from centralized config)
  */
 export const DEFAULT_RATE_LIMITS = {
   /** Per-IP rate limit: 100 requests per minute */
   ip: {
-    windowMs: 60_000,
-    maxRequests: 100,
+    windowMs: RATE_LIMITS.IP.WINDOW_MS,
+    maxRequests: RATE_LIMITS.IP.MAX_REQUESTS,
   },
   /** Per-function rate limit: 1000 requests per minute */
   function: {
-    windowMs: 60_000,
-    maxRequests: 1000,
+    windowMs: RATE_LIMITS.FUNCTION.WINDOW_MS,
+    maxRequests: RATE_LIMITS.FUNCTION.MAX_REQUESTS,
   },
 } as const
 

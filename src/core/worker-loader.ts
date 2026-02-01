@@ -14,9 +14,12 @@
 import type { WorkerStub, CacheStats, WorkerLoaderOptions } from './types'
 import type { CircuitBreakerConfig, CircuitBreakerState, CircuitState } from './function-loader'
 import { evaluate, type SandboxEnv, type EvaluateResult } from 'ai-evaluate'
+import { createLogger, noopLogger as coreNoopLogger, type Logger, type LoggerConfig } from './logger'
+import { LOADER, CIRCUIT_BREAKER } from '../config'
 
 /**
  * Logger interface for WorkerLoader debugging
+ * @deprecated Use Logger from './logger' instead
  */
 export interface WorkerLoaderLogger {
   debug(message: string, context?: Record<string, unknown>): void
@@ -27,6 +30,7 @@ export interface WorkerLoaderLogger {
 
 /**
  * Default no-op logger
+ * @deprecated Use noopLogger from './logger' instead
  */
 const noopLogger: WorkerLoaderLogger = {
   debug: () => {},
@@ -37,13 +41,13 @@ const noopLogger: WorkerLoaderLogger = {
 
 /**
  * Console-based logger for development
+ * @deprecated Use createLogger() from './logger' instead with format: 'text'
  */
-export const consoleLogger: WorkerLoaderLogger = {
-  debug: (msg, ctx) => console.debug(`[WorkerLoader] ${msg}`, ctx || ''),
-  info: (msg, ctx) => console.info(`[WorkerLoader] ${msg}`, ctx || ''),
-  warn: (msg, ctx) => console.warn(`[WorkerLoader] ${msg}`, ctx || ''),
-  error: (msg, ctx) => console.error(`[WorkerLoader] ${msg}`, ctx || ''),
-}
+export const consoleLogger: WorkerLoaderLogger = createLogger({
+  level: 'debug',
+  format: 'text',
+  context: { component: 'WorkerLoader' },
+})
 
 /**
  * Base error class for WorkerLoader errors
@@ -306,19 +310,19 @@ export class WorkerLoader {
 
   constructor(loader?: Fetcher | WorkerLoaderBinding, options?: WorkerLoaderExtendedOptions) {
     this.options = {
-      timeout: options?.timeout ?? 30000,
-      maxCacheSize: options?.maxCacheSize ?? 1000,
+      timeout: options?.timeout ?? LOADER.DEFAULT_TIMEOUT_MS,
+      maxCacheSize: options?.maxCacheSize ?? LOADER.MAX_CACHE_SIZE,
     }
 
     this.logger = options?.logger ?? noopLogger
-    this.cacheTTL = options?.cacheTTL ?? 0
+    this.cacheTTL = options?.cacheTTL ?? LOADER.DEFAULT_CACHE_TTL_MS
 
-    // Initialize circuit breaker config with defaults
+    // Initialize circuit breaker config with defaults (from centralized config)
     this.circuitBreakerConfig = {
-      failureThreshold: options?.circuitBreaker?.failureThreshold ?? 5,
-      resetTimeoutMs: options?.circuitBreaker?.resetTimeoutMs ?? 30000,
-      successThreshold: options?.circuitBreaker?.successThreshold ?? 2,
-      maxHalfOpenRequests: options?.circuitBreaker?.maxHalfOpenRequests ?? 1,
+      failureThreshold: options?.circuitBreaker?.failureThreshold ?? CIRCUIT_BREAKER.FAILURE_THRESHOLD,
+      resetTimeoutMs: options?.circuitBreaker?.resetTimeoutMs ?? CIRCUIT_BREAKER.RESET_TIMEOUT_MS,
+      successThreshold: options?.circuitBreaker?.successThreshold ?? CIRCUIT_BREAKER.SUCCESS_THRESHOLD,
+      maxHalfOpenRequests: options?.circuitBreaker?.maxHalfOpenRequests ?? CIRCUIT_BREAKER.MAX_HALF_OPEN_REQUESTS,
     }
 
     // Detect if this is a WorkerLoaderBinding (has .get method) or Fetcher (has .fetch method)
@@ -697,10 +701,10 @@ export class WorkerLoader {
         this.logger.info('Function loaded via worker_loaders', { id, loadTimeMs: loadTime })
 
         const result: LoadFunctionResult = {
-          success: executeData.success as boolean ?? true,
-          value: executeData.value,
-          logs: executeData.logs as LoadFunctionResult['logs'],
-          testResults: executeData.testResults as LoadFunctionResult['testResults'],
+          success: executeData['success'] as boolean ?? true,
+          value: executeData['value'],
+          logs: executeData['logs'] as LoadFunctionResult['logs'],
+          testResults: executeData['testResults'] as LoadFunctionResult['testResults'],
           developmentMode: false,
         }
         this.loadedFunctions.set(id, result)
@@ -739,13 +743,13 @@ export class WorkerLoader {
             // Create a stub that uses Miniflare
             const stub: WorkerStub = {
               id,
-              fetch: async (request: Request) => mf.dispatchFetch(request),
-              connect: async (request: Request) => mf.dispatchFetch(request),
+              fetch: async (request: Request) => mf.dispatchFetch(request.url, { method: request.method, headers: Object.fromEntries(request.headers.entries()) }),
+              connect: async (request: Request) => mf.dispatchFetch(request.url, { method: request.method, headers: Object.fromEntries(request.headers.entries()) }),
               scheduled: async () => {
-                await mf.dispatchFetch(new Request('http://internal/scheduled'))
+                await mf.dispatchFetch('http://internal/scheduled')
               },
               queue: async () => {
-                await mf.dispatchFetch(new Request('http://internal/queue'))
+                await mf.dispatchFetch('http://internal/queue')
               },
             }
 
@@ -761,10 +765,10 @@ export class WorkerLoader {
             this.logger.info('Function loaded via Miniflare', { id, loadTimeMs: loadTime })
 
             const result: LoadFunctionResult = {
-              success: data.success as boolean ?? true,
-              value: data.value,
-              logs: data.logs as LoadFunctionResult['logs'],
-              testResults: data.testResults as LoadFunctionResult['testResults'],
+              success: data['success'] as boolean ?? true,
+              value: data['value'],
+              logs: data['logs'] as LoadFunctionResult['logs'],
+              testResults: data['testResults'] as LoadFunctionResult['testResults'],
               developmentMode: true,
             }
             this.loadedFunctions.set(id, result)

@@ -12,10 +12,16 @@
  */
 
 import type { TracingHooks, SpanContext, RequestMetrics } from './function-target'
+import { OBSERVABILITY } from '../config'
 
 // ============================================================================
 // Types
 // ============================================================================
+
+/**
+ * Supported observability backend types
+ */
+export type ObservabilityBackend = 'honeycomb' | 'otlp' | 'generic'
 
 /**
  * Configuration for the observability backend
@@ -26,6 +32,15 @@ export interface ObservabilityConfig {
    * @default true
    */
   enabled: boolean
+
+  /**
+   * Backend type for authentication header format
+   * - 'honeycomb': Uses X-Honeycomb-Team header
+   * - 'otlp': Uses Authorization: Bearer header (OpenTelemetry standard)
+   * - 'generic': Uses Authorization: Bearer header
+   * @default Auto-detected from endpoint URL, or 'generic' if not detected
+   */
+  backend?: ObservabilityBackend
 
   /**
    * Endpoint URL for sending trace data
@@ -144,18 +159,19 @@ export class ObservabilityExporter {
   private buffer: Span[] = []
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private readonly config: Required<
-    Pick<ObservabilityConfig, 'enabled' | 'serviceName' | 'sampleRate' | 'bufferSize' | 'flushIntervalMs' | 'exportTimeoutMs'>
+    Pick<ObservabilityConfig, 'enabled' | 'serviceName' | 'sampleRate' | 'bufferSize' | 'flushIntervalMs' | 'exportTimeoutMs' | 'backend'>
   > &
     Pick<ObservabilityConfig, 'endpoint' | 'apiKey' | 'headers'>
 
   constructor(config: ObservabilityConfig) {
     const baseConfig = {
       enabled: config.enabled ?? true,
-      serviceName: config.serviceName ?? 'functions-do',
-      sampleRate: Math.max(0, Math.min(1, config.sampleRate ?? 1)),
-      bufferSize: config.bufferSize ?? 100,
-      flushIntervalMs: config.flushIntervalMs ?? 5000,
-      exportTimeoutMs: config.exportTimeoutMs ?? 30000,
+      serviceName: config.serviceName ?? OBSERVABILITY.DEFAULT_SERVICE_NAME,
+      sampleRate: Math.max(0, Math.min(1, config.sampleRate ?? OBSERVABILITY.DEFAULT_SAMPLE_RATE)),
+      bufferSize: config.bufferSize ?? OBSERVABILITY.BUFFER_SIZE,
+      flushIntervalMs: config.flushIntervalMs ?? OBSERVABILITY.FLUSH_INTERVAL_MS,
+      exportTimeoutMs: config.exportTimeoutMs ?? OBSERVABILITY.EXPORT_TIMEOUT_MS,
+      backend: config.backend ?? this.detectBackend(config.endpoint),
     }
 
     this.config = baseConfig as typeof this.config
@@ -172,6 +188,39 @@ export class ObservabilityExporter {
     // Start periodic flush if enabled and has endpoint
     if (this.config.enabled && this.config.endpoint && this.config.flushIntervalMs > 0) {
       this.startFlushTimer()
+    }
+  }
+
+  /**
+   * Detect the backend type from the endpoint URL
+   */
+  private detectBackend(endpoint?: string): ObservabilityBackend {
+    if (!endpoint) {
+      return 'generic'
+    }
+
+    try {
+      const url = new URL(endpoint)
+      const hostname = url.hostname.toLowerCase()
+
+      // Detect Honeycomb endpoints
+      if (hostname.includes('honeycomb.io') || hostname.includes('honeycomb.com')) {
+        return 'honeycomb'
+      }
+
+      // Detect common OTLP endpoints
+      if (
+        hostname.includes('otel') ||
+        hostname.includes('opentelemetry') ||
+        url.pathname.includes('/v1/traces')
+      ) {
+        return 'otlp'
+      }
+
+      return 'generic'
+    } catch {
+      // If URL parsing fails, default to generic
+      return 'generic'
     }
   }
 
@@ -276,11 +325,18 @@ export class ObservabilityExporter {
       ...this.config.headers,
     }
 
-    // Add API key header if configured
+    // Add API key header based on backend type
     if (this.config.apiKey) {
-      // Support common API key header formats
-      headers['X-Honeycomb-Team'] = this.config.apiKey // Honeycomb
-      headers['Authorization'] = `Bearer ${this.config.apiKey}` // Generic/OTLP
+      switch (this.config.backend) {
+        case 'honeycomb':
+          headers['X-Honeycomb-Team'] = this.config.apiKey
+          break
+        case 'otlp':
+        case 'generic':
+        default:
+          headers['Authorization'] = `Bearer ${this.config.apiKey}`
+          break
+      }
     }
 
     const body = JSON.stringify({
@@ -524,6 +580,7 @@ export function createTracingHooks(exporter: ObservabilityExporter): TracingHook
  * - OBSERVABILITY_API_KEY: API key for authentication
  * - OBSERVABILITY_SERVICE_NAME: Service name for spans
  * - OBSERVABILITY_SAMPLE_RATE: Number between 0 and 1
+ * - OBSERVABILITY_BACKEND: Backend type ('honeycomb', 'otlp', or 'generic')
  *
  * @param env - Environment object with optional observability config
  * @returns ObservabilityExporter instance
@@ -533,6 +590,7 @@ export function createExporterFromEnv(env: Record<string, unknown>): Observabili
   const apiKey = env['OBSERVABILITY_API_KEY'] as string | undefined
   const serviceName = (env['OBSERVABILITY_SERVICE_NAME'] as string | undefined) ?? 'functions-do'
   const sampleRateStr = env['OBSERVABILITY_SAMPLE_RATE'] as string | undefined
+  const backendStr = env['OBSERVABILITY_BACKEND'] as string | undefined
 
   const config: ObservabilityConfig = {
     enabled: env['OBSERVABILITY_ENABLED'] !== 'false',
@@ -546,8 +604,18 @@ export function createExporterFromEnv(env: Record<string, unknown>): Observabili
   if (apiKey !== undefined) {
     config.apiKey = apiKey
   }
+  if (backendStr !== undefined && isValidBackend(backendStr)) {
+    config.backend = backendStr
+  }
 
   return new ObservabilityExporter(config)
+}
+
+/**
+ * Type guard to validate backend string
+ */
+function isValidBackend(value: string): value is ObservabilityBackend {
+  return value === 'honeycomb' || value === 'otlp' || value === 'generic'
 }
 
 /**

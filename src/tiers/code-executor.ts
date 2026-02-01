@@ -28,6 +28,8 @@ import type {
 import { parseDuration } from '../../core/src/types.js'
 import { stripTypeScript } from '../core/ts-strip'
 import { evaluate, type SandboxEnv, type EvaluateResult } from 'ai-evaluate'
+import { PyodideExecutor } from '../languages/python/pyodide-executor'
+import { TIER_TIMEOUTS, CODE_CACHE, DETERMINISTIC } from '../config'
 
 // ============================================================================
 // Types
@@ -104,6 +106,8 @@ export interface CodeExecutorEnv {
   CODE_STORAGE?: R2Bucket
   /** KV namespace for function registry */
   FUNCTION_REGISTRY?: KVNamespace
+  /** KV namespace for code storage (including pre-compiled WASM) */
+  FUNCTIONS_CODE?: KVNamespace
   /** AI evaluate service for sandboxed execution */
   AI_EVALUATE?: Fetcher
   /** Static assets binding for WASM binaries */
@@ -160,10 +164,12 @@ export interface CodeFunctionResultWithCache<TOutput = unknown>
 }
 
 // ============================================================================
-// Constants
+// Constants (using centralized config)
 // ============================================================================
 
-const DEFAULT_TIMEOUT_MS = 5000
+/** Default timeout for code execution (from centralized config) */
+const DEFAULT_TIMEOUT_MS = TIER_TIMEOUTS.CODE_MS
+
 const SUPPORTED_LANGUAGES: CodeLanguage[] = [
   'typescript',
   'javascript',
@@ -178,9 +184,9 @@ const SUPPORTED_LANGUAGES: CodeLanguage[] = [
 // Languages that compile to WASM
 const WASM_LANGUAGES: CodeLanguage[] = ['rust', 'go', 'zig', 'assemblyscript']
 
-// Fixed values for deterministic mode
-const DETERMINISTIC_RANDOM_SEED = 0.5
-const DETERMINISTIC_DATE = 1704067200000 // 2024-01-01T00:00:00.000Z
+// Fixed values for deterministic mode (from centralized config)
+const DETERMINISTIC_RANDOM_SEED = DETERMINISTIC.RANDOM_SEED
+const DETERMINISTIC_DATE = DETERMINISTIC.FIXED_DATE_MS
 
 // ============================================================================
 // Utilities
@@ -240,18 +246,18 @@ function wrapError(error: unknown, retryable = false): FunctionError {
     const obj = error as Record<string, unknown>
     const funcError: FunctionError = {
       name: 'Error',
-      message: String(obj.message ?? error),
-      retryable: obj.retryable === true,
+      message: String(obj['message'] ?? error),
+      retryable: obj['retryable'] === true,
     }
-    if (obj.stack) {
-      funcError.stack = String(obj.stack)
+    if (obj['stack']) {
+      funcError.stack = String(obj['stack'])
     }
-    if (obj.code) {
-      funcError.code = String(obj.code)
+    if (obj['code']) {
+      funcError.code = String(obj['code'])
     }
     // Handle partial result
-    if (obj.partialResult !== undefined) {
-      funcError.retryable = obj.retryable === true
+    if (obj['partialResult'] !== undefined) {
+      funcError.retryable = obj['retryable'] === true
     }
     return funcError
   }
@@ -289,9 +295,9 @@ function checkNetworkError(
 // Code Executor
 // ============================================================================
 
-// Default cache configuration
-const DEFAULT_MAX_CACHE_SIZE = 1000
-const DEFAULT_CACHE_TTL_MS = 3600000 // 1 hour
+// Default cache configuration (from centralized config)
+const DEFAULT_MAX_CACHE_SIZE = CODE_CACHE.MAX_SIZE
+const DEFAULT_CACHE_TTL_MS = CODE_CACHE.TTL_MS
 
 /**
  * CodeExecutor executes code functions in sandboxed environments
@@ -304,11 +310,25 @@ export class CodeExecutor {
   private cacheHits = 0
   private cacheMisses = 0
   private cacheEvictions = 0
+  private pyodideExecutor: PyodideExecutor | null = null
 
   constructor(env: CodeExecutorEnv, config?: CodeExecutorConfig) {
     this.env = env
     this.maxCacheSize = config?.maxCacheSize ?? DEFAULT_MAX_CACHE_SIZE
     this.cacheTTLMs = config?.cacheTTLMs ?? DEFAULT_CACHE_TTL_MS
+  }
+
+  /**
+   * Get or create the Pyodide executor instance
+   */
+  private async getPyodideExecutor(): Promise<PyodideExecutor> {
+    if (!this.pyodideExecutor) {
+      this.pyodideExecutor = new PyodideExecutor({
+        reuseRuntime: true,
+        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+      })
+    }
+    return this.pyodideExecutor
   }
 
   /**
@@ -662,6 +682,35 @@ export class CodeExecutor {
         return `__WASM_ASSETS__:${source.functionId}:${version}`
       }
 
+      case 'wasm': {
+        // Load pre-compiled WASM binary from KV storage
+        // Returns a marker string - actual binary is loaded during execution
+        if (!this.env.FUNCTIONS_CODE) {
+          throw new Error('FUNCTIONS_CODE KV namespace not configured')
+        }
+        const wasmVersion = source.version || 'latest'
+        // Return marker string for WASM from KV storage
+        return `__WASM_KV__:${source.functionId}:${wasmVersion}`
+      }
+
+      case 'inline-wasm': {
+        // Inline pre-compiled WASM binary (base64 or Uint8Array)
+        // Convert to base64 marker for consistent handling
+        const binaryData = source.binary
+        if (typeof binaryData === 'string') {
+          // Already base64 encoded
+          return `__WASM_INLINE__:${binaryData}`
+        } else {
+          // Convert Uint8Array to base64
+          let binary = ''
+          for (let i = 0; i < binaryData.length; i++) {
+            binary += String.fromCharCode(binaryData[i]!)
+          }
+          const base64 = btoa(binary)
+          return `__WASM_INLINE__:${base64}`
+        }
+      }
+
       default:
         throw new Error(`Unknown source type: ${(source as { type: string }).type}`)
     }
@@ -702,21 +751,51 @@ export class CodeExecutor {
   }
 
   /**
-   * Check if source is a WASM assets marker.
+   * Parse a WASM marker string to extract type and info.
+   *
+   * Supported marker formats:
+   * - __WASM_ASSETS__:functionId:version - WASM from static assets
+   * - __WASM_KV__:functionId:version - WASM from KV storage
+   * - __WASM_INLINE__:base64data - Inline WASM binary
+   *
+   * @param source - The source string to check
+   * @returns The parsed WASM info or null if not a WASM marker
+   */
+  private parseWasmMarker(source: string): {
+    type: 'assets' | 'kv' | 'inline'
+    functionId?: string
+    version?: string
+    base64?: string
+  } | null {
+    if (source.startsWith('__WASM_ASSETS__:')) {
+      const parts = source.split(':')
+      if (parts.length >= 3) {
+        return { type: 'assets', functionId: parts[1]!, version: parts[2]! }
+      }
+    }
+    if (source.startsWith('__WASM_KV__:')) {
+      const parts = source.split(':')
+      if (parts.length >= 3) {
+        return { type: 'kv', functionId: parts[1]!, version: parts[2]! }
+      }
+    }
+    if (source.startsWith('__WASM_INLINE__:')) {
+      const base64 = source.slice('__WASM_INLINE__:'.length)
+      return { type: 'inline', base64 }
+    }
+    return null
+  }
+
+  /**
+   * Check if source is a WASM assets marker (backwards compatibility).
    *
    * @param source - The source string to check
    * @returns The parsed WASM info or null if not a WASM marker
    */
   private parseWasmAssetsMarker(source: string): { functionId: string; version: string } | null {
-    if (!source.startsWith('__WASM_ASSETS__:')) {
-      return null
-    }
-    const parts = source.split(':')
-    if (parts.length >= 3) {
-      return {
-        functionId: parts[1]!,
-        version: parts[2]!,
-      }
+    const parsed = this.parseWasmMarker(source)
+    if (parsed && (parsed.type === 'assets' || parsed.type === 'kv') && parsed.functionId) {
+      return { functionId: parsed.functionId, version: parsed.version || 'latest' }
     }
     return null
   }
@@ -728,12 +807,14 @@ export class CodeExecutor {
    * this method simulates compilation by returning a JavaScript wrapper.
    * In production, this would call the appropriate compiler (rustc, tinygo, etc.)
    *
-   * For pre-compiled WASM from assets, use executeWasmViaWorkerLoader() instead.
+   * For pre-compiled WASM from assets/KV, use executeWasmViaWorkerLoader() instead.
    */
   private compileToWasm(source: string, language: CodeLanguage): string {
-    // Check if this is a WASM assets marker - if so, return it as-is
+    // Check if this is a WASM marker - if so, return it as-is
     // The actual execution will be handled by executeWasmViaWorkerLoader()
-    if (source.startsWith('__WASM_ASSETS__:')) {
+    if (source.startsWith('__WASM_ASSETS__:') ||
+        source.startsWith('__WASM_KV__:') ||
+        source.startsWith('__WASM_INLINE__:')) {
       return source
     }
 
@@ -794,25 +875,121 @@ export class CodeExecutor {
   }
 
   /**
-   * Compile Python (mock implementation using Pyodide pattern)
+   * Compile Python - returns a marker for Python execution via Pyodide
+   *
+   * Python code is not compiled to JavaScript. Instead, we return a marker
+   * string that the executeCode method will detect and route to the
+   * PyodideExecutor for native Python execution.
+   *
+   * Cloudflare Workers supports Python natively via Pyodide with WASM snapshots,
+   * providing fast cold starts and access to the Python ecosystem.
    */
   private compilePython(source: string): string {
-    // In production, this would use Pyodide
-    // For now, we parse simple Python patterns
+    // Return a marker string that identifies this as Python code
+    // The actual execution happens via PyodideExecutor
+    return `__PYTHON_CODE__:${Buffer.from(source).toString('base64')}`
+  }
 
-    if (source.includes('sorted')) {
-      return `
-        export default function handler(input) {
-          return { sorted: [...input.items].sort() };
-        }
-      `
+  /**
+   * Check if source is a Python code marker
+   */
+  private parsePythonCodeMarker(source: string): string | null {
+    if (!source.startsWith('__PYTHON_CODE__:')) {
+      return null
     }
+    const base64Code = source.slice('__PYTHON_CODE__:'.length)
+    return Buffer.from(base64Code, 'base64').toString('utf-8')
+  }
 
-    return `
-      export default function handler(input) {
-        return {};
+  /**
+   * Execute Python code via Pyodide
+   *
+   * This method uses the PyodideExecutor to run Python code in a
+   * WebAssembly-based Python runtime. In Cloudflare Workers, this
+   * leverages the native Python support with WASM snapshots for
+   * fast cold starts.
+   *
+   * @param code - Python source code
+   * @param input - Input data to pass to the handler
+   * @param timeout - Execution timeout in milliseconds
+   * @returns Execution result
+   */
+  private async executePythonViaPyodide(
+    code: string,
+    input: unknown,
+    timeout: number
+  ): Promise<{
+    status: FunctionResultStatus
+    output: unknown
+    error?: FunctionError
+    memoryUsedBytes: number
+    cpuTimeMs: number
+  }> {
+    const startTime = Date.now()
+
+    try {
+      const executor = await this.getPyodideExecutor()
+
+      // Execute the Python code with 'handler' as the default handler name
+      // The input is passed as the first argument to the handler
+      const result = await executor.execute(
+        code,
+        'handler',
+        [input],
+        { timeoutMs: timeout }
+      )
+
+      const cpuTimeMs = Date.now() - startTime
+
+      if (result.success) {
+        return {
+          status: 'completed',
+          output: result.output,
+          memoryUsedBytes: result.memoryUsedBytes ?? 0,
+          cpuTimeMs,
+        }
       }
-    `
+
+      // Handle errors
+      if (result.timedOut) {
+        return {
+          status: 'timeout',
+          output: undefined,
+          error: {
+            name: 'TimeoutError',
+            message: 'Python execution timeout',
+          },
+          memoryUsedBytes: result.memoryUsedBytes ?? 0,
+          cpuTimeMs,
+        }
+      }
+
+      return {
+        status: 'failed',
+        output: undefined,
+        error: {
+          name: result.errorType || 'PythonError',
+          message: result.error || 'Python execution failed',
+          stack: result.stackTrace,
+        },
+        memoryUsedBytes: result.memoryUsedBytes ?? 0,
+        cpuTimeMs,
+      }
+    } catch (error) {
+      const cpuTimeMs = Date.now() - startTime
+      const message = error instanceof Error ? error.message : String(error)
+
+      return {
+        status: 'failed',
+        output: undefined,
+        error: {
+          name: 'PythonExecutionError',
+          message: `Failed to execute Python: ${message}`,
+        },
+        memoryUsedBytes: 0,
+        cpuTimeMs,
+      }
+    }
   }
 
   /**
@@ -841,6 +1018,31 @@ export class CodeExecutor {
 
     const buffer = await response.arrayBuffer()
     return new Uint8Array(buffer)
+  }
+
+  /**
+   * Load WASM binary from KV storage.
+   *
+   * KV storage is used for pre-compiled WASM binaries deployed via the API.
+   * This provides a flexible storage option for dynamically uploaded WASM.
+   *
+   * @param functionId - The function ID
+   * @param version - Version string (defaults to 'latest')
+   * @returns The WASM binary as Uint8Array, or null if not found
+   */
+  private async loadWasmBinaryFromKV(functionId: string, version = 'latest'): Promise<Uint8Array | null> {
+    if (!this.env.FUNCTIONS_CODE) {
+      return null
+    }
+
+    const key = `wasm/${functionId}/${version}`
+    const data = await this.env.FUNCTIONS_CODE.get(key, { type: 'arrayBuffer' })
+
+    if (!data) {
+      return null
+    }
+
+    return new Uint8Array(data)
   }
 
   /**
@@ -1090,19 +1292,66 @@ export class CodeExecutor {
       }
     }
 
-    // Check if this is a WASM assets marker - execute via worker loader
-    const wasmInfo = this.parseWasmAssetsMarker(code)
-    if (wasmInfo) {
-      // Load the WASM binary from assets
-      const wasmBinary = await this.loadWasmBinary(wasmInfo.functionId, wasmInfo.version)
+    // Check if this is Python code marker - execute via Pyodide
+    const pythonCode = this.parsePythonCodeMarker(code)
+    if (pythonCode) {
+      // Execute Python via Pyodide runtime
+      // Cloudflare Workers supports Python natively via Pyodide with WASM snapshots
+      return this.executePythonViaPyodide(pythonCode, input, timeout)
+    }
+
+    // Check if this is a WASM marker - execute via worker loader
+    const wasmMarker = this.parseWasmMarker(code)
+    if (wasmMarker) {
+      let wasmBinary: Uint8Array | null = null
+
+      // Load WASM binary based on marker type
+      switch (wasmMarker.type) {
+        case 'assets':
+          // Load from static assets
+          wasmBinary = await this.loadWasmBinary(wasmMarker.functionId!, wasmMarker.version)
+          break
+
+        case 'kv':
+          // Load from KV storage (pre-compiled WASM deployed via API)
+          wasmBinary = await this.loadWasmBinaryFromKV(wasmMarker.functionId!, wasmMarker.version)
+          break
+
+        case 'inline':
+          // Decode inline base64 WASM
+          if (wasmMarker.base64) {
+            try {
+              const binaryString = atob(wasmMarker.base64)
+              wasmBinary = new Uint8Array(binaryString.length)
+              for (let i = 0; i < binaryString.length; i++) {
+                wasmBinary[i] = binaryString.charCodeAt(i)
+              }
+            } catch {
+              return {
+                status: 'failed',
+                output: undefined,
+                error: {
+                  name: 'WasmDecodeError',
+                  message: 'Failed to decode inline WASM binary from base64',
+                },
+                memoryUsedBytes: 0,
+                cpuTimeMs: Date.now() - startTime,
+              }
+            }
+          }
+          break
+      }
 
       if (!wasmBinary) {
+        const location = wasmMarker.type === 'inline'
+          ? 'inline data'
+          : `${wasmMarker.functionId} (version: ${wasmMarker.version || 'latest'})`
         return {
           status: 'failed',
           output: undefined,
           error: {
             name: 'WasmNotFoundError',
-            message: `WASM binary not found for function: ${wasmInfo.functionId} (version: ${wasmInfo.version})`,
+            message: `WASM binary not found: ${location}`,
           },
           memoryUsedBytes: 0,
           cpuTimeMs: Date.now() - startTime,
@@ -1112,7 +1361,8 @@ export class CodeExecutor {
       // Execute WASM via worker loader
       // IMPORTANT: Cloudflare Workers blocks dynamic WASM compilation from ArrayBuffer.
       // We must use LOADER.put() with type: "compiled" modules.
-      return this.executeWasmViaWorkerLoader(wasmInfo.functionId, wasmBinary, input, timeout)
+      const wasmFunctionId = wasmMarker.functionId || `inline_${Date.now()}`
+      return this.executeWasmViaWorkerLoader(wasmFunctionId, wasmBinary, input, timeout)
     }
 
     // Use in-process evaluation for JS/TS code

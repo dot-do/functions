@@ -17,6 +17,8 @@
  */
 
 import { RpcTarget } from 'capnweb'
+import { createLogger, type Logger, type LoggerConfig } from './logger'
+import { FUNCTION_TARGET, FUNCTION_TARGET_LIMITS } from '../config'
 
 // ============================================================================
 // Types
@@ -209,6 +211,11 @@ export interface FunctionTargetOptions {
    * @default 1000
    */
   maxMetricsSamples?: number
+
+  /**
+   * Logger configuration or instance
+   */
+  logger?: Logger | LoggerConfig
 }
 
 /**
@@ -691,12 +698,12 @@ interface PendingBatchItem {
  * - Performance metrics
  */
 export class FunctionTarget extends RpcTarget {
-  // Memory safety limits
-  private static readonly MAX_IN_FLIGHT_REQUESTS = 10000
-  private static readonly MAX_PENDING_BATCH = 10000
-  private static readonly STALE_REQUEST_THRESHOLD_MS = 60000 // 1 minute
-  private static readonly CLEANUP_INTERVAL_MS = 30000 // 30 seconds
-  private static readonly WARN_THRESHOLD_PERCENT = 0.8 // Warn at 80% capacity
+  // Memory safety limits (from centralized config)
+  private static readonly MAX_IN_FLIGHT_REQUESTS = FUNCTION_TARGET_LIMITS.MAX_IN_FLIGHT_REQUESTS
+  private static readonly MAX_PENDING_BATCH = FUNCTION_TARGET_LIMITS.MAX_PENDING_BATCH
+  private static readonly STALE_REQUEST_THRESHOLD_MS = FUNCTION_TARGET_LIMITS.STALE_REQUEST_THRESHOLD_MS
+  private static readonly CLEANUP_INTERVAL_MS = FUNCTION_TARGET_LIMITS.CLEANUP_INTERVAL_MS
+  private static readonly WARN_THRESHOLD_PERCENT = FUNCTION_TARGET_LIMITS.WARN_THRESHOLD_PERCENT
 
   private stub: WorkerStub
   private _options: ResolvedFunctionTargetOptions
@@ -727,22 +734,26 @@ export class FunctionTarget extends RpcTarget {
   private _droppedRequests: number = 0
   private _staleRequestsCleanedUp: number = 0
 
+  // Structured logger
+  private _logger: Logger
+
   constructor(stub: WorkerStub, options: FunctionTargetOptions = {}) {
     super()
     this.stub = stub
     // Build options, only including optional properties if defined (for exactOptionalPropertyTypes)
+    // Uses centralized config for defaults
     const baseOptions = {
-      timeout: options.timeout ?? 30000,
-      retries: options.retries ?? 0,
-      serializer: options.serializer ?? 'json',
-      baseUrl: options.baseUrl ?? 'https://rpc.local/',
-      enableDeduplication: options.enableDeduplication ?? true,
-      deduplicationTtlMs: options.deduplicationTtlMs ?? 100,
-      enableBatching: options.enableBatching ?? true,
-      batchWindowMs: options.batchWindowMs ?? 5,
-      maxBatchSize: options.maxBatchSize ?? 50,
-      enableMetrics: options.enableMetrics ?? true,
-      maxMetricsSamples: options.maxMetricsSamples ?? 1000,
+      timeout: options.timeout ?? FUNCTION_TARGET.TIMEOUT_MS,
+      retries: options.retries ?? FUNCTION_TARGET.RETRIES,
+      serializer: options.serializer ?? FUNCTION_TARGET.SERIALIZER,
+      baseUrl: options.baseUrl ?? FUNCTION_TARGET.BASE_URL,
+      enableDeduplication: options.enableDeduplication ?? FUNCTION_TARGET.ENABLE_DEDUPLICATION,
+      deduplicationTtlMs: options.deduplicationTtlMs ?? FUNCTION_TARGET.DEDUPLICATION_TTL_MS,
+      enableBatching: options.enableBatching ?? FUNCTION_TARGET.ENABLE_BATCHING,
+      batchWindowMs: options.batchWindowMs ?? FUNCTION_TARGET.BATCH_WINDOW_MS,
+      maxBatchSize: options.maxBatchSize ?? FUNCTION_TARGET.MAX_BATCH_SIZE,
+      enableMetrics: options.enableMetrics ?? FUNCTION_TARGET.ENABLE_METRICS,
+      maxMetricsSamples: options.maxMetricsSamples ?? FUNCTION_TARGET_LIMITS.MAX_IN_FLIGHT_REQUESTS,
     } as const
     this._options = {
       ...baseOptions,
@@ -752,6 +763,18 @@ export class FunctionTarget extends RpcTarget {
 
     // Initialize tracing
     this._traceId = options.parentTraceId ?? generateTraceId()
+
+    // Initialize logger
+    if (options.logger && 'warn' in options.logger && typeof options.logger.warn === 'function') {
+      // It's a Logger instance
+      this._logger = options.logger as Logger
+    } else {
+      // It's a LoggerConfig or undefined
+      this._logger = createLogger({
+        ...(options.logger as LoggerConfig | undefined),
+        context: { component: 'FunctionTarget', traceId: this._traceId },
+      })
+    }
 
     // Start periodic cleanup for stale requests
     this._cleanupTimer = setInterval(() => {
@@ -780,10 +803,10 @@ export class FunctionTarget extends RpcTarget {
 
     if (cleanedCount > 0) {
       this._staleRequestsCleanedUp += cleanedCount
-      console.warn(
-        `[FunctionTarget] Cleaned up ${cleanedCount} stale in-flight requests. ` +
-        `Total cleaned: ${this._staleRequestsCleanedUp}`
-      )
+      this._logger.warn('Cleaned up stale in-flight requests', {
+        cleanedCount,
+        totalCleanedUp: this._staleRequestsCleanedUp,
+      })
     }
   }
 
@@ -795,11 +818,11 @@ export class FunctionTarget extends RpcTarget {
     const warnThreshold = FunctionTarget.MAX_IN_FLIGHT_REQUESTS * FunctionTarget.WARN_THRESHOLD_PERCENT
 
     if (currentSize >= warnThreshold) {
-      console.warn(
-        `[FunctionTarget] In-flight requests at ${currentSize}/${FunctionTarget.MAX_IN_FLIGHT_REQUESTS} ` +
-        `(${Math.round((currentSize / FunctionTarget.MAX_IN_FLIGHT_REQUESTS) * 100)}% capacity). ` +
-        `Consider reducing request rate or increasing timeout.`
-      )
+      this._logger.warn('In-flight requests approaching capacity', {
+        currentSize,
+        maxSize: FunctionTarget.MAX_IN_FLIGHT_REQUESTS,
+        capacityPercent: Math.round((currentSize / FunctionTarget.MAX_IN_FLIGHT_REQUESTS) * 100),
+      })
     }
   }
 
@@ -811,11 +834,11 @@ export class FunctionTarget extends RpcTarget {
     const warnThreshold = FunctionTarget.MAX_PENDING_BATCH * FunctionTarget.WARN_THRESHOLD_PERCENT
 
     if (currentSize >= warnThreshold) {
-      console.warn(
-        `[FunctionTarget] Pending batch at ${currentSize}/${FunctionTarget.MAX_PENDING_BATCH} ` +
-        `(${Math.round((currentSize / FunctionTarget.MAX_PENDING_BATCH) * 100)}% capacity). ` +
-        `Consider reducing batch window or request rate.`
-      )
+      this._logger.warn('Pending batch approaching capacity', {
+        currentSize,
+        maxSize: FunctionTarget.MAX_PENDING_BATCH,
+        capacityPercent: Math.round((currentSize / FunctionTarget.MAX_PENDING_BATCH) * 100),
+      })
     }
   }
 
@@ -1034,10 +1057,9 @@ export class FunctionTarget extends RpcTarget {
 
         // If still at capacity after cleanup, skip tracking (request will still execute)
         if (this._inFlightRequests.size >= FunctionTarget.MAX_IN_FLIGHT_REQUESTS) {
-          console.warn(
-            `[FunctionTarget] In-flight requests at maximum capacity (${FunctionTarget.MAX_IN_FLIGHT_REQUESTS}). ` +
-            `Skipping deduplication tracking for this request.`
-          )
+          this._logger.warn('In-flight requests at maximum capacity, skipping deduplication tracking', {
+            maxCapacity: FunctionTarget.MAX_IN_FLIGHT_REQUESTS,
+          })
           this._droppedRequests++
           return createPropertyProxy(promise, [])
         }
@@ -1074,10 +1096,9 @@ export class FunctionTarget extends RpcTarget {
 
     // Enforce maximum limit on pending batch
     if (this._pendingBatch.length >= FunctionTarget.MAX_PENDING_BATCH) {
-      console.warn(
-        `[FunctionTarget] Pending batch at maximum capacity (${FunctionTarget.MAX_PENDING_BATCH}). ` +
-        `Flushing batch before adding new request.`
-      )
+      this._logger.warn('Pending batch at maximum capacity, flushing batch', {
+        maxCapacity: FunctionTarget.MAX_PENDING_BATCH,
+      })
       // Force flush to make room
       this.flushBatch()
     }
@@ -1217,8 +1238,8 @@ export class FunctionTarget extends RpcTarget {
             item.resolve(itemResponse?.result)
           }
         }
-      } else {
-        // TypeScript knows this is SingleRpcResponse (error case or simplified server)
+      } else if (responseBody.type === 'single') {
+        // Single response for a batch request - typically an error case
         if (!response.ok || responseBody.error) {
           const error = new RpcError(
             responseBody.error || 'Batch request failed',
@@ -1229,10 +1250,33 @@ export class FunctionTarget extends RpcTarget {
             item.reject(error)
           }
         } else {
-          // Unexpected: single result for batch
+          // Unexpected: single success result for batch - log warning and reject
+          this._logger.warn('Received single response for batch request, may indicate server misconfiguration', {
+            batchSize: batch.length,
+          })
+          const error = new RpcError(
+            'Received single response for batch request - cannot distribute result',
+            'INVALID_BATCH_RESPONSE'
+          )
           for (const item of batch) {
-            item.resolve(responseBody.result)
+            this.reportError(item.span, error)
+            item.reject(error)
           }
+        }
+      } else {
+        // Unknown response type - reject all with error
+        const responseType = (responseBody as Record<string, unknown>)['type']
+        this._logger.warn('Received unexpected response type for batch request', {
+          responseType,
+          expectedTypes: ['batch', 'single'],
+        })
+        const error = new RpcError(
+          `Unexpected response type '${responseType}' for batch request`,
+          'INVALID_RESPONSE_TYPE'
+        )
+        for (const item of batch) {
+          this.reportError(item.span, error)
+          item.reject(error)
         }
       }
     } catch (error) {
