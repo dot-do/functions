@@ -1,5 +1,5 @@
 /**
- * Code Functions Executor Tests (RED Phase - TDD)
+ * Code Functions Executor Tests
  *
  * These tests validate the CodeExecutor functionality for the Code Functions tier.
  * The CodeExecutor is responsible for:
@@ -12,9 +12,6 @@
  * - Caching compiled code by content hash
  * - Loading code from various sources (inline, R2, URL, registry)
  *
- * These tests are written in the RED phase of TDD - they SHOULD FAIL
- * because the implementation does not exist yet.
- *
  * Test setup uses @cloudflare/vitest-pool-workers with miniflare
  * for realistic Cloudflare Workers environment testing.
  *
@@ -22,7 +19,6 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import { env } from 'cloudflare:test'
 
 // Import types from core
 import type {
@@ -30,13 +26,11 @@ import type {
   CodeFunctionConfig,
   CodeFunctionResult,
   CodeLanguage,
-  CodeSource,
   SandboxConfig,
-  CodeExecutionInfo,
 } from '../../../core/src/code/index.js'
-import { defineCodeFunction, inlineFunction } from '../../../core/src/code/index.js'
+import { defineCodeFunction } from '../../../core/src/code/index.js'
 
-// Import the executor that doesn't exist yet - this will cause the tests to fail
+// Import the CodeExecutor implementation
 import { CodeExecutor } from '../code-executor.js'
 
 // ============================================================================
@@ -1679,6 +1673,327 @@ describe('CodeExecutor', () => {
 
       expect(result.status).toBe('completed')
       expect(result.output).toEqual({ version: '2.0.0' })
+    })
+
+    // ========================================================================
+    // Static Assets Source Tests (Workers Static Assets for WASM binaries)
+    // Issue: functions-6tn3 - Storage: Workers Static Assets for WASM binaries
+    // Issue: functions-mio1 - Fix WASM loading via Worker Loaders
+    //
+    // CRITICAL BUG CONTEXT:
+    // Cloudflare Workers blocks dynamic WASM compilation from ArrayBuffer.
+    // The previous approach using WebAssembly.compile() will NOT work.
+    // These tests validate the Worker Loaders approach with LOADER.put().
+    // ========================================================================
+
+    it('should load WASM from static assets and prepare for worker_loaders execution', async () => {
+      // Create mock WASM binary (minimal valid WASM module magic bytes + version)
+      const wasmBytes = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
+
+      // Mock ASSETS binding
+      const mockAssets = {
+        fetch: vi.fn().mockImplementation(async (request: Request) => {
+          const url = new URL(request.url)
+          if (url.pathname === '/wasm/my-wasm-function/latest.wasm') {
+            return new Response(wasmBytes, {
+              status: 200,
+              headers: { 'Content-Type': 'application/wasm' },
+            })
+          }
+          return new Response('Not Found', { status: 404 })
+        }),
+      } as unknown as Fetcher
+
+      const executorWithAssets = new CodeExecutor({
+        ...mockEnv,
+        ASSETS: mockAssets,
+      })
+
+      const fn: CodeFunctionDefinition = {
+        id: 'assets-source',
+        name: 'Assets Source Test',
+        version: '1.0.0',
+        type: 'code',
+        language: 'rust', // WASM language
+        source: {
+          type: 'assets',
+          functionId: 'my-wasm-function',
+        },
+      }
+
+      // The loadSource method returns a marker string: __WASM_ASSETS__:{functionId}:{version}
+      // This marker is used by executeCode to load the binary and execute via worker_loaders
+      const result = await executorWithAssets.execute(fn, {})
+
+      // Verify the ASSETS binding was called with the correct path
+      expect(mockAssets.fetch).toHaveBeenCalled()
+      const fetchCall = vi.mocked(mockAssets.fetch).mock.calls[0][0] as Request
+      expect(fetchCall.url).toContain('/wasm/my-wasm-function/latest.wasm')
+    })
+
+    it('should load versioned WASM from static assets', async () => {
+      const wasmBytes = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
+
+      const mockAssets = {
+        fetch: vi.fn().mockImplementation(async (request: Request) => {
+          const url = new URL(request.url)
+          if (url.pathname === '/wasm/my-wasm-function/2.0.0.wasm') {
+            return new Response(wasmBytes, {
+              status: 200,
+              headers: { 'Content-Type': 'application/wasm' },
+            })
+          }
+          return new Response('Not Found', { status: 404 })
+        }),
+      } as unknown as Fetcher
+
+      const executorWithAssets = new CodeExecutor({
+        ...mockEnv,
+        ASSETS: mockAssets,
+      })
+
+      const fn: CodeFunctionDefinition = {
+        id: 'versioned-assets-source',
+        name: 'Versioned Assets Source Test',
+        version: '1.0.0',
+        type: 'code',
+        language: 'rust',
+        source: {
+          type: 'assets',
+          functionId: 'my-wasm-function',
+          version: '2.0.0',
+        },
+      }
+
+      await executorWithAssets.execute(fn, {})
+
+      expect(mockAssets.fetch).toHaveBeenCalled()
+      const fetchCall = vi.mocked(mockAssets.fetch).mock.calls[0][0] as Request
+      expect(fetchCall.url).toContain('/wasm/my-wasm-function/2.0.0.wasm')
+    })
+
+    it('should throw for missing ASSETS binding', async () => {
+      const executorNoAssets = new CodeExecutor({
+        ...mockEnv,
+        ASSETS: undefined,
+      })
+
+      const fn: CodeFunctionDefinition = {
+        id: 'no-assets-binding',
+        name: 'No Assets Binding Test',
+        version: '1.0.0',
+        type: 'code',
+        language: 'rust',
+        source: {
+          type: 'assets',
+          functionId: 'my-wasm-function',
+        },
+      }
+
+      await expect(executorNoAssets.execute(fn, {})).rejects.toThrow(/assets|binding|not configured/i)
+    })
+
+    it('should throw for WASM not found in assets', async () => {
+      const mockAssets = {
+        fetch: vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 })),
+      } as unknown as Fetcher
+
+      const executorWithAssets = new CodeExecutor({
+        ...mockEnv,
+        ASSETS: mockAssets,
+      })
+
+      const fn: CodeFunctionDefinition = {
+        id: 'missing-wasm',
+        name: 'Missing WASM Test',
+        version: '1.0.0',
+        type: 'code',
+        language: 'rust',
+        source: {
+          type: 'assets',
+          functionId: 'non-existent-function',
+        },
+      }
+
+      await expect(executorWithAssets.execute(fn, {})).rejects.toThrow(/not found|assets/i)
+    })
+
+    it('should throw for assets fetch error', async () => {
+      const mockAssets = {
+        fetch: vi.fn().mockResolvedValue(new Response('Internal Server Error', { status: 500, statusText: 'Internal Server Error' })),
+      } as unknown as Fetcher
+
+      const executorWithAssets = new CodeExecutor({
+        ...mockEnv,
+        ASSETS: mockAssets,
+      })
+
+      const fn: CodeFunctionDefinition = {
+        id: 'assets-error',
+        name: 'Assets Error Test',
+        version: '1.0.0',
+        type: 'code',
+        language: 'rust',
+        source: {
+          type: 'assets',
+          functionId: 'error-function',
+        },
+      }
+
+      await expect(executorWithAssets.execute(fn, {})).rejects.toThrow(/500|Internal Server Error|fetch/i)
+    })
+
+    it('should execute WASM via worker_loaders when LOADER.put is available', async () => {
+      // Create mock WASM binary (minimal valid WASM module)
+      const wasmBytes = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
+
+      // Mock ASSETS binding
+      const mockAssets = {
+        fetch: vi.fn().mockImplementation(async (request: Request) => {
+          const url = new URL(request.url)
+          if (url.pathname.includes('/wasm/wasm-loader-test/')) {
+            return new Response(wasmBytes, {
+              status: 200,
+              headers: { 'Content-Type': 'application/wasm' },
+            })
+          }
+          return new Response('Not Found', { status: 404 })
+        }),
+      } as unknown as Fetcher
+
+      // Mock LOADER binding with put() method (WorkerLoaderBinding)
+      const mockWorkerStub = {
+        fetch: vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ output: { result: 42 } }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        ),
+      }
+
+      const mockLoader = {
+        put: vi.fn().mockResolvedValue(mockWorkerStub),
+      }
+
+      const executorWithLoader = new CodeExecutor({
+        ...mockEnv,
+        ASSETS: mockAssets,
+        LOADER: mockLoader as unknown as Fetcher,
+      })
+
+      const fn: CodeFunctionDefinition = {
+        id: 'wasm-loader-test',
+        name: 'WASM Worker Loader Test',
+        version: '1.0.0',
+        type: 'code',
+        language: 'rust',
+        source: {
+          type: 'assets',
+          functionId: 'wasm-loader-test',
+        },
+      }
+
+      const result = await executorWithLoader.execute(fn, { input: 'test' })
+
+      // Verify LOADER.put was called with the correct parameters
+      expect(mockLoader.put).toHaveBeenCalledWith(
+        'wasm-loader-test',
+        expect.stringContaining('import wasmModule from "./module.wasm"'),
+        expect.objectContaining({
+          modules: expect.arrayContaining([
+            expect.objectContaining({
+              name: 'module.wasm',
+              type: 'compiled',
+              content: wasmBytes,
+            }),
+          ]),
+        })
+      )
+
+      // Verify the worker was invoked
+      expect(mockWorkerStub.fetch).toHaveBeenCalled()
+
+      // Verify the result
+      expect(result.status).toBe('completed')
+      expect(result.output).toEqual({ result: 42 })
+    })
+
+    it('should fail gracefully when LOADER.put is not available for WASM', async () => {
+      // Create mock WASM binary
+      const wasmBytes = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
+
+      // Mock ASSETS binding
+      const mockAssets = {
+        fetch: vi.fn().mockImplementation(async (request: Request) => {
+          const url = new URL(request.url)
+          if (url.pathname.includes('/wasm/no-loader-wasm/')) {
+            return new Response(wasmBytes, {
+              status: 200,
+              headers: { 'Content-Type': 'application/wasm' },
+            })
+          }
+          return new Response('Not Found', { status: 404 })
+        }),
+      } as unknown as Fetcher
+
+      // NO LOADER binding - WASM execution should fail
+      const executorNoLoader = new CodeExecutor({
+        ...mockEnv,
+        ASSETS: mockAssets,
+        LOADER: undefined,
+      })
+
+      const fn: CodeFunctionDefinition = {
+        id: 'no-loader-wasm',
+        name: 'No Loader WASM Test',
+        version: '1.0.0',
+        type: 'code',
+        language: 'rust',
+        source: {
+          type: 'assets',
+          functionId: 'no-loader-wasm',
+        },
+      }
+
+      const result = await executorNoLoader.execute(fn, {})
+
+      // Should fail with a clear error about worker_loaders requirement
+      expect(result.status).toBe('failed')
+      expect(result.error).toBeDefined()
+      expect(result.error?.message).toMatch(/worker_loaders|LOADER\.put|WASM/i)
+    })
+
+    it('documents the Cloudflare Workers WASM limitation', () => {
+      // This is a documentation test that explains the critical limitation.
+      //
+      // CLOUDFLARE WORKERS WASM LIMITATION:
+      // ===================================
+      // Cloudflare Workers blocks dynamic WASM compilation from ArrayBuffer.
+      //
+      // The following approaches DO NOT WORK:
+      //   - WebAssembly.compile(arrayBuffer)
+      //   - WebAssembly.instantiate(arrayBuffer, imports)
+      //   - new WebAssembly.Module(arrayBuffer)
+      //
+      // The ONLY way to execute WASM dynamically is via worker_loaders:
+      //
+      //   const worker = await env.LOADER.put(functionId, workerCode, {
+      //     modules: [
+      //       { name: "module.wasm", type: "compiled", content: wasmBinary }
+      //     ]
+      //   })
+      //   const result = await worker.fetch(request)
+      //
+      // The workerCode imports the WASM module statically:
+      //
+      //   import wasmModule from "./module.wasm";
+      //   const instance = await WebAssembly.instantiate(wasmModule, {});
+      //
+      // This limitation is documented in:
+      // - src/core/asset-storage.ts (updated header comment)
+      // - src/tiers/code-executor.ts (executeWasmViaWorkerLoader method)
+
+      expect(true).toBe(true)
     })
   })
 

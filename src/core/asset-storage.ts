@@ -11,6 +11,35 @@
  * Storage layout:
  *   /wasm/{functionId}/{version}.wasm
  *   /wasm/{functionId}/latest.wasm (symlink to latest version)
+ *
+ * IMPORTANT - Cloudflare Workers WASM Compilation Limitation:
+ * ============================================================
+ * Cloudflare Workers blocks dynamic WASM compilation from ArrayBuffer.
+ * The following approaches DO NOT work:
+ *   - WebAssembly.compile(arrayBuffer)
+ *   - WebAssembly.instantiate(arrayBuffer, imports)
+ *   - new WebAssembly.Module(arrayBuffer)
+ *
+ * To execute WASM in Cloudflare Workers, you MUST use one of:
+ *   1. worker_loaders binding with type: "compiled" modules
+ *   2. Static WASM imports at build time
+ *   3. Dispatch namespaces with pre-compiled WASM
+ *
+ * This module provides getWasmBinary() which returns the raw binary data.
+ * The caller is responsible for using worker_loaders to execute the WASM:
+ *
+ * @example
+ * ```typescript
+ * const wasmBinary = await assetStorage.getWasmBinary(functionId, version)
+ * if (wasmBinary && env.LOADER) {
+ *   const worker = await env.LOADER.put(functionId, workerCode, {
+ *     modules: [
+ *       { name: "module.wasm", type: "compiled", content: wasmBinary }
+ *     ]
+ *   })
+ *   const result = await worker.fetch(request)
+ * }
+ * ```
  */
 
 import { validateFunctionId } from './function-registry'
@@ -45,13 +74,25 @@ export class AssetStorage {
   }
 
   /**
-   * Fetch a WASM binary from static assets
+   * Fetch raw WASM binary data from static assets.
+   *
+   * IMPORTANT: This returns the raw binary bytes, NOT an instantiated module.
+   * Cloudflare Workers blocks dynamic WASM compilation from ArrayBuffer.
+   *
+   * To execute the WASM, use worker_loaders with type: "compiled":
+   * @example
+   * ```typescript
+   * const wasmBinary = await assetStorage.getWasmBinary(functionId)
+   * const worker = await env.LOADER.put(functionId, workerCode, {
+   *   modules: [{ name: "module.wasm", type: "compiled", content: wasmBinary }]
+   * })
+   * ```
    *
    * @param functionId - The function ID
    * @param version - Optional version (defaults to 'latest')
    * @returns The WASM binary as Uint8Array, or null if not found
    */
-  async getWasm(functionId: string, version?: string): Promise<Uint8Array | null> {
+  async getWasmBinary(functionId: string, version?: string): Promise<Uint8Array | null> {
     validateFunctionId(functionId)
 
     const path = this.getWasmPath(functionId, version)
@@ -61,11 +102,20 @@ export class AssetStorage {
       if (response.status === 404) {
         return null
       }
-      throw new Error(`Failed to fetch WASM: ${response.status} ${response.statusText}`)
+      throw new Error(`Failed to fetch WASM binary: ${response.status} ${response.statusText}`)
     }
 
     const buffer = await response.arrayBuffer()
     return new Uint8Array(buffer)
+  }
+
+  /**
+   * @deprecated Use getWasmBinary() instead. This method is kept for backwards
+   * compatibility but the new name better reflects that it returns raw binary data,
+   * not an instantiated WASM module.
+   */
+  async getWasm(functionId: string, version?: string): Promise<Uint8Array | null> {
+    return this.getWasmBinary(functionId, version)
   }
 
   /**

@@ -34,6 +34,9 @@ export { MetricsCollector, MetricsExporter } from './metrics'
 export { LogAggregator } from './log-aggregator'
 export { DistributedTracer, TraceContext, W3CTraceContextPropagator, OpenTelemetryExporter, TraceExporter, SamplingConfig } from './distributed-tracing'
 
+// Analytics (Iceberg)
+export * from './iceberg-analytics'
+
 // Utilities
 export { encodeULEB128, encodeSLEB128, encodeName, createSection } from './wasm-encoding'
 export { stripTypeScript } from './ts-strip'

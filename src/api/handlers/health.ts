@@ -1,20 +1,26 @@
 /**
  * Health Handler for Functions.do
  *
- * Returns service health status.
+ * Returns service health status for monitoring and load balancer health checks.
+ *
+ * @module handlers/health
  */
 
-import type { RouteContext, Env, Handler } from '../router'
+import type { Handler } from '../router'
 
 /**
- * Health check handler
+ * Health check handler.
+ *
+ * Returns a simple JSON response indicating the service is operational.
+ * Used by load balancers and monitoring systems to verify service availability.
+ *
+ * @returns JSON response with status 'ok' and service name
+ *
+ * @example
+ * // GET /health
+ * // Response: { "status": "ok", "service": "Functions.do" }
  */
-export const healthHandler: Handler = async (
-  request: Request,
-  env: Env,
-  ctx: ExecutionContext,
-  context?: RouteContext
-): Promise<Response> => {
+export const healthHandler: Handler = async (): Promise<Response> => {
   return new Response(
     JSON.stringify({
       status: 'ok',

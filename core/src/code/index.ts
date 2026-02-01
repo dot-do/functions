@@ -59,6 +59,7 @@ export type CodeSource =
   | { type: 'r2'; bucket: string; key: string }
   | { type: 'url'; url: string }
   | { type: 'registry'; functionId: string; version?: string }
+  | { type: 'assets'; functionId: string; version?: string }
 
 // =============================================================================
 // CODE FUNCTION CONFIG

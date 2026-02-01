@@ -51,12 +51,14 @@
   "durable_objects": {
     "bindings": [
       { "name": "FUNCTION_EXECUTOR", "class_name": "FunctionExecutor" },
-      { "name": "FUNCTION_LOGS", "class_name": "FunctionLogs" }
+      { "name": "FUNCTION_LOGS", "class_name": "FunctionLogs" },
+      { "name": "RATE_LIMITER", "class_name": "RateLimiterDO" }
     ]
   },
 
   "migrations": [
-    { "tag": "v1", "new_classes": ["FunctionExecutor", "FunctionLogs"] }
+    { "tag": "v1", "new_classes": ["FunctionExecutor", "FunctionLogs"] },
+    { "tag": "v2", "new_classes": ["RateLimiterDO"] }
   ],
 
   // Service bindings for dotdo ecosystem

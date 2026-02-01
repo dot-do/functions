@@ -2,19 +2,38 @@ import { execSync } from 'child_process'
 import { mkdtempSync, writeFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
+import {
+  getAuthHeaders,
+  getAuthStrategy,
+  isOAuthConfigured,
+  validateAuth,
+  clearTokenCache,
+  type AuthStrategy,
+} from './auth'
 
 /**
  * E2E Test Configuration
  *
  * Configuration for live deployment tests against functions.do
+ *
+ * Authentication:
+ * - OAuth.do: Set OAUTH_DO_CLIENT_ID and OAUTH_DO_CLIENT_SECRET for M2M auth
+ * - OAuth.do: Set OAUTH_DO_ACCESS_TOKEN for pre-existing token
+ * - API Key: Set FUNCTIONS_API_KEY as fallback
  */
 
 export const E2E_CONFIG = {
   /** Base URL for the functions.do API */
   baseUrl: process.env.FUNCTIONS_E2E_URL || 'https://functions-do.dotdo.workers.dev',
 
-  /** API key for authenticated requests (added later with oauth.do) */
+  /** API key for authenticated requests (legacy, prefer oauth.do) */
   apiKey: process.env.FUNCTIONS_API_KEY,
+
+  /** Whether oauth.do is configured */
+  oauthConfigured: isOAuthConfigured(),
+
+  /** Current authentication strategy */
+  authStrategy: getAuthStrategy(),
 
   /** Timeout for deployment operations (ms) - includes wrangler dispatch upload */
   deployTimeout: 60_000,
@@ -51,6 +70,39 @@ export function shouldRunE2E(): boolean {
 }
 
 /**
+ * Check if authenticated E2E tests should run
+ * These require either OAuth or API key authentication
+ */
+export function shouldRunAuthenticatedE2E(): boolean {
+  return E2E_CONFIG.authStrategy !== 'none'
+}
+
+/**
+ * Get authentication headers for E2E requests
+ * Uses oauth.do if configured, otherwise falls back to API key
+ */
+export async function getE2EAuthHeaders(): Promise<Record<string, string>> {
+  return getAuthHeaders()
+}
+
+/**
+ * Validate E2E authentication is working
+ */
+export async function validateE2EAuth(): Promise<boolean> {
+  return validateAuth(E2E_CONFIG.baseUrl)
+}
+
+/**
+ * Clear authentication token cache
+ */
+export function clearE2EAuthCache(): void {
+  clearTokenCache()
+}
+
+// Re-export auth types and functions for convenience
+export { getAuthStrategy, isOAuthConfigured, type AuthStrategy }
+
+/**
  * Deploy a function to functions.do
  */
 export async function deployFunction(params: {
@@ -64,11 +116,13 @@ export async function deployFunction(params: {
   version: string
   url: string
 }> {
+  const authHeaders = await getE2EAuthHeaders()
+
   const response = await fetch(`${E2E_CONFIG.baseUrl}/api/functions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(E2E_CONFIG.apiKey ? { 'X-API-Key': E2E_CONFIG.apiKey } : {}),
+      ...authHeaders,
     },
     body: JSON.stringify({
       id: params.id,
@@ -94,11 +148,13 @@ export async function invokeFunction<T = unknown>(
   functionId: string,
   data?: unknown
 ): Promise<T> {
+  const authHeaders = await getE2EAuthHeaders()
+
   const response = await fetch(`${E2E_CONFIG.baseUrl}/functions/${functionId}/invoke`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(E2E_CONFIG.apiKey ? { 'X-API-Key': E2E_CONFIG.apiKey } : {}),
+      ...authHeaders,
     },
     body: data ? JSON.stringify(data) : undefined,
   })
@@ -115,10 +171,12 @@ export async function invokeFunction<T = unknown>(
  * Delete a deployed function (cleanup)
  */
 export async function deleteFunction(functionId: string): Promise<void> {
+  const authHeaders = await getE2EAuthHeaders()
+
   const response = await fetch(`${E2E_CONFIG.baseUrl}/api/functions/${functionId}`, {
     method: 'DELETE',
     headers: {
-      ...(E2E_CONFIG.apiKey ? { 'X-API-Key': E2E_CONFIG.apiKey } : {}),
+      ...authHeaders,
     },
   })
 
@@ -139,6 +197,7 @@ export async function getFunctionLogs(
   level: string
   message: string
 }>> {
+  const authHeaders = await getE2EAuthHeaders()
   const params = new URLSearchParams()
   if (options?.limit) params.set('limit', String(options.limit))
   if (options?.since) params.set('since', options.since)
@@ -147,7 +206,7 @@ export async function getFunctionLogs(
     `${E2E_CONFIG.baseUrl}/api/functions/${functionId}/logs?${params}`,
     {
       headers: {
-        ...(E2E_CONFIG.apiKey ? { 'X-API-Key': E2E_CONFIG.apiKey } : {}),
+        ...authHeaders,
       },
     }
   )
@@ -217,8 +276,11 @@ export async function uploadToDispatchNamespace(
 }
 
 /**
- * Deploy a function to functions.do AND upload to dispatch namespace.
+ * Deploy a function to functions.do AND optionally upload to dispatch namespace.
  * This combines the API deploy with wrangler dispatch upload for full functionality.
+ *
+ * Note: The worker_loaders path allows function execution without dispatch namespace upload.
+ * Dispatch namespace upload is skipped if CLOUDFLARE_API_TOKEN is not set.
  */
 export async function deployAndUploadFunction(params: {
   id: string
@@ -237,8 +299,21 @@ export async function deployAndUploadFunction(params: {
     language: params.language,
   })
 
-  // Then upload to dispatch namespace for execution
-  await uploadToDispatchNamespace(params.id, params.code, params.language)
+  // Upload to dispatch namespace only if Cloudflare API credentials are available
+  // The worker_loaders path works without dispatch namespace upload
+  if (process.env.CLOUDFLARE_API_TOKEN) {
+    try {
+      await uploadToDispatchNamespace(params.id, params.code, params.language)
+    } catch (error) {
+      // Log but don't fail - worker_loaders path will still work
+      console.warn(`Dispatch namespace upload failed (worker_loaders will be used): ${error}`)
+    }
+  }
+
+  // Wait for KV propagation before returning
+  // Cloudflare KV has eventual consistency, so we need to wait a bit
+  // for the code to be available across all edge locations
+  await new Promise(resolve => setTimeout(resolve, 2000))
 
   return result
 }

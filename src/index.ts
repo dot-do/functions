@@ -107,11 +107,13 @@ function stripTypeScript(code: string): string {
   result = result.replace(/<([A-Z][\w<>[\],\s|&.?]*)>(?=\s*[\w({[])/g, '')
 
   // Remove type annotations from parameters: (param: Type) -> (param)
-  // Only match after ( , or whitespace to avoid matching object properties like obj.name
-  result = result.replace(/([(,\s])(\w+)\s*\??\s*:\s*([A-Z][\w<>[\],\s|&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint)(?=\s*[,)=])/gi, '$1$2')
+  // Only match after ( or , to avoid matching object properties like { key: value }
+  // Note: Don't use case-insensitive flag here - types start with uppercase
+  result = result.replace(/([(,])(\s*)(\w+)\s*\??\s*:\s*([A-Z][\w<>[\],\s|&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint)(?=\s*[,)=])/g, '$1$2$3')
 
   // Remove return type annotations: ): Type { or ): Type =>
-  result = result.replace(/\)\s*:\s*([A-Z][\w<>[\],\s|&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint|Promise<[^>]+>)\s*(?=[{=])/gi, ') ')
+  // Note: Don't use case-insensitive flag - types start with uppercase (except primitives)
+  result = result.replace(/\)\s*:\s*([A-Z][\w<>[\],\s|&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint|Promise<[^>]+>)\s*(?=[{=])/g, ') ')
 
   // Remove generic type parameters from functions: function foo<T>(...) -> function foo(...)
   result = result.replace(/(<[A-Z][\w,\s]*(?:\s+extends\s+[^>]+)?>)(?=\s*\()/gi, '')
@@ -120,8 +122,14 @@ function stripTypeScript(code: string): string {
   result = result.replace(/(class\s+\w+)\s*<[A-Z][\w,\s]*(?:\s+extends\s+[^>]+)?>/gi, '$1')
 
   // Remove non-null assertions: expression! -> expression
-  // Be careful not to match !== or !=
-  result = result.replace(/(\w+)!(?!=)/g, '$1')
+  // Only match non-null assertions that are clearly TypeScript patterns:
+  // - After closing parenthesis: foo()!
+  // - After closing bracket: foo[0]!
+  // - After an identifier followed by a dot, comma, semicolon, or closing paren/bracket
+  // This avoids matching exclamation marks in string literals like 'Hello, World!'
+  result = result.replace(/(\))\s*!/g, '$1')
+  result = result.replace(/(\])\s*!/g, '$1')
+  result = result.replace(/(\w+)!(?=\s*[.;,)\]])/g, '$1')
 
   // Remove satisfies expressions: expression satisfies Type
   result = result.replace(/\s+satisfies\s+[A-Z][\w<>[\],\s|&.?]*/gi, '')
@@ -870,11 +878,15 @@ export default {
             console.error('Worker loader error:', loaderError)
             const msg = loaderError instanceof Error ? loaderError.message : String(loaderError)
             console.log('Falling back to dispatch namespace due to loader error:', msg)
+
+            // Return the error immediately instead of falling back to dispatch namespace
+            // This provides better debugging and faster failure
+            return errorResponse(`Worker loader execution failed: ${msg}`, 500)
           }
         }
 
-        // Fallback: Use Workers for Platforms dispatch namespace
-        if (env.USER_FUNCTIONS) {
+        // Fallback: Use Workers for Platforms dispatch namespace (only if LOADER not available)
+        if (env.USER_FUNCTIONS && !env.LOADER) {
           try {
             const userWorker = env.USER_FUNCTIONS.get(functionId)
 
@@ -956,3 +968,4 @@ export {
 // Export Durable Objects for Worker binding
 export { FunctionExecutor } from './do/function-executor'
 export { FunctionLogs } from './do/function-logs'
+export { RateLimiterDO } from './do/rate-limiter'

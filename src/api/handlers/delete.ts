@@ -1,7 +1,9 @@
 /**
  * Delete Handler for Functions.do
  *
- * Handles function deletion including cleanup of metadata and code.
+ * Handles function deletion including cleanup of metadata and code storage.
+ *
+ * @module handlers/delete
  */
 
 import type { RouteContext, Env, Handler } from '../router'
@@ -11,7 +13,24 @@ import { validateFunctionId } from '../../core/function-registry'
 import { jsonResponse } from '../http-utils'
 
 /**
- * Delete handler - removes function code and metadata
+ * Delete handler - removes function code and metadata.
+ *
+ * Performs a complete cleanup of all function data:
+ * - Deletes all code versions from storage
+ * - Deletes all metadata versions from registry
+ * - Removes compiled code and source maps
+ *
+ * This operation is irreversible. The function ID can be reused after deletion.
+ *
+ * @param request - The incoming HTTP request
+ * @param env - Environment bindings with FUNCTIONS_REGISTRY and FUNCTIONS_CODE KV namespaces
+ * @param ctx - Execution context
+ * @param context - Route context containing function ID from URL params
+ * @returns JSON response with success status or error
+ *
+ * @example
+ * // DELETE /api/functions/my-function
+ * // Response: { "success": true, "id": "my-function", "message": "Function deleted" }
  */
 export const deleteHandler: Handler = async (
   request: Request,
@@ -50,5 +69,3 @@ export const deleteHandler: Handler = async (
 
   return jsonResponse({ success: true, id: functionId, message: 'Function deleted' })
 }
-
-export { deleteHandler as default }

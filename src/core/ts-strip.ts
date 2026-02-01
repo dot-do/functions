@@ -292,7 +292,7 @@ function stripTypeScriptRegex(code: string): string {
   // camelCase identifiers, not TypeScript types. Types are either keywords or PascalCase.
   // This regex only matches if the "type" portion looks like an actual type.
   result = result.replace(
-    /([(,]\s*)(\w+)\s*\??\s*:\s*(\{[^}]*\}|(?:string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint|[A-Z][\w<>[\],\s|&.?]*)(?:\s*\|\s*(?:\{[^}]*\}|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint|[A-Z][\w<>[\],\s|&.?]*))*(?:\[\])?)(?=\s*[,)=])/g,
+    /([(,]\s*)(\w+)\s*\??\s*:\s*(\{[^}]*\}|(?:string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint|[A-Z][\w<>[\], |&.?]*)(?:\s*\|\s*(?:\{[^}]*\}|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint|[A-Z][\w<>[\], |&.?]*))*(?:\[\])?)(?=\s*[,)=])/g,
     '$1$2'
   )
 
@@ -300,30 +300,46 @@ function stripTypeScriptRegex(code: string): string {
   // Match pattern: `): ReturnType` where ReturnType is a type expression
   // This is safe because it requires `)` before the colon, which only occurs in function signatures
   result = result.replace(
-    /\)\s*:\s*(?:\{[^}]*\}|Promise<[^>]+>|[A-Z][\w<>[\],\s|&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint)(?:\s*\|\s*(?:\{[^}]*\}|[A-Z][\w<>[\],\s|&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint))*\s*(?=[{=])/g,
+    /\)\s*:\s*(?:\{[^}]*\}|Promise<[^>]+>|[A-Z][\w<>[\], |&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint)(?:\s*\|\s*(?:\{[^}]*\}|[A-Z][\w<>[\], |&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint))*\s*(?=[{=])/g,
     ') '
   )
 
   // Remove type assertions (as Type) - but preserve "as const"
+  // IMPORTANT: Don't use \s in the type pattern as it matches newlines and can consume too much
   result = result.replace(/\s+as\s+\{[^}]+\}/g, '')
-  result = result.replace(/\s+as\s+(?!const\b)[A-Z][\w<>[\],\s|&.?]*/g, '')
+  result = result.replace(/\s+as\s+(?!const\b)[A-Z][\w<>[\], |&.?]*/g, '')
   result = result.replace(/\s+as\s+(?!const\b)(string|number|boolean|any|unknown|void|never|null|undefined)\b/g, '')
 
   // Remove angle bracket type assertions (but not JSX/TSX elements or comparisons)
-  result = result.replace(/<([A-Z][\w<>[\],\s|&.?]*)>(?=\s*[\w({[])/g, '')
+  result = result.replace(/<([A-Z][\w<>[\], |&.?]*)>(?=\s*[\w({[])/g, '')
 
   // Remove non-null assertions (!) but preserve !== and !=
-  result = result.replace(/(\w+)!(?!=)/g, '$1')
+  // Only match non-null assertions that are clearly TypeScript patterns:
+  // - After closing parenthesis: foo()!
+  // - After closing bracket: foo[0]!
+  // - After an identifier followed by a dot, comma, semicolon, or closing paren/bracket
+  // This avoids matching exclamation marks in string literals like 'Hello, World!'
+  result = result.replace(/(\))\s*!/g, '$1')
+  result = result.replace(/(\])\s*!/g, '$1')
+  result = result.replace(/(\w+)!(?=\s*[.;,)\]])/g, '$1')
 
   // Remove satisfies expressions
-  result = result.replace(/\s+satisfies\s+[A-Z][\w<>[\],\s|&.?]*/gi, '')
+  result = result.replace(/\s+satisfies\s+[A-Z][\w<>[\], |&.?]*/gi, '')
 
   // Remove variable declaration type annotations (const x: Type = value)
   // Pattern: (const|let|var) identifier: Type = value
   // Only strip if followed by = to ensure it's a type annotation, not object property
   result = result.replace(
-    /(const|let|var)\s+(\w+)\s*:\s*(?:\{[^}]*\}|[A-Z][\w<>[\],\s|&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint)(?:\s*\|\s*(?:\{[^}]*\}|[A-Z][\w<>[\],\s|&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint))*\s*=/g,
+    /(const|let|var)\s+(\w+)\s*:\s*(?:\{[^}]*\}|[A-Z][\w<>[\], |&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint)(?:\s*\|\s*(?:\{[^}]*\}|[A-Z][\w<>[\], |&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint))*\s*=/g,
     '$1 $2 ='
+  )
+
+  // Remove variable declaration type annotations without initial value (let x: Type)
+  // Pattern: (let|var) identifier: Type (end of statement)
+  // NOTE: const without value is invalid JS, so we only match let/var
+  result = result.replace(
+    /\b(let|var)\s+(\w+)\s*:\s*(?:\{[^}]*\}|[A-Z][\w<>[\], |&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint)(?:\s*\|\s*(?:\{[^}]*\}|[A-Z][\w<>[\], |&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint))*(?=\s*[;\n]|$)/gm,
+    '$1 $2'
   )
 
   // Clean up empty imports

@@ -2,9 +2,23 @@
  * Deploy Handler for Functions.do
  *
  * Handles function deployment including validation, compilation, and storage.
+ * Uses Cloudflare Workers KV for metadata and code storage.
+ *
+ * Supported languages:
+ * - TypeScript/JavaScript: Stored directly
+ * - Rust, Go, Zig, AssemblyScript: Compiled to WASM (when compilers available)
+ *
+ * @module handlers/deploy
  */
 
 import type { RouteContext, Env, Handler } from '../router'
+
+/**
+ * Extended route context for deploy handler.
+ * Currently empty as deploy uses request body for all data.
+ */
+export interface DeployHandlerContext extends RouteContext {}
+
 import { KVFunctionRegistry } from '../../core/kv-function-registry'
 import { KVCodeStorage } from '../../core/code-storage'
 import {
@@ -16,17 +30,30 @@ import {
 import { isValidVersion, type FunctionMetadata } from '../../core/types'
 import { jsonResponse } from '../http-utils'
 
-// WASM compilers are dynamically imported to avoid issues with Node.js modules in Workers
+/**
+ * Result from WASM compilation.
+ */
 type CompileResult = { wasm: Uint8Array; exports?: string[] }
+
+/**
+ * Function type for WASM compilers.
+ */
 type CompileFunction = (code: string) => Promise<CompileResult>
 
+// WASM compilers are dynamically imported to avoid issues with Node.js modules in Workers
 let compileRust: CompileFunction | null = null
 let compileGo: CompileFunction | null = null
 let compileZig: CompileFunction | null = null
 let compileAssemblyScript: CompileFunction | null = null
 
-// Try to load compilers (may fail in Worker environment)
-async function loadCompilers() {
+/**
+ * Dynamically load WASM compilers.
+ *
+ * Compilers are loaded on-demand to avoid bundling issues in Worker environments.
+ * Failures are silently ignored; the deploy handler will return an error if a
+ * required compiler is not available.
+ */
+async function loadCompilers(): Promise<void> {
   try {
     const rustModule = await import('../../languages/rust/compile')
     compileRust = rustModule.compileRust
@@ -54,12 +81,14 @@ async function loadCompilers() {
 }
 
 /**
- * Context for deploy handler
- */
-export interface DeployHandlerContext extends RouteContext {}
-
-/**
- * Upload to dispatch namespace via Cloudflare API
+ * Upload code to Cloudflare dispatch namespace via API.
+ *
+ * This enables Workers for Platforms execution of deployed functions.
+ *
+ * @param code - The JavaScript/TypeScript code to upload
+ * @param scriptName - The name for the worker script (usually the function ID)
+ * @param env - Environment with Cloudflare credentials and namespace config
+ * @returns Success status and optional error message
  */
 async function uploadToDispatchNamespace(
   code: string,
@@ -109,13 +138,32 @@ async function uploadToDispatchNamespace(
 }
 
 /**
- * Deploy handler - stores function code and metadata
+ * Deploy handler - validates, compiles, and stores function code and metadata.
+ *
+ * Workflow:
+ * 1. Parse and validate request body (id, version, language, code)
+ * 2. Validate function ID format, semantic version, language support
+ * 3. Compile code if needed (WASM for Rust/Go/Zig/AssemblyScript)
+ * 4. Store code in KV (versioned and latest)
+ * 5. Store metadata in registry (versioned and latest)
+ * 6. Upload to dispatch namespace for TS/JS functions
+ *
+ * @param request - The incoming HTTP request with JSON deployment payload
+ * @param env - Environment bindings (KV namespaces, Cloudflare credentials)
+ * @param ctx - Execution context
+ * @param context - Route context (unused for deploy)
+ * @returns JSON response with deployment result including function URL
+ *
+ * @example
+ * // POST /api/functions
+ * // Body: { "id": "my-fn", "version": "1.0.0", "language": "typescript", "code": "..." }
+ * // Response: { "id": "my-fn", "version": "1.0.0", "url": "https://.../functions/my-fn" }
  */
 export const deployHandler: Handler = async (
   request: Request,
   env: Env,
-  ctx: ExecutionContext,
-  context?: RouteContext
+  _ctx: ExecutionContext,
+  _context?: RouteContext
 ): Promise<Response> => {
   // Parse request body
   let body: {
@@ -285,5 +333,3 @@ export const deployHandler: Handler = async (
       : dispatchUploadResult.error || 'Dispatch upload not configured',
   })
 }
-
-export { deployHandler as default }

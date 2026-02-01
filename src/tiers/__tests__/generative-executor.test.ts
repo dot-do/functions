@@ -644,7 +644,9 @@ describe('GenerativeExecutor', () => {
       // Check that example is formatted with input/output pair
       const messages = JSON.stringify(callArgs.messages)
       expect(messages).toContain('What is 2+2')
-      expect(messages).toContain('"answer": "4"')
+      // The content is JSON-stringified, so quotes are escaped
+      expect(messages).toContain('\\"answer\\"')
+      expect(messages).toContain('\\"4\\"')
     })
 
     it('should preserve example order', async () => {

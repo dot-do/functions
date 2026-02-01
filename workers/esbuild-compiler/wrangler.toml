@@ -1,0 +1,30 @@
+# esbuild-compiler Worker Configuration
+#
+# This worker provides TypeScript/TSX to JavaScript compilation
+# using esbuild-wasm. It can be called via Service Bindings from
+# other workers in the functions.do ecosystem.
+
+name = "esbuild-compiler"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Worker needs sufficient resources for esbuild-wasm
+# The wasm binary is ~13MB which affects cold start
+
+[build]
+command = ""
+
+# Static assets for the esbuild.wasm binary
+[assets]
+directory = "./assets"
+binding = "ASSETS"
+
+# Development settings
+[dev]
+port = 8787
+
+# Observability
+[observability]
+enabled = true
+head_sampling_rate = 1

@@ -2,6 +2,14 @@
  * Invoke Handler for Functions.do
  *
  * Handles function invocation requests and dispatches to appropriate executors.
+ *
+ * Routes to the 4-tier function cascade:
+ * - Tier 1: Code (5s timeout) - Direct code execution
+ * - Tier 2: Generative (30s timeout) - AI-powered generation
+ * - Tier 3: Agentic (5m timeout) - Multi-step AI agent execution
+ * - Tier 4: Human (24h timeout) - Human-in-the-loop tasks
+ *
+ * @module handlers/invoke
  */
 
 import type { RouteContext, Env, Handler } from '../router'
@@ -13,21 +21,47 @@ import { jsonResponse } from '../http-utils'
 import { stripTypeScript } from '../../core/ts-strip'
 
 /**
- * Context for invoke handler
+ * Extended route context for invoke handler with required function ID.
  */
 export interface InvokeHandlerContext extends RouteContext {
+  /** The function identifier to invoke */
   functionId: string
 }
 
 /**
- * Determine function type from metadata
+ * Determine function type from metadata.
+ *
+ * Defaults to 'code' for backward compatibility with functions
+ * that don't have an explicit type set.
+ *
+ * @param metadata - Function metadata with optional type field
+ * @returns The function type ('code', 'generative', 'agentic', 'human', or 'cascade')
  */
 function getFunctionType(metadata: FunctionMetadata & { type?: string }): string {
   return metadata.type || 'code'
 }
 
 /**
- * Invoke handler - executes functions
+ * Invoke handler - executes deployed functions.
+ *
+ * Supports multiple execution tiers:
+ * - Tier 1: Code (5s timeout) - Direct code execution via worker_loaders or dispatch namespace
+ * - Tier 2-4: Currently return 501 Not Implemented
+ *
+ * For code execution, the handler tries multiple backends in order:
+ * 1. worker_loaders (ai-evaluate) - Isolated worker execution
+ * 2. dispatch_namespace (Workers for Platforms) - Pre-deployed workers
+ *
+ * @param request - The incoming HTTP request with optional JSON body
+ * @param env - Environment bindings (KV, Durable Objects, etc.)
+ * @param ctx - Execution context for waitUntil operations
+ * @param context - Route context with function ID and version
+ * @returns JSON response with execution result and metadata
+ *
+ * @example
+ * // POST /functions/my-function
+ * // Body: { "name": "World" }
+ * // Response: { "greeting": "Hello, World!", "_meta": { "duration": 5, "executorType": "code" } }
  */
 export const invokeHandler: Handler = async (
   request: Request,
@@ -249,5 +283,3 @@ export const invokeHandler: Handler = async (
     501
   )
 }
-
-export { invokeHandler as default }

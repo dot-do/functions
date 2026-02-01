@@ -1,7 +1,9 @@
 /**
  * Logs Handler for Functions.do
  *
- * Retrieves function execution logs.
+ * Retrieves function execution logs from Durable Object storage.
+ *
+ * @module handlers/logs
  */
 
 import type { RouteContext, Env, Handler } from '../router'
@@ -9,7 +11,24 @@ import { validateFunctionId } from '../../core/function-registry'
 import { jsonResponse } from '../http-utils'
 
 /**
- * Logs handler - retrieves function execution logs
+ * Logs handler - retrieves function execution logs.
+ *
+ * Fetches logs from the FUNCTION_LOGS Durable Object namespace.
+ * Supports filtering by time range and limiting result count.
+ *
+ * Query parameters:
+ * - limit: Maximum number of log entries to return (1-1000, default: 100)
+ * - since: ISO 8601 timestamp to filter logs after this time
+ *
+ * @param request - The incoming HTTP request with optional query parameters
+ * @param env - Environment bindings with FUNCTION_LOGS Durable Object namespace
+ * @param ctx - Execution context
+ * @param context - Route context containing function ID from URL params
+ * @returns JSON array of log entries with timestamp, level, and message
+ *
+ * @example
+ * // GET /api/functions/my-function/logs?limit=50&since=2024-01-01T00:00:00Z
+ * // Response: [{ "timestamp": "...", "level": "info", "message": "..." }, ...]
  */
 export const logsHandler: Handler = async (
   request: Request,
@@ -105,5 +124,3 @@ export const logsHandler: Handler = async (
     return jsonResponse({ error: message }, 500)
   }
 }
-
-export { logsHandler as default }

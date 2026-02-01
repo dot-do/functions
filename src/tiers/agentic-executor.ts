@@ -29,6 +29,117 @@ import type {
 import { parseDuration } from '../../core/src/types.js'
 
 // =============================================================================
+// MODULE DOCUMENTATION
+// =============================================================================
+//
+// This module implements the AgenticFunctionExecutor interface for multi-step
+// AI agents with tool use capabilities. Key features:
+//
+// - Agent loop execution (think -> act -> observe cycle)
+// - Tool registration and validation
+// - Support for all tool types: function, api, inline, builtin
+// - Iteration and tool call limits
+// - Memory and context accumulation
+// - Chain-of-thought reasoning
+// - Timeout enforcement (5m default)
+// - Human-in-the-loop approval for sensitive operations
+// - Execution trace and cost tracking
+// - Integration with autonomous-agents package API
+//
+// =============================================================================
+
+// =============================================================================
+// AUTONOMOUS AGENTS TYPES (mirror types from autonomous-agents package)
+// =============================================================================
+
+/**
+ * These types mirror the autonomous-agents package API.
+ * When the package is available, it will be used; otherwise, these types
+ * provide the interface contract for the integration.
+ */
+
+/** Agent execution mode */
+type AutonomousAgentMode = 'autonomous' | 'supervised' | 'manual'
+
+/** Agent status during execution */
+type AutonomousAgentStatus = 'idle' | 'thinking' | 'acting' | 'waiting' | 'completed' | 'error'
+
+/** Priority levels */
+type Priority = 'low' | 'medium' | 'high' | 'urgent'
+
+/** Tool/function definition for AI */
+interface AIFunctionDefinition {
+  name: string
+  description: string
+  parameters?: Record<string, unknown>
+  handler: (input: unknown) => Promise<unknown>
+}
+
+/** Role definition */
+interface RoleType {
+  id: string
+  name: string
+  description: string
+  skills: string[]
+  permissions?: string[]
+  tools?: AIFunctionDefinition[]
+  outputs?: string[]
+}
+
+/** Goal definition */
+interface Goal {
+  id: string
+  description: string
+  target: string | number
+  progress?: string | number
+  deadline?: Date
+  priority?: Priority
+  status?: 'active' | 'completed' | 'blocked' | 'cancelled'
+  subgoals?: Goal[]
+  successCriteria?: string[]
+}
+
+/** Agent history entry */
+interface AgentHistoryEntry {
+  timestamp: Date
+  type: 'task' | 'question' | 'decision' | 'approval' | 'notification' | 'error'
+  action: string
+  input?: unknown
+  output?: unknown
+  error?: string
+  duration?: number
+}
+
+/** Agent configuration */
+interface AutonomousAgentConfig {
+  name: string
+  description?: string
+  role: RoleType
+  mode?: AutonomousAgentMode
+  goals?: Goal[]
+  tools?: AIFunctionDefinition[]
+  context?: Record<string, unknown>
+  model?: string
+  system?: string
+  maxIterations?: number
+  temperature?: number
+}
+
+/** Autonomous Agent instance */
+interface AutonomousAgent {
+  config: AutonomousAgentConfig
+  status: AutonomousAgentStatus
+  state: Record<string, unknown>
+  do: <TResult = unknown>(task: string, context?: unknown) => Promise<TResult>
+  ask: <TResult = unknown>(question: string, context?: unknown) => Promise<TResult>
+  decide: <T extends string>(options: T[], context?: string) => Promise<T>
+  setState: (key: string, value: unknown) => void
+  getState: <T = unknown>(key: string) => T | undefined
+  getHistory: () => AgentHistoryEntry[]
+  reset: () => void
+}
+
+// =============================================================================
 // AI CLIENT INTERFACE
 // =============================================================================
 
@@ -108,6 +219,64 @@ interface PendingApproval {
 }
 
 // =============================================================================
+// AUTONOMOUS AGENT BRIDGE
+// =============================================================================
+
+/**
+ * Converts a ToolDefinition to an AIFunctionDefinition for use with autonomous-agents
+ */
+function toolDefinitionToAIFunction(
+  tool: ToolDefinition,
+  handler: ToolHandler,
+  executionContext: ExecutionContext
+): AIFunctionDefinition {
+  return {
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.inputSchema as Record<string, unknown>,
+    handler: async (input: unknown) => {
+      return handler(input, {
+        toolDefinition: tool,
+        executionContext,
+      })
+    },
+  }
+}
+
+/**
+ * Creates a Role from an AgenticFunctionDefinition
+ */
+function createRoleFromDefinition(
+  definition: AgenticFunctionDefinition<unknown, unknown>,
+  tools: AIFunctionDefinition[]
+): RoleType {
+  return {
+    id: `role-${definition.id || 'agent'}`,
+    name: definition.name || 'Agent',
+    description: definition.systemPrompt,
+    skills: ['reasoning', 'tool-use', 'planning'],
+    tools,
+  }
+}
+
+/**
+ * Creates Goals from the definition
+ */
+function createGoalsFromDefinition(
+  definition: AgenticFunctionDefinition<unknown, unknown>
+): Goal[] {
+  return [
+    {
+      id: 'primary-goal',
+      description: definition.goal,
+      target: 'completion',
+      status: 'active',
+      priority: 'high',
+    },
+  ]
+}
+
+// =============================================================================
 // AGENTIC EXECUTOR
 // =============================================================================
 
@@ -119,6 +288,7 @@ export class AgenticExecutor<TInput = unknown, TOutput = unknown>
   private tokenBudget: number | undefined
   private pricing: PricingConfig | undefined
   private pendingApprovals: Map<string, PendingApproval[]> = new Map()
+  private autonomousAgent: AutonomousAgent | undefined
 
   constructor(
     private definition: AgenticFunctionDefinition<TInput, TOutput>,
@@ -127,6 +297,286 @@ export class AgenticExecutor<TInput = unknown, TOutput = unknown>
   ) {
     // Register tools from definition
     this.registeredTools = [...(definition.tools || [])]
+  }
+
+  /**
+   * Create an autonomous-agents compatible Agent for this executor.
+   *
+   * This provides integration with the autonomous-agents API contract for
+   * enhanced agent capabilities like goals, roles, teams, and approval flows.
+   */
+  private createAutonomousAgentInstance(
+    executionContext: ExecutionContext
+  ): AutonomousAgent {
+    // Convert ToolDefinitions to AIFunctionDefinitions
+    const aiTools: AIFunctionDefinition[] = this.registeredTools
+      .filter((tool) => this.toolHandlers.has(tool.name))
+      .map((tool) =>
+        toolDefinitionToAIFunction(
+          tool,
+          this.toolHandlers.get(tool.name)!,
+          executionContext
+        )
+      )
+
+    // Create role from definition
+    const role = createRoleFromDefinition(
+      this.definition as AgenticFunctionDefinition<unknown, unknown>,
+      aiTools
+    )
+
+    // Create goals
+    const goals = createGoalsFromDefinition(
+      this.definition as AgenticFunctionDefinition<unknown, unknown>
+    )
+
+    // Create the autonomous agent configuration
+    const agentConfig: AutonomousAgentConfig = {
+      name: this.definition.name || 'AgenticExecutor',
+      description: this.definition.description,
+      role,
+      mode: 'autonomous',
+      goals,
+      tools: aiTools,
+      context: this.env,
+      model: this.definition.model || 'claude-3-sonnet',
+      system: this.definition.systemPrompt,
+      maxIterations: this.definition.maxIterations ?? 10,
+    }
+
+    // Create a local agent implementation that follows the autonomous-agents API
+    return this.createLocalAgent(agentConfig, executionContext)
+  }
+
+  /**
+   * Create a local agent implementation that matches the autonomous-agents API.
+   *
+   * This is used when the autonomous-agents package is not available or for testing.
+   * The local implementation provides the same interface contract as the full package,
+   * enabling seamless integration and gradual migration.
+   *
+   * @param config - The autonomous agent configuration
+   * @param _executionContext - The execution context (reserved for future use)
+   * @returns An AutonomousAgent instance
+   */
+  private createLocalAgent(
+    config: AutonomousAgentConfig,
+    _executionContext: ExecutionContext
+  ): AutonomousAgent {
+    const agentState: Record<string, unknown> = config.context || {}
+    let status: AutonomousAgentStatus = 'idle'
+    const history: AgentHistoryEntry[] = []
+    const aiClient = this.aiClient
+
+    // Helper to record history
+    const recordHistory = (entry: Omit<AgentHistoryEntry, 'timestamp'>): void => {
+      history.push({
+        ...entry,
+        timestamp: new Date(),
+      })
+    }
+
+    // Implement the do method for task execution
+    const doTask = async <TResult = unknown>(
+      task: string,
+      context?: unknown
+    ): Promise<TResult> => {
+      const startTime = Date.now()
+      status = 'thinking'
+
+      try {
+        if (!aiClient) {
+          throw new Error('AI client not configured for autonomous agent')
+        }
+
+        // Execute the task using the AI client
+        const response = await aiClient.chat({
+          model: config.model,
+          messages: [
+            { role: 'user', content: `Task: ${task}\n\nContext: ${JSON.stringify(context || {})}` },
+          ],
+          tools: config.tools?.map((t) => ({
+            name: t.name,
+            description: t.description,
+            inputSchema: t.parameters,
+          })),
+          systemPrompt: config.system,
+        })
+
+        const result = response.content
+
+        recordHistory({
+          type: 'task',
+          action: task,
+          input: context,
+          output: result,
+          duration: Date.now() - startTime,
+        })
+
+        status = 'completed'
+
+        // Try to parse as JSON, otherwise return as string
+        try {
+          return JSON.parse(result) as TResult
+        } catch {
+          return result as TResult
+        }
+      } catch (error) {
+        status = 'error'
+        recordHistory({
+          type: 'error',
+          action: task,
+          input: context,
+          error: error instanceof Error ? error.message : String(error),
+          duration: Date.now() - startTime,
+        })
+        throw error
+      } finally {
+        if (status !== 'error') {
+          status = 'idle'
+        }
+      }
+    }
+
+    // Implement the ask method
+    const ask = async <TResult = unknown>(
+      question: string,
+      context?: unknown
+    ): Promise<TResult> => {
+      const startTime = Date.now()
+      status = 'thinking'
+
+      try {
+        if (!aiClient) {
+          throw new Error('AI client not configured for autonomous agent')
+        }
+
+        const response = await aiClient.chat({
+          model: config.model,
+          messages: [
+            { role: 'user', content: `Question: ${question}\n\nContext: ${JSON.stringify(context || {})}` },
+          ],
+          systemPrompt: config.system,
+        })
+
+        const result = response.content
+
+        recordHistory({
+          type: 'question',
+          action: question,
+          input: context,
+          output: result,
+          duration: Date.now() - startTime,
+        })
+
+        status = 'idle'
+
+        try {
+          return JSON.parse(result) as TResult
+        } catch {
+          return result as TResult
+        }
+      } catch (error) {
+        status = 'error'
+        recordHistory({
+          type: 'error',
+          action: question,
+          input: context,
+          error: error instanceof Error ? error.message : String(error),
+          duration: Date.now() - startTime,
+        })
+        throw error
+      }
+    }
+
+    // Implement the decide method
+    const decide = async <T extends string>(options: T[], context?: string): Promise<T> => {
+      const startTime = Date.now()
+      status = 'thinking'
+
+      try {
+        if (!aiClient) {
+          // Return first option as default when no AI client
+          return options[0]
+        }
+
+        const response = await aiClient.chat({
+          model: config.model,
+          messages: [
+            {
+              role: 'user',
+              content: `Choose one of these options: ${options.join(', ')}\n\nContext: ${context || 'No additional context'}`,
+            },
+          ],
+          systemPrompt: config.system,
+        })
+
+        // Try to extract the decision from the response
+        const decision = options.find((o) => response.content.includes(o)) || options[0]
+
+        recordHistory({
+          type: 'decision',
+          action: `Choose from: ${options.join(', ')}`,
+          input: context,
+          output: decision,
+          duration: Date.now() - startTime,
+        })
+
+        status = 'idle'
+        return decision
+      } catch (error) {
+        status = 'error'
+        recordHistory({
+          type: 'error',
+          action: 'decision',
+          input: { options, context },
+          error: error instanceof Error ? error.message : String(error),
+          duration: Date.now() - startTime,
+        })
+        throw error
+      }
+    }
+
+    return {
+      config,
+      get status() {
+        return status
+      },
+      state: agentState,
+      do: doTask,
+      ask,
+      decide,
+      setState: (key: string, value: unknown) => {
+        agentState[key] = value
+      },
+      getState: <T = unknown>(key: string): T | undefined => {
+        return agentState[key] as T | undefined
+      },
+      getHistory: () => [...history],
+      reset: () => {
+        Object.keys(agentState).forEach((key) => delete agentState[key])
+        history.length = 0
+        status = 'idle'
+      },
+    }
+  }
+
+  /**
+   * Get the underlying autonomous agent instance.
+   *
+   * Useful for advanced use cases like team coordination or direct
+   * agent method access (do, ask, decide).
+   *
+   * @param executionContext - Optional execution context
+   * @returns The autonomous agent instance
+   */
+  getAutonomousAgent(executionContext?: ExecutionContext): AutonomousAgent {
+    if (!this.autonomousAgent) {
+      this.autonomousAgent = this.createAutonomousAgentInstance(
+        executionContext || { executionId: `agent-${Date.now()}` }
+      )
+    }
+    return this.autonomousAgent
   }
 
   // ===========================================================================

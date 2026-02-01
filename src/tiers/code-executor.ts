@@ -19,38 +19,94 @@ import type {
   CodeLanguage,
   CodeSource,
   SandboxConfig,
-  CodeExecutionInfo,
 } from '../../core/src/code/index.js'
 import type {
   FunctionError,
-  ExecutionMetrics,
-  ExecutionMetadata,
   FunctionResultStatus,
   ExecutionContext,
 } from '../../core/src/types.js'
 import { parseDuration } from '../../core/src/types.js'
 import { stripTypeScript } from '../core/ts-strip'
-// Note: ai-evaluate can be used in production with worker_loaders binding
-// For test environments (vitest-pool-workers), we use in-process evaluation
-// since Miniflare can't run nested inside the test worker runtime
-// import type { EvaluateOptions, EvaluateResult, SandboxEnv, WorkerLoader as AIEvaluateLoader } from 'ai-evaluate'
 
 // ============================================================================
 // Types
 // ============================================================================
 
 /**
+ * Worker Loader binding module configuration for WASM execution.
+ * Used with LOADER.put() to create workers with compiled WASM modules.
+ */
+export interface WorkerLoaderModule {
+  /** Module name (e.g., "module.wasm") */
+  name: string
+  /** Module type - "compiled" for pre-compiled WASM */
+  type: 'compiled' | 'text' | 'json'
+  /** Module content - Uint8Array for compiled WASM */
+  content: Uint8Array | string
+}
+
+/**
+ * Worker Loader binding interface for dynamic worker creation.
+ * This is the Cloudflare worker_loaders binding that allows creating
+ * workers at runtime with WASM modules.
+ */
+export interface WorkerLoaderBinding {
+  /**
+   * Create a new worker with the specified code and modules.
+   *
+   * @param id - Unique identifier for the worker
+   * @param code - Worker JavaScript/TypeScript code
+   * @param options - Optional modules (including compiled WASM)
+   * @returns A Fetcher-like stub for invoking the worker
+   */
+  put(
+    id: string,
+    code: string,
+    options?: {
+      modules?: WorkerLoaderModule[]
+    }
+  ): Promise<{
+    fetch(request: Request): Promise<Response>
+  }>
+
+  /**
+   * Get an existing worker by ID.
+   */
+  get(
+    id: string,
+    loader: () => Promise<{
+      mainModule: string
+      modules: Record<string, string>
+      compatibilityDate?: string
+    }>
+  ): {
+    fetch(request: Request): Promise<Response>
+  }
+}
+
+/**
  * Environment bindings for the CodeExecutor
  */
 export interface CodeExecutorEnv {
-  /** Worker loader fetcher for loading functions */
-  LOADER?: Fetcher
+  /**
+   * Worker loader binding for creating workers with WASM modules.
+   *
+   * IMPORTANT: For WASM execution, this MUST be a WorkerLoaderBinding
+   * (from wrangler.jsonc worker_loaders config), NOT a Fetcher.
+   *
+   * Cloudflare Workers blocks dynamic WASM compilation from ArrayBuffer.
+   * The only way to execute WASM dynamically is via LOADER.put() with
+   * type: "compiled" modules.
+   */
+  LOADER?: WorkerLoaderBinding | Fetcher
   /** R2 bucket for code storage */
   CODE_STORAGE?: R2Bucket
   /** KV namespace for function registry */
   FUNCTION_REGISTRY?: KVNamespace
   /** AI evaluate service for sandboxed execution */
   AI_EVALUATE?: Fetcher
+  /** Static assets binding for WASM binaries */
+  ASSETS?: Fetcher
 }
 
 /**
@@ -206,6 +262,28 @@ function wrapError(error: unknown, retryable = false): FunctionError {
   }
 }
 
+/**
+ * Check if an error message indicates a network access restriction.
+ *
+ * @param errorMessage - The error message to check
+ * @param blockNetwork - Whether network is completely blocked
+ * @param networkAllowlist - Optional list of allowed domains
+ * @returns FunctionError if network was blocked, undefined otherwise
+ */
+function checkNetworkError(
+  errorMessage: string,
+  blockNetwork?: boolean,
+  networkAllowlist?: string[]
+): FunctionError | undefined {
+  if (blockNetwork && errorMessage.includes('Network access is disabled')) {
+    return { name: 'Error', message: 'Network access is disabled' }
+  }
+  if (networkAllowlist && errorMessage.includes('not in allowlist')) {
+    return { name: 'Error', message: errorMessage }
+  }
+  return undefined
+}
+
 // ============================================================================
 // Code Executor
 // ============================================================================
@@ -260,13 +338,8 @@ export class CodeExecutor {
     // Determine isolate type
     const isolateType = this.getIsolateType(definition.language, sandbox)
 
-    // Load source code
-    let sourceCode: string
-    try {
-      sourceCode = await this.loadSource(definition.source)
-    } catch (error) {
-      throw error // Re-throw source loading errors
-    }
+    // Load source code (errors propagate to caller)
+    const sourceCode = await this.loadSource(definition.source)
 
     // Check for cached compiled code
     const codeHash = hashCode(sourceCode)
@@ -560,6 +633,34 @@ export class CodeExecutor {
         return parsed.code
       }
 
+      case 'assets': {
+        // Load WASM binary from Workers Static Assets
+        //
+        // IMPORTANT: This returns a special marker string. The actual WASM binary
+        // is loaded separately via loadWasmBinary() because Cloudflare Workers
+        // blocks dynamic WASM compilation from ArrayBuffer.
+        //
+        // To execute WASM, use worker_loaders with type: "compiled" modules.
+        // See executeWasmViaWorkerLoader() for the correct approach.
+        if (!this.env.ASSETS) {
+          throw new Error('Static assets binding not configured')
+        }
+        const version = source.version || 'latest'
+        const assetPath = `/wasm/${source.functionId}/${version}.wasm`
+        const response = await this.env.ASSETS.fetch(
+          new Request(`https://assets${assetPath}`)
+        )
+        if (!response.ok) {
+          if (response.status === 404) {
+            throw new Error(`WASM not found in assets: ${source.functionId}`)
+          }
+          throw new Error(`Failed to fetch WASM from assets: ${response.status} ${response.statusText}`)
+        }
+        // Return marker string - the actual binary is loaded via loadWasmBinary()
+        // We include metadata in the marker for the compile step
+        return `__WASM_ASSETS__:${source.functionId}:${version}`
+      }
+
       default:
         throw new Error(`Unknown source type: ${(source as { type: string }).type}`)
     }
@@ -600,9 +701,41 @@ export class CodeExecutor {
   }
 
   /**
-   * Compile to WASM (mock implementation)
+   * Check if source is a WASM assets marker.
+   *
+   * @param source - The source string to check
+   * @returns The parsed WASM info or null if not a WASM marker
+   */
+  private parseWasmAssetsMarker(source: string): { functionId: string; version: string } | null {
+    if (!source.startsWith('__WASM_ASSETS__:')) {
+      return null
+    }
+    const parts = source.split(':')
+    if (parts.length >= 3) {
+      return {
+        functionId: parts[1]!,
+        version: parts[2]!,
+      }
+    }
+    return null
+  }
+
+  /**
+   * Compile to WASM (mock implementation for non-assets source)
+   *
+   * When source code (not pre-compiled WASM) is provided for a WASM language,
+   * this method simulates compilation by returning a JavaScript wrapper.
+   * In production, this would call the appropriate compiler (rustc, tinygo, etc.)
+   *
+   * For pre-compiled WASM from assets, use executeWasmViaWorkerLoader() instead.
    */
   private compileToWasm(source: string, language: CodeLanguage): string {
+    // Check if this is a WASM assets marker - if so, return it as-is
+    // The actual execution will be handled by executeWasmViaWorkerLoader()
+    if (source.startsWith('__WASM_ASSETS__:')) {
+      return source
+    }
+
     // In production, this would compile to actual WASM
     // For now, we return a JavaScript wrapper that simulates the WASM behavior
 
@@ -682,6 +815,217 @@ export class CodeExecutor {
   }
 
   /**
+   * Load WASM binary from static assets.
+   *
+   * @param functionId - The function ID
+   * @param version - Version string (defaults to 'latest')
+   * @returns The WASM binary as Uint8Array, or null if not found
+   */
+  private async loadWasmBinary(functionId: string, version = 'latest'): Promise<Uint8Array | null> {
+    if (!this.env.ASSETS) {
+      return null
+    }
+
+    const assetPath = `/wasm/${functionId}/${version}.wasm`
+    const response = await this.env.ASSETS.fetch(
+      new Request(`https://assets${assetPath}`)
+    )
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        return null
+      }
+      throw new Error(`Failed to fetch WASM binary: ${response.status} ${response.statusText}`)
+    }
+
+    const buffer = await response.arrayBuffer()
+    return new Uint8Array(buffer)
+  }
+
+  /**
+   * Execute WASM via Worker Loaders.
+   *
+   * IMPORTANT: Cloudflare Workers blocks dynamic WASM compilation from ArrayBuffer.
+   * This method uses the worker_loaders binding (LOADER.put) to create a worker
+   * with the WASM as a pre-compiled module.
+   *
+   * @param functionId - The function ID (used as worker ID)
+   * @param wasmBinary - The WASM binary bytes
+   * @param input - Input data to pass to the WASM function
+   * @param timeout - Execution timeout in milliseconds
+   * @returns Execution result
+   */
+  private async executeWasmViaWorkerLoader(
+    functionId: string,
+    wasmBinary: Uint8Array,
+    input: unknown,
+    timeout: number
+  ): Promise<{
+    status: FunctionResultStatus
+    output: unknown
+    error?: FunctionError
+    memoryUsedBytes: number
+    cpuTimeMs: number
+  }> {
+    const startTime = Date.now()
+
+    // Check if LOADER is a WorkerLoaderBinding (has .put method)
+    const loader = this.env.LOADER as WorkerLoaderBinding | undefined
+    if (!loader || typeof loader.put !== 'function') {
+      // Fallback: Return a simulated error since we can't execute WASM without worker_loaders
+      return {
+        status: 'failed',
+        output: undefined,
+        error: {
+          name: 'WasmExecutionError',
+          message: 'WASM execution requires worker_loaders binding (LOADER.put). ' +
+            'Cloudflare Workers blocks dynamic WASM compilation from ArrayBuffer.',
+        },
+        memoryUsedBytes: 0,
+        cpuTimeMs: Date.now() - startTime,
+      }
+    }
+
+    try {
+      // Generate a JavaScript wrapper that imports and executes the WASM module
+      const workerCode = `
+        import wasmModule from "./module.wasm";
+
+        export default {
+          async fetch(request) {
+            try {
+              const input = await request.json();
+              const instance = await WebAssembly.instantiate(wasmModule, {});
+
+              // Call the handler export if it exists
+              if (typeof instance.exports.handler === 'function') {
+                const result = instance.exports.handler(input);
+                return new Response(JSON.stringify({ output: result }), {
+                  headers: { 'Content-Type': 'application/json' }
+                });
+              }
+
+              // Return exports info if no handler
+              return new Response(JSON.stringify({
+                exports: Object.keys(instance.exports),
+                error: 'No handler function exported from WASM module'
+              }), {
+                status: 400,
+                headers: { 'Content-Type': 'application/json' }
+              });
+            } catch (error) {
+              return new Response(JSON.stringify({
+                error: error.message,
+                stack: error.stack
+              }), {
+                status: 500,
+                headers: { 'Content-Type': 'application/json' }
+              });
+            }
+          }
+        };
+      `
+
+      // Create the worker with WASM as a compiled module
+      const worker = await loader.put(functionId, workerCode, {
+        modules: [
+          {
+            name: 'module.wasm',
+            type: 'compiled',
+            content: wasmBinary,
+          },
+        ],
+      })
+
+      // Execute the worker with timeout
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), timeout)
+
+      try {
+        const request = new Request('http://wasm-executor/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(input),
+          signal: controller.signal,
+        })
+
+        const response = await worker.fetch(request)
+        clearTimeout(timeoutId)
+
+        const cpuTimeMs = Date.now() - startTime
+
+        if (!response.ok) {
+          const errorData = await response.json() as { error?: string; stack?: string }
+          return {
+            status: 'failed',
+            output: undefined,
+            error: {
+              name: 'WasmExecutionError',
+              message: errorData.error || 'WASM execution failed',
+              stack: errorData.stack,
+            },
+            memoryUsedBytes: 0,
+            cpuTimeMs,
+          }
+        }
+
+        const result = await response.json() as { output?: unknown; error?: string }
+        if (result.error) {
+          return {
+            status: 'failed',
+            output: undefined,
+            error: {
+              name: 'WasmExecutionError',
+              message: result.error,
+            },
+            memoryUsedBytes: 0,
+            cpuTimeMs,
+          }
+        }
+
+        return {
+          status: 'completed',
+          output: result.output,
+          memoryUsedBytes: 0, // TODO: Get from worker metrics
+          cpuTimeMs,
+        }
+      } catch (error) {
+        clearTimeout(timeoutId)
+        const cpuTimeMs = Date.now() - startTime
+
+        if (error instanceof Error && error.name === 'AbortError') {
+          return {
+            status: 'timeout',
+            output: undefined,
+            error: {
+              name: 'TimeoutError',
+              message: 'WASM execution timeout',
+            },
+            memoryUsedBytes: 0,
+            cpuTimeMs,
+          }
+        }
+
+        throw error
+      }
+    } catch (error) {
+      const cpuTimeMs = Date.now() - startTime
+      const message = error instanceof Error ? error.message : String(error)
+
+      return {
+        status: 'failed',
+        output: undefined,
+        error: {
+          name: 'WasmExecutionError',
+          message: `Failed to execute WASM via worker_loaders: ${message}`,
+        },
+        memoryUsedBytes: 0,
+        cpuTimeMs,
+      }
+    }
+  }
+
+  /**
    * Execute compiled code in sandbox
    *
    * This method executes JavaScript/TypeScript code using in-process evaluation.
@@ -745,7 +1089,32 @@ export class CodeExecutor {
       }
     }
 
-    // Use in-process evaluation
+    // Check if this is a WASM assets marker - execute via worker loader
+    const wasmInfo = this.parseWasmAssetsMarker(code)
+    if (wasmInfo) {
+      // Load the WASM binary from assets
+      const wasmBinary = await this.loadWasmBinary(wasmInfo.functionId, wasmInfo.version)
+
+      if (!wasmBinary) {
+        return {
+          status: 'failed',
+          output: undefined,
+          error: {
+            name: 'WasmNotFoundError',
+            message: `WASM binary not found for function: ${wasmInfo.functionId} (version: ${wasmInfo.version})`,
+          },
+          memoryUsedBytes: 0,
+          cpuTimeMs: Date.now() - startTime,
+        }
+      }
+
+      // Execute WASM via worker loader
+      // IMPORTANT: Cloudflare Workers blocks dynamic WASM compilation from ArrayBuffer.
+      // We must use LOADER.put() with type: "compiled" modules.
+      return this.executeWasmViaWorkerLoader(wasmInfo.functionId, wasmBinary, input, timeout)
+    }
+
+    // Use in-process evaluation for JS/TS code
     return this.executeInProcess(code, input, {
       timeout,
       deterministic,
@@ -805,9 +1174,6 @@ export class CodeExecutor {
       Date.now = () => DETERMINISTIC_DATE
     }
 
-    // No longer need deterministic setup inside the wrapper code
-    const deterministicSetup = ''
-
     // Build network blocking code
     let networkSetup = ''
     if (blockNetwork) {
@@ -840,7 +1206,6 @@ export class CodeExecutor {
     // Also wrap execution in try/catch to serialize error properties that might be lost
     // when crossing execution context boundaries (workerd/V8 isolate issue)
     const wrappedCode = `
-      ${deterministicSetup}
       ${networkSetup}
       var __handler__;
       var __input__ = __injectedInput__;
@@ -974,54 +1339,22 @@ export class CodeExecutor {
           const errData = wrapperResult.__error__
           const errorMessage = errData?.message || ''
 
-          // Check for network blocked errors
-          if (blockNetwork && errorMessage.includes('Network access is disabled')) {
-            return {
-              status: 'failed',
-              output: undefined,
-              error: {
-                name: 'Error',
-                message: 'Network access is disabled',
-              },
-              memoryUsedBytes: 0,
-              cpuTimeMs,
-            }
+          // Check for network errors first
+          const networkError = checkNetworkError(errorMessage, blockNetwork, networkAllowlist)
+          if (networkError) {
+            return { status: 'failed', output: undefined, error: networkError, memoryUsedBytes: 0, cpuTimeMs }
           }
 
-          // Check for allowlist violations
-          if (networkAllowlist && errorMessage.includes('not in allowlist')) {
-            return {
-              status: 'failed',
-              output: undefined,
-              error: {
-                name: 'Error',
-                message: errorMessage,
-              },
-              memoryUsedBytes: 0,
-              cpuTimeMs,
-            }
-          }
-
-          // Return with preserved error properties
+          // Build error with preserved properties
           const funcError: FunctionError = {
             name: errData?.name || 'Error',
             message: errorMessage,
             retryable: errData?.retryable === true,
           }
-          if (errData?.stack) {
-            funcError.stack = errData.stack
-          }
-          if (errData?.code) {
-            funcError.code = errData.code
-          }
+          if (errData?.stack) funcError.stack = errData.stack
+          if (errData?.code) funcError.code = errData.code
 
-          return {
-            status: 'failed',
-            output: errData?.partialResult,
-            error: funcError,
-            memoryUsedBytes: 0,
-            cpuTimeMs,
-          }
+          return { status: 'failed', output: errData?.partialResult, error: funcError, memoryUsedBytes: 0, cpuTimeMs }
         }
       }
 
@@ -1047,62 +1380,21 @@ export class CodeExecutor {
 
       // Check for timeout
       if (errorMessage.toLowerCase().includes('timeout')) {
-        return {
-          status: 'timeout',
-          output: undefined,
-          error: {
-            name: 'TimeoutError',
-            message: 'Execution timeout',
-          },
-          memoryUsedBytes: 0,
-          cpuTimeMs,
-        }
+        return { status: 'timeout', output: undefined, error: { name: 'TimeoutError', message: 'Execution timeout' }, memoryUsedBytes: 0, cpuTimeMs }
       }
 
-      // Check for network blocked errors
-      if (blockNetwork && errorMessage.includes('Network access is disabled')) {
-        return {
-          status: 'failed',
-          output: undefined,
-          error: {
-            name: 'Error',
-            message: 'Network access is disabled',
-          },
-          memoryUsedBytes: 0,
-          cpuTimeMs,
-        }
+      // Check for network errors
+      const networkError = checkNetworkError(errorMessage, blockNetwork, networkAllowlist)
+      if (networkError) {
+        return { status: 'failed', output: undefined, error: networkError, memoryUsedBytes: 0, cpuTimeMs }
       }
 
-      // Check for allowlist violations
-      if (networkAllowlist && errorMessage.includes('not in allowlist')) {
-        return {
-          status: 'failed',
-          output: undefined,
-          error: {
-            name: 'Error',
-            message: errorMessage,
-          },
-          memoryUsedBytes: 0,
-          cpuTimeMs,
-        }
-      }
+      // Extract partial result if available
+      const partialOutput = error instanceof Error
+        ? (error as Error & { partialResult?: unknown }).partialResult
+        : undefined
 
-      // Check for partial result (only available on Error objects)
-      let partialOutput: unknown
-      if (error instanceof Error) {
-        const errWithPartial = error as Error & { partialResult?: unknown }
-        if (errWithPartial.partialResult !== undefined) {
-          partialOutput = errWithPartial.partialResult
-        }
-      }
-
-      return {
-        status: 'failed',
-        output: partialOutput,
-        error: wrapError(error, err.retryable === true),
-        memoryUsedBytes: 0,
-        cpuTimeMs,
-      }
+      return { status: 'failed', output: partialOutput, error: wrapError(error, err.retryable === true), memoryUsedBytes: 0, cpuTimeMs }
     }
   }
 

@@ -1,0 +1,923 @@
+/**
+ * Tier Dispatcher - Connects API handlers to tier executors
+ *
+ * Routes function invocations to the appropriate tier executor:
+ * - Tier 1: Code (5s timeout) - src/tiers/code-executor.ts
+ * - Tier 2: Generative (30s timeout) - src/tiers/generative-executor.ts
+ * - Tier 3: Agentic (5m timeout) - src/tiers/agentic-executor.ts
+ * - Tier 4: Human (24h timeout) - src/tiers/human-executor.ts
+ */
+
+import type { FunctionMetadata } from '../core/types'
+import { CodeExecutor, type CodeExecutorEnv, type CodeFunctionResultWithCache } from '../tiers/code-executor'
+// NOTE: GenerativeExecutor and AgenticExecutor are commented out due to ai-providers
+// dependency issues with Cloudflare Workers. The executors use Node.js-only APIs.
+// These tiers return 503 until the dependency issue is resolved.
+// import { GenerativeExecutor, type GenerativeExecutorOptions } from '../tiers/generative-executor'
+// import { AgenticExecutor } from '../tiers/agentic-executor'
+
+// Stub types for now
+type GenerativeExecutor = never
+type GenerativeExecutorOptions = never
+type AgenticExecutor = never
+import type {
+  CodeFunctionDefinition,
+  CodeSource,
+} from '../../core/src/code/index.js'
+import type {
+  GenerativeFunctionDefinition,
+  GenerativeFunctionConfig,
+  GenerativeFunctionResult,
+} from '../../core/src/generative/index.js'
+import type {
+  AgenticFunctionDefinition,
+  AgenticFunctionConfig,
+  AgenticFunctionResult,
+} from '../../core/src/agentic/index.js'
+import type {
+  HumanFunctionDefinition,
+  HumanFunctionConfig,
+  HumanFunctionResult,
+} from '../../core/src/human/index.js'
+import type { ExecutionContext as FunctionExecutionContext } from '../../core/src/types.js'
+
+// =============================================================================
+// TYPES
+// =============================================================================
+
+/**
+ * Tier numbers for the function cascade
+ */
+export type TierNumber = 1 | 2 | 3 | 4
+
+/**
+ * Tier names mapped to tier numbers
+ */
+export const TIER_MAP: Record<string, TierNumber> = {
+  code: 1,
+  generative: 2,
+  agentic: 3,
+  human: 4,
+}
+
+/**
+ * Default timeouts for each tier
+ */
+export const TIER_TIMEOUTS: Record<TierNumber, number> = {
+  1: 5000,       // 5 seconds for code
+  2: 30000,      // 30 seconds for generative
+  3: 300000,     // 5 minutes for agentic
+  4: 86400000,   // 24 hours for human
+}
+
+/**
+ * Extended environment with all tier executor bindings
+ */
+export interface TierDispatcherEnv {
+  /** KV for function registry */
+  FUNCTIONS_REGISTRY: KVNamespace
+  /** KV for code storage */
+  FUNCTIONS_CODE: KVNamespace
+  /** Worker loader for code execution */
+  LOADER?: unknown
+  /** Dispatch namespace for code execution */
+  USER_FUNCTIONS?: unknown
+  /** AI client for generative/agentic execution */
+  AI_CLIENT?: AIClient
+  /** Durable Object for human task execution */
+  HUMAN_TASKS?: DurableObjectNamespace
+  /** R2 bucket for code storage */
+  CODE_STORAGE?: R2Bucket
+}
+
+/**
+ * AI client interface (simplified)
+ */
+export interface AIClient {
+  messages?: {
+    create(params: unknown): Promise<{
+      content: Array<{ type: string; text: string }>
+      usage?: { input_tokens: number; output_tokens: number }
+      stop_reason?: string
+      model?: string
+    }>
+  }
+  chat?: (request: unknown) => Promise<{
+    content: string
+    toolCalls?: Array<{ name: string; input: unknown }>
+    stopReason: string
+    tokens: { inputTokens: number; outputTokens: number; totalTokens: number }
+  }>
+}
+
+/**
+ * Dispatch result with execution info
+ */
+export interface DispatchResult<TOutput = unknown> {
+  /** HTTP status code */
+  status: number
+  /** Response body */
+  body: {
+    /** Output data (if successful) */
+    output?: TOutput
+    /** Task ID (for human tier) */
+    taskId?: string
+    /** Task URL (for human tier) */
+    taskUrl?: string
+    /** Task status (for human tier) */
+    taskStatus?: string
+    /** Error message (if failed) */
+    error?: string
+    /** Execution metadata */
+    _meta: {
+      /** Execution duration in ms */
+      duration: number
+      /** Executor type that handled the request */
+      executorType: string
+      /** Tier number */
+      tier: TierNumber
+      /** Code execution info (tier 1) */
+      codeExecution?: {
+        language: string
+        isolateType?: string
+        cpuTimeMs?: number
+        memoryUsedBytes?: number
+        compilationTimeMs?: number
+        deterministic?: boolean
+      }
+      /** Generative execution info (tier 2) */
+      generativeExecution?: {
+        model: string
+        tokens: {
+          inputTokens: number
+          outputTokens: number
+        }
+        cached?: boolean
+        stopReason?: string
+        modelLatencyMs?: number
+      }
+      /** Agentic execution info (tier 3) */
+      agenticExecution?: {
+        model: string
+        iterations: number
+        toolsUsed: string[]
+        totalTokens: {
+          inputTokens: number
+          outputTokens: number
+          totalTokens: number
+        }
+        goalAchieved?: boolean
+        reasoningSummary?: string
+      }
+      /** Human execution info (tier 4) */
+      humanExecution?: {
+        taskId: string
+        expiresAt: number
+        assignees?: string[]
+      }
+      /** Tiers attempted (for cascade) */
+      tiersAttempted?: string[]
+      /** Steps executed (for cascade) */
+      stepsExecuted?: number
+    }
+  }
+}
+
+/**
+ * Extended metadata with type information
+ */
+export interface ExtendedMetadata extends FunctionMetadata {
+  type?: string
+  // Generative fields
+  model?: string
+  userPrompt?: string
+  systemPrompt?: string
+  outputSchema?: Record<string, unknown>
+  temperature?: number
+  maxTokens?: number
+  // Agentic fields
+  goal?: string
+  tools?: Array<{
+    name: string
+    description: string
+    inputSchema: Record<string, unknown>
+  }>
+  maxIterations?: number
+  enableReasoning?: boolean
+  enableMemory?: boolean
+  // Human fields
+  interactionType?: string
+  ui?: {
+    title: string
+    description?: string
+  }
+  assignees?: {
+    users?: string[]
+    teams?: string[]
+    roles?: string[]
+    roundRobin?: boolean
+  }
+  sla?: {
+    responseTime: string
+    resolutionTime: string
+  }
+  // Cascade fields
+  steps?: Array<{
+    functionId: string
+    tier: string
+    fallbackTo?: string
+  }>
+  errorHandling?: string
+}
+
+// =============================================================================
+// TIER DISPATCHER
+// =============================================================================
+
+/**
+ * TierDispatcher routes function invocations to the appropriate tier executor
+ */
+export class TierDispatcher {
+  private codeExecutor: CodeExecutor | null = null
+  // NOTE: Generative and Agentic executors are disabled due to ai-providers dependency issues
+  // private generativeExecutor: GenerativeExecutor | null = null
+  // private agenticExecutors: Map<string, AgenticExecutor> = new Map()
+
+  constructor(private env: TierDispatcherEnv) {
+    // Initialize code executor
+    const codeEnv: CodeExecutorEnv = {
+      LOADER: env.LOADER as Fetcher | undefined,
+      CODE_STORAGE: env.CODE_STORAGE,
+      FUNCTION_REGISTRY: env.FUNCTIONS_REGISTRY,
+    }
+    this.codeExecutor = new CodeExecutor(codeEnv)
+
+    // NOTE: Generative and Agentic executors are disabled until ai-providers dependency is fixed
+    // These tiers will return 503 Service Unavailable
+  }
+
+  /**
+   * Dispatch a function invocation to the appropriate tier executor
+   */
+  async dispatch(
+    metadata: ExtendedMetadata,
+    input: unknown,
+    code?: string
+  ): Promise<DispatchResult> {
+    const functionType = metadata.type || 'code'
+    const tier = TIER_MAP[functionType] || 1
+    const start = Date.now()
+
+    try {
+      switch (functionType) {
+        case 'code':
+          return await this.dispatchCode(metadata, input, code, start)
+
+        case 'generative':
+          return await this.dispatchGenerative(metadata, input, start)
+
+        case 'agentic':
+          return await this.dispatchAgentic(metadata, input, start)
+
+        case 'human':
+          return await this.dispatchHuman(metadata, input, start)
+
+        case 'cascade':
+          return await this.dispatchCascade(metadata, input, start)
+
+        default:
+          return {
+            status: 501,
+            body: {
+              error: `Unknown function type: ${functionType}`,
+              _meta: { duration: Date.now() - start, executorType: functionType, tier: 1 },
+            },
+          }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Execution failed'
+      return {
+        status: 500,
+        body: {
+          error: message,
+          _meta: { duration: Date.now() - start, executorType: functionType, tier },
+        },
+      }
+    }
+  }
+
+  /**
+   * Dispatch to Code Executor (Tier 1)
+   */
+  private async dispatchCode(
+    metadata: ExtendedMetadata,
+    input: unknown,
+    code: string | undefined,
+    start: number
+  ): Promise<DispatchResult> {
+    if (!this.codeExecutor) {
+      return {
+        status: 503,
+        body: {
+          error: 'Code executor not available',
+          _meta: { duration: Date.now() - start, executorType: 'code', tier: 1 },
+        },
+      }
+    }
+
+    if (!code) {
+      return {
+        status: 404,
+        body: {
+          error: 'Function code not found',
+          _meta: { duration: Date.now() - start, executorType: 'code', tier: 1 },
+        },
+      }
+    }
+
+    // Build CodeFunctionDefinition from metadata
+    const definition: CodeFunctionDefinition = {
+      id: metadata.id,
+      name: metadata.id,
+      version: metadata.version,
+      type: 'code',
+      language: metadata.language || 'typescript',
+      source: { type: 'inline', code } as CodeSource,
+      timeout: `${TIER_TIMEOUTS[1]}ms`,
+    }
+
+    const result = await this.codeExecutor.execute(definition, input)
+    const duration = Date.now() - start
+
+    if (result.status === 'timeout') {
+      return {
+        status: 408,
+        body: {
+          error: result.error?.message || 'Execution timeout',
+          _meta: {
+            duration,
+            executorType: 'code',
+            tier: 1,
+            codeExecution: {
+              language: result.codeExecution?.language || metadata.language || 'typescript',
+              cpuTimeMs: result.codeExecution?.cpuTimeMs,
+            },
+          },
+        },
+      }
+    }
+
+    if (result.status === 'failed') {
+      return {
+        status: 500,
+        body: {
+          error: result.error?.message || 'Execution failed',
+          _meta: {
+            duration,
+            executorType: 'code',
+            tier: 1,
+            codeExecution: {
+              language: result.codeExecution?.language || metadata.language || 'typescript',
+              cpuTimeMs: result.codeExecution?.cpuTimeMs,
+            },
+          },
+        },
+      }
+    }
+
+    return {
+      status: 200,
+      body: {
+        ...((result.output || {}) as object),
+        _meta: {
+          duration,
+          executorType: 'code',
+          tier: 1,
+          codeExecution: {
+            language: result.codeExecution?.language || metadata.language || 'typescript',
+            isolateType: result.codeExecution?.isolateType,
+            cpuTimeMs: result.codeExecution?.cpuTimeMs,
+            memoryUsedBytes: result.codeExecution?.memoryUsedBytes,
+            compilationTimeMs: result.codeExecution?.compilationTimeMs,
+            deterministic: result.codeExecution?.deterministic,
+          },
+        },
+      },
+    }
+  }
+
+  /**
+   * Dispatch to Generative Executor (Tier 2)
+   * NOTE: Currently disabled due to ai-providers dependency issues with Cloudflare Workers
+   */
+  private async dispatchGenerative(
+    metadata: ExtendedMetadata,
+    input: unknown,
+    start: number
+  ): Promise<DispatchResult> {
+    // NOTE: Generative executor is disabled until ai-providers dependency is fixed
+    return {
+      status: 503,
+      body: {
+        error: 'Generative executor temporarily unavailable. Service under maintenance.',
+        _meta: { duration: Date.now() - start, executorType: 'generative', tier: 2 },
+      },
+    }
+
+    // Original implementation disabled:
+    /*
+    if (!this.generativeExecutor || !this.env.AI_CLIENT) {
+      return {
+        status: 503,
+        body: {
+          error: 'Generative executor not available. AI_CLIENT not configured.',
+          _meta: { duration: Date.now() - start, executorType: 'generative', tier: 2 },
+        },
+      }
+    }
+
+    // Build GenerativeFunctionDefinition from metadata
+    const definition: GenerativeFunctionDefinition = {
+      id: metadata.id,
+      name: metadata.id,
+      version: metadata.version,
+      type: 'generative',
+      model: metadata.model || 'claude-3-sonnet',
+      userPrompt: metadata.userPrompt || '',
+      systemPrompt: metadata.systemPrompt,
+      outputSchema: metadata.outputSchema || { type: 'object' },
+      temperature: metadata.temperature,
+      maxTokens: metadata.maxTokens,
+      timeout: `${TIER_TIMEOUTS[2]}ms`,
+    }
+
+    const context: FunctionExecutionContext = {
+      timeout: TIER_TIMEOUTS[2],
+    }
+
+    try {
+      const result = await this.generativeExecutor.execute(definition, input, undefined, context)
+      const duration = Date.now() - start
+
+      if (result.status === 'timeout') {
+        return {
+          status: 408,
+          body: {
+            error: result.error?.message || 'Request timeout',
+            _meta: {
+              duration,
+              executorType: 'generative',
+              tier: 2,
+              generativeExecution: {
+                model: result.generativeExecution?.model || definition.model || 'unknown',
+                tokens: {
+                  inputTokens: result.generativeExecution?.tokens?.input || 0,
+                  outputTokens: result.generativeExecution?.tokens?.output || 0,
+                },
+              },
+            },
+          },
+        }
+      }
+
+      if (result.status === 'failed') {
+        return {
+          status: 500,
+          body: {
+            error: result.error?.message || 'Generation failed',
+            _meta: {
+              duration,
+              executorType: 'generative',
+              tier: 2,
+              generativeExecution: {
+                model: result.generativeExecution?.model || definition.model || 'unknown',
+                tokens: {
+                  inputTokens: result.generativeExecution?.tokens?.input || 0,
+                  outputTokens: result.generativeExecution?.tokens?.output || 0,
+                },
+              },
+            },
+          },
+        }
+      }
+
+      return {
+        status: 200,
+        body: {
+          ...((result.output || {}) as object),
+          _meta: {
+            duration,
+            executorType: 'generative',
+            tier: 2,
+            generativeExecution: {
+              model: result.generativeExecution?.model || definition.model || 'unknown',
+              tokens: {
+                inputTokens: result.generativeExecution?.tokens?.input || 0,
+                outputTokens: result.generativeExecution?.tokens?.output || 0,
+              },
+              cached: result.generativeExecution?.cached,
+              stopReason: result.generativeExecution?.stopReason,
+              modelLatencyMs: result.generativeExecution?.modelLatencyMs,
+            },
+          },
+        },
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Generation failed'
+      return {
+        status: 500,
+        body: {
+          error: message,
+          _meta: {
+            duration: Date.now() - start,
+            executorType: 'generative',
+            tier: 2,
+          },
+        },
+      }
+    }
+    */
+  }
+
+  /**
+   * Dispatch to Agentic Executor (Tier 3)
+   * NOTE: Currently disabled due to ai-providers dependency issues with Cloudflare Workers
+   */
+  private async dispatchAgentic(
+    metadata: ExtendedMetadata,
+    input: unknown,
+    start: number
+  ): Promise<DispatchResult> {
+    // NOTE: Agentic executor is disabled until ai-providers dependency is fixed
+    return {
+      status: 503,
+      body: {
+        error: 'Agentic executor temporarily unavailable. Service under maintenance.',
+        _meta: { duration: Date.now() - start, executorType: 'agentic', tier: 3 },
+      },
+    }
+
+    // Original implementation disabled:
+    /*
+    if (!this.env.AI_CLIENT?.chat) {
+      return {
+        status: 503,
+        body: {
+          error: 'Agentic executor not available. AI_CLIENT not configured.',
+          _meta: { duration: Date.now() - start, executorType: 'agentic', tier: 3 },
+        },
+      }
+    }
+
+    // Build AgenticFunctionDefinition from metadata
+    const definition: AgenticFunctionDefinition = {
+      id: metadata.id,
+      name: metadata.id,
+      version: metadata.version,
+      type: 'agentic',
+      model: metadata.model || 'claude-3-opus',
+      systemPrompt: metadata.systemPrompt || 'You are a helpful assistant.',
+      goal: metadata.goal || 'Complete the requested task',
+      tools: (metadata.tools || []).map(t => ({
+        ...t,
+        implementation: { type: 'inline', handler: '' } as const,
+      })),
+      maxIterations: metadata.maxIterations || 10,
+      enableReasoning: metadata.enableReasoning !== false,
+      enableMemory: metadata.enableMemory !== false,
+      timeout: `${TIER_TIMEOUTS[3]}ms`,
+    }
+
+    // Get or create agentic executor for this function
+    let executor = this.agenticExecutors.get(metadata.id)
+    if (!executor) {
+      // @ts-expect-error - AIClient type mismatch
+      executor = new AgenticExecutor(definition, this.env.AI_CLIENT)
+      this.agenticExecutors.set(metadata.id, executor)
+    }
+
+    const context: FunctionExecutionContext = {
+      timeout: TIER_TIMEOUTS[3],
+    }
+
+    try {
+      const result = await executor.execute(input, undefined, context)
+      const duration = Date.now() - start
+
+      if (result.status === 'timeout') {
+        return {
+          status: 408,
+          body: {
+            error: result.error?.message || 'Execution timeout exceeded',
+            _meta: {
+              duration,
+              executorType: 'agentic',
+              tier: 3,
+              agenticExecution: {
+                model: result.agenticExecution?.model || definition.model || 'unknown',
+                iterations: result.agenticExecution?.iterations || 0,
+                toolsUsed: result.agenticExecution?.toolsUsed || [],
+                totalTokens: result.agenticExecution?.totalTokens || { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              },
+            },
+          },
+        }
+      }
+
+      if (result.status === 'failed') {
+        return {
+          status: 500,
+          body: {
+            error: result.error?.message || 'Agent execution failed',
+            _meta: {
+              duration,
+              executorType: 'agentic',
+              tier: 3,
+              agenticExecution: {
+                model: result.agenticExecution?.model || definition.model || 'unknown',
+                iterations: result.agenticExecution?.iterations || 0,
+                toolsUsed: result.agenticExecution?.toolsUsed || [],
+                totalTokens: result.agenticExecution?.totalTokens || { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              },
+            },
+          },
+        }
+      }
+
+      return {
+        status: 200,
+        body: {
+          ...((result.output || {}) as object),
+          _meta: {
+            duration,
+            executorType: 'agentic',
+            tier: 3,
+            agenticExecution: {
+              model: result.agenticExecution?.model || definition.model || 'unknown',
+              iterations: result.agenticExecution?.iterations || 0,
+              toolsUsed: result.agenticExecution?.toolsUsed || [],
+              totalTokens: result.agenticExecution?.totalTokens || { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              goalAchieved: result.agenticExecution?.goalAchieved,
+              reasoningSummary: result.agenticExecution?.reasoningSummary,
+            },
+          },
+        },
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Agent execution failed'
+      return {
+        status: 500,
+        body: {
+          error: message,
+          _meta: {
+            duration: Date.now() - start,
+            executorType: 'agentic',
+            tier: 3,
+          },
+        },
+      }
+    }
+    */
+  }
+
+  /**
+   * Dispatch to Human Executor (Tier 4)
+   */
+  private async dispatchHuman(
+    metadata: ExtendedMetadata,
+    input: unknown,
+    start: number
+  ): Promise<DispatchResult> {
+    if (!this.env.HUMAN_TASKS) {
+      return {
+        status: 503,
+        body: {
+          error: 'Human executor not available. HUMAN_TASKS not configured.',
+          _meta: { duration: Date.now() - start, executorType: 'human', tier: 4 },
+        },
+      }
+    }
+
+    // Build HumanFunctionDefinition from metadata
+    const definition: HumanFunctionDefinition = {
+      id: metadata.id,
+      name: metadata.id,
+      version: metadata.version,
+      type: 'human',
+      interactionType: (metadata.interactionType as HumanFunctionDefinition['interactionType']) || 'approval',
+      ui: metadata.ui || { title: metadata.id },
+      assignees: metadata.assignees,
+      sla: metadata.sla,
+      timeout: `${TIER_TIMEOUTS[4]}ms`,
+    }
+
+    try {
+      // Get a Durable Object stub for the human task
+      const taskId = `${metadata.id}-${Date.now()}`
+      const doId = this.env.HUMAN_TASKS.idFromName(taskId)
+      const stub = this.env.HUMAN_TASKS.get(doId)
+
+      // Create the task via the Durable Object
+      const createResponse = await stub.fetch(new Request('https://internal/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          definition,
+          input,
+        }),
+      }))
+
+      if (!createResponse.ok) {
+        const errorText = await createResponse.text()
+        return {
+          status: createResponse.status,
+          body: {
+            error: `Failed to create human task: ${errorText}`,
+            _meta: { duration: Date.now() - start, executorType: 'human', tier: 4 },
+          },
+        }
+      }
+
+      const task = await createResponse.json() as {
+        id: string
+        status: string
+        taskUrl: string
+        expiresAt: number
+      }
+
+      const duration = Date.now() - start
+
+      // Human tasks return 202 Accepted since they are async
+      return {
+        status: 202,
+        body: {
+          taskId: task.id,
+          taskUrl: task.taskUrl,
+          taskStatus: task.status,
+          _meta: {
+            duration,
+            executorType: 'human',
+            tier: 4,
+            humanExecution: {
+              taskId: task.id,
+              expiresAt: task.expiresAt,
+              assignees: metadata.assignees?.users,
+            },
+          },
+        },
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to create human task'
+      return {
+        status: 500,
+        body: {
+          error: message,
+          _meta: {
+            duration: Date.now() - start,
+            executorType: 'human',
+            tier: 4,
+          },
+        },
+      }
+    }
+  }
+
+  /**
+   * Dispatch to Cascade Executor
+   */
+  private async dispatchCascade(
+    metadata: ExtendedMetadata,
+    input: unknown,
+    start: number
+  ): Promise<DispatchResult> {
+    const steps = metadata.steps || []
+    const errorHandling = metadata.errorHandling || 'fail-fast'
+    const tiersAttempted: string[] = []
+    let stepsExecuted = 0
+    let currentInput = input
+    let lastResult: DispatchResult | null = null
+
+    for (const step of steps) {
+      tiersAttempted.push(step.tier)
+
+      // Get step function metadata
+      const stepMetadata = await this.getStepMetadata(step.functionId)
+      if (!stepMetadata) {
+        if (errorHandling === 'fail-fast') {
+          return {
+            status: 404,
+            body: {
+              error: `Step function not found: ${step.functionId}`,
+              _meta: {
+                duration: Date.now() - start,
+                executorType: 'cascade',
+                tier: 1,
+                tiersAttempted,
+                stepsExecuted,
+              },
+            },
+          }
+        }
+        continue
+      }
+
+      // Get code if this is a code step
+      let code: string | undefined
+      if (step.tier === 'code') {
+        code = await this.getStepCode(step.functionId)
+      }
+
+      // Execute the step
+      const result = await this.dispatch(stepMetadata, currentInput, code)
+      stepsExecuted++
+
+      if (result.status >= 400) {
+        // Step failed
+        if (errorHandling === 'fail-fast') {
+          return {
+            ...result,
+            body: {
+              ...result.body,
+              _meta: {
+                ...result.body._meta,
+                tiersAttempted,
+                stepsExecuted,
+              },
+            },
+          }
+        } else if (errorHandling === 'fallback' && step.fallbackTo) {
+          // Try fallback step
+          tiersAttempted.push(`fallback:${step.fallbackTo}`)
+          continue
+        }
+        // Continue to next step
+        continue
+      }
+
+      // Step succeeded, use output as input for next step
+      lastResult = result
+      // Extract output without _meta for next step input
+      const { _meta, ...output } = result.body
+      currentInput = output
+    }
+
+    if (!lastResult) {
+      return {
+        status: 500,
+        body: {
+          error: 'Cascade completed with no successful steps',
+          _meta: {
+            duration: Date.now() - start,
+            executorType: 'cascade',
+            tier: 1,
+            tiersAttempted,
+            stepsExecuted,
+          },
+        },
+      }
+    }
+
+    return {
+      ...lastResult,
+      body: {
+        ...lastResult.body,
+        _meta: {
+          ...lastResult.body._meta,
+          executorType: 'cascade',
+          tiersAttempted,
+          stepsExecuted,
+        },
+      },
+    }
+  }
+
+  /**
+   * Get metadata for a step function
+   */
+  private async getStepMetadata(functionId: string): Promise<ExtendedMetadata | null> {
+    try {
+      const data = await this.env.FUNCTIONS_REGISTRY.get(`registry:${functionId}`, 'json')
+      return data as ExtendedMetadata | null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Get code for a step function
+   */
+  private async getStepCode(functionId: string): Promise<string | undefined> {
+    try {
+      return await this.env.FUNCTIONS_CODE.get(`code:${functionId}`, 'text') || undefined
+    } catch {
+      return undefined
+    }
+  }
+}
+
+/**
+ * Create a tier dispatcher instance
+ */
+export function createTierDispatcher(env: TierDispatcherEnv): TierDispatcher {
+  return new TierDispatcher(env)
+}

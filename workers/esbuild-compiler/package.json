@@ -1,0 +1,27 @@
+{
+  "name": "@dotdo/esbuild-compiler",
+  "version": "0.1.0",
+  "description": "Cloudflare Worker for TypeScript/TSX compilation using esbuild-wasm",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "esbuild-wasm": "^0.27.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260131.0",
+    "wrangler": "^4.58.0"
+  },
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "esbuild",
+    "typescript",
+    "compiler"
+  ],
+  "license": "MIT"
+}

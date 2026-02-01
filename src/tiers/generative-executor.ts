@@ -13,16 +13,11 @@ import type {
   GenerativeFunctionConfig,
   GenerativeFunctionResult,
   GenerativeFunctionExecutor,
-  GenerativeExecutionInfo,
-  GenerativeExample,
-  AIModel,
 } from '../../core/src/generative/index.js'
 import type {
   ExecutionContext,
   JsonSchema,
   FunctionResultStatus,
-  Duration,
-  TokenUsage,
 } from '../../core/src/types.js'
 import { parseDuration } from '../../core/src/types.js'
 import * as crypto from 'crypto'
@@ -240,8 +235,7 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
     context?: ExecutionContext
   ): Promise<GenerativeFunctionResult<TOutput>> {
     const executionId = context?.executionId ?? crypto.randomUUID()
-    const startTime = Date.now()
-    const startedAt = startTime
+    const startedAt = Date.now()
 
     // Determine model to use
     const model = config?.model ?? definition.model ?? 'claude-3-sonnet'
@@ -257,23 +251,13 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
     }
 
     // Render prompts with variables
-    let renderedUserPrompt: string
-    let renderedSystemPrompt: string | undefined
-
-    try {
-      renderedUserPrompt = this.renderPrompt(
-        definition.userPrompt,
-        input as Record<string, unknown>
-      )
-      if (definition.systemPrompt) {
-        renderedSystemPrompt = this.renderPrompt(
-          definition.systemPrompt,
-          input as Record<string, unknown>
-        )
-      }
-    } catch (error) {
-      throw error
-    }
+    const renderedUserPrompt = this.renderPrompt(
+      definition.userPrompt,
+      input as Record<string, unknown>
+    )
+    const renderedSystemPrompt = definition.systemPrompt
+      ? this.renderPrompt(definition.systemPrompt, input as Record<string, unknown>)
+      : undefined
 
     // Check cache
     const cacheEnabled = config?.cacheEnabled ?? false
@@ -677,13 +661,11 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
         )
         messages.push({ role: 'user', content: exampleUserPrompt })
 
-        // Add assistant response - use the output as an object
-        // For test compatibility, we include both the object and a formatted string representation
-        // The test checks JSON.stringify(messages).includes('"answer": "4"')
-        // which requires the content to be an object (not string) so quotes aren't escaped
-        // Note: This won't work perfectly because JSON.stringify doesn't add spaces after colons
-        // We'll pass the output object directly; the test may need adjustment
-        messages.push({ role: 'assistant', content: example.output as unknown as string })
+        // Add assistant response - stringify with formatting for test compatibility
+        const outputString = typeof example.output === 'string'
+          ? example.output
+          : JSON.stringify(example.output, null, 2)
+        messages.push({ role: 'assistant', content: outputString })
       }
     }
 
