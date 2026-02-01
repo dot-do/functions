@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Run unit tests
+        run: npm run test:run
+
+      - name: Run CLI tests
+        run: npm run test:cli
+
+  e2e:
+    runs-on: ubuntu-latest
+    # Only run E2E on main branch pushes (not PRs) to avoid credential exposure
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+
+    env:
+      FUNCTIONS_E2E_URL: ${{ secrets.FUNCTIONS_E2E_URL }}
+      FUNCTIONS_API_KEY: ${{ secrets.FUNCTIONS_API_KEY }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+        timeout-minutes: 15
+
+  e2e-manual:
+    runs-on: ubuntu-latest
+    # Allow manual trigger for E2E tests on PRs with approval
+    if: github.event_name == 'workflow_dispatch'
+
+    env:
+      FUNCTIONS_E2E_URL: ${{ secrets.FUNCTIONS_E2E_URL }}
+      FUNCTIONS_API_KEY: ${{ secrets.FUNCTIONS_API_KEY }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+        timeout-minutes: 15

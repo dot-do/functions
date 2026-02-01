@@ -147,6 +147,42 @@ npx dotdo deploy # Deploy globally
 
 ---
 
+## Development
+
+### Testing
+
+```bash
+# Run all unit tests
+npm run test:run
+
+# Run CLI/Node tests
+npm run test:cli
+
+# Run all tests
+npm run test:all
+
+# Run tests with coverage
+npm run coverage
+
+# Run E2E tests (requires environment setup)
+npm run test:e2e
+```
+
+### E2E Tests
+
+End-to-end tests verify the full deployment and execution cycle. See [test/e2e/README.md](./test/e2e/README.md) for detailed setup instructions.
+
+```bash
+# Set required environment variables
+export FUNCTIONS_E2E_URL="https://functions-do.dotdo.workers.dev"
+export OPENAI_API_KEY="your-key"  # For AI function tests
+
+# Run E2E tests
+npm run test:e2e
+```
+
+---
+
 ## SDK
 
 Install the official SDK to invoke functions programmatically:
