@@ -7,16 +7,7 @@
 import type { RouteContext, Env, Handler } from '../router'
 import { KVFunctionRegistry } from '../../core/kv-function-registry'
 import { validateFunctionId } from '../../core/function-registry'
-
-/**
- * JSON response helper
- */
-function jsonResponse(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  })
-}
+import { jsonResponse } from '../http-utils'
 
 /**
  * Info handler - returns function metadata

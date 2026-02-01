@@ -101,15 +101,22 @@ export class CascadeExecutor<TInput = unknown, TOutput = unknown> {
       }
 
       // Check skip conditions
-      const skipReason = await this.evaluateSkipConditions(tier, input, {
+      const tierContext: TierContext = {
         tier,
         attempt: 1,
         cascadeAttempt,
         timeRemainingMs: this.calculateTimeRemaining(startTime, totalTimeoutMs, tier),
-        previousError,
-        previousTier,
-        previousResult: this.options.enableFallback ? previousResult : undefined,
-      })
+      }
+      if (previousError !== undefined) {
+        tierContext.previousError = previousError
+      }
+      if (previousTier !== undefined) {
+        tierContext.previousTier = previousTier
+      }
+      if (this.options.enableFallback && previousResult !== undefined) {
+        tierContext.previousResult = previousResult
+      }
+      const skipReason = await this.evaluateSkipConditions(tier, input, tierContext)
 
       if (skipReason) {
         skippedTiers.push(tier)
@@ -146,9 +153,15 @@ export class CascadeExecutor<TInput = unknown, TOutput = unknown> {
           attempt,
           cascadeAttempt,
           timeRemainingMs: timeRemaining,
-          previousError,
-          previousTier,
-          previousResult: this.options.enableFallback ? previousResult : undefined,
+        }
+        if (previousError !== undefined) {
+          tierContext.previousError = previousError
+        }
+        if (previousTier !== undefined) {
+          tierContext.previousTier = previousTier
+        }
+        if (this.options.enableFallback && previousResult !== undefined) {
+          tierContext.previousResult = previousResult
         }
 
         const attemptStart = Date.now()

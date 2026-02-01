@@ -14,6 +14,7 @@ import {
   validateDependencies,
 } from '../../core/function-registry'
 import { isValidVersion, type FunctionMetadata } from '../../core/types'
+import { jsonResponse } from '../http-utils'
 
 // WASM compilers are dynamically imported to avoid issues with Node.js modules in Workers
 type CompileResult = { wasm: Uint8Array; exports?: string[] }
@@ -56,16 +57,6 @@ async function loadCompilers() {
  * Context for deploy handler
  */
 export interface DeployHandlerContext extends RouteContext {}
-
-/**
- * JSON response helper
- */
-function jsonResponse(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  })
-}
 
 /**
  * Upload to dispatch namespace via Cloudflare API

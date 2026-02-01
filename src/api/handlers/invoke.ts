@@ -9,93 +9,14 @@ import { KVFunctionRegistry } from '../../core/kv-function-registry'
 import { KVCodeStorage } from '../../core/code-storage'
 import { validateFunctionId } from '../../core/function-registry'
 import type { FunctionMetadata } from '../../core/types'
+import { jsonResponse } from '../http-utils'
+import { stripTypeScript } from '../../core/ts-strip'
 
 /**
  * Context for invoke handler
  */
 export interface InvokeHandlerContext extends RouteContext {
   functionId: string
-}
-
-/**
- * JSON response helper
- */
-function jsonResponse(data: unknown, status = 200, headers: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { 'Content-Type': 'application/json', ...headers },
-  })
-}
-
-/**
- * Strip TypeScript type annotations using regex-based parsing.
- */
-function stripTypeScript(code: string): string {
-  let result = code
-
-  // Remove single-line interface declarations
-  result = result.replace(/^\s*(export\s+)?interface\s+\w+[^{]*\{[^}]*\}\s*$/gm, '')
-
-  // Remove multi-line interface declarations
-  result = result.replace(/^\s*(export\s+)?interface\s+\w+[^{]*\{[\s\S]*?\n\}\s*$/gm, '')
-
-  // Remove type alias declarations
-  result = result.replace(/^\s*(export\s+)?type\s+\w+\s*(<[^>]+>)?\s*=\s*[^;]+;?\s*$/gm, '')
-
-  // Remove import type statements
-  result = result.replace(/^\s*import\s+type\s+.*$/gm, '')
-
-  // Remove type-only imports
-  result = result.replace(/,\s*type\s+\w+/g, '')
-  result = result.replace(/{\s*type\s+\w+\s*,/g, '{')
-  result = result.replace(/{\s*type\s+\w+\s*}/g, '{ }')
-
-  // Remove export type statements
-  result = result.replace(/^\s*export\s+type\s+\{[^}]*\}[^;]*;?\s*$/gm, '')
-
-  // Remove declare statements
-  result = result.replace(/^\s*declare\s+(const|let|var|function|class|module|namespace|global|type|interface)\s+[^;]+;?\s*$/gm, '')
-
-  // Remove access modifiers
-  result = result.replace(/\b(public|private|protected)\s+(?=\w)/g, '')
-  result = result.replace(/\breadonly\s+(?=\w)/g, '')
-
-  // Remove type assertions
-  result = result.replace(/\s+as\s+\{[^}]+\}/g, '')
-  result = result.replace(/\s+as\s+(?!const\b)[A-Z][\w<>[\],\s|&.?]*/g, '')
-  result = result.replace(/\s+as\s+(?!const\b)(string|number|boolean|any|unknown|void|never|null|undefined)\b/g, '')
-
-  // Remove angle bracket type assertions
-  result = result.replace(/<([A-Z][\w<>[\],\s|&.?]*)>(?=\s*[\w({[])/g, '')
-
-  // Remove type annotations from parameters
-  result = result.replace(/([(,\s])(\w+)\s*\??\s*:\s*([A-Z][\w<>[\],\s|&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint)(?=\s*[,)=])/gi, '$1$2')
-
-  // Remove return type annotations
-  result = result.replace(/\)\s*:\s*([A-Z][\w<>[\],\s|&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint|Promise<[^>]+>)\s*(?=[{=])/gi, ') ')
-
-  // Remove generic type parameters from functions
-  result = result.replace(/(<[A-Z][\w,\s]*(?:\s+extends\s+[^>]+)?>)(?=\s*\()/gi, '')
-
-  // Remove generic type parameters from classes
-  result = result.replace(/(class\s+\w+)\s*<[A-Z][\w,\s]*(?:\s+extends\s+[^>]+)?>/gi, '$1')
-
-  // Remove non-null assertions
-  result = result.replace(/(\w+)!(?!=)/g, '$1')
-
-  // Remove satisfies expressions
-  result = result.replace(/\s+satisfies\s+[A-Z][\w<>[\],\s|&.?]*/gi, '')
-
-  // Clean up empty imports
-  result = result.replace(/^\s*import\s*\{\s*\}\s*from\s*['"][^'"]+['"];?\s*$/gm, '')
-
-  // Clean up multiple consecutive newlines
-  result = result.replace(/\n{3,}/g, '\n\n')
-
-  // Clean up multiple spaces
-  result = result.replace(/  +/g, ' ')
-
-  return result.trim()
 }
 
 /**
@@ -222,11 +143,14 @@ export const invokeHandler: Handler = async (
       }))
 
       const entrypoint = workerStub.getEntrypoint()
-      const sandboxRequest = new Request('http://sandbox/invoke', {
+      const requestInit: RequestInit = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: requestData ? JSON.stringify(requestData) : undefined,
-      })
+      }
+      if (requestData) {
+        requestInit.body = JSON.stringify(requestData)
+      }
+      const sandboxRequest = new Request('http://sandbox/invoke', requestInit)
 
       const response = await entrypoint.fetch(sandboxRequest)
       const duration = Date.now() - start
@@ -275,11 +199,14 @@ export const invokeHandler: Handler = async (
         )
       }
 
-      const dispatchRequest = new Request(request.url, {
+      const dispatchRequestInit: RequestInit = {
         method: request.method,
         headers: request.headers,
-        body: requestData ? JSON.stringify(requestData) : undefined,
-      })
+      }
+      if (requestData) {
+        dispatchRequestInit.body = JSON.stringify(requestData)
+      }
+      const dispatchRequest = new Request(request.url, dispatchRequestInit)
 
       const response = await userWorker.fetch(dispatchRequest)
       const duration = Date.now() - start

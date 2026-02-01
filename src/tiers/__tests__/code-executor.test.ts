@@ -1285,6 +1285,171 @@ describe('CodeExecutor', () => {
   })
 
   // ==========================================================================
+  // 7b. LRU Cache Eviction (TDD - RED Phase)
+  // ==========================================================================
+
+  describe('LRU Cache Eviction', () => {
+    it('should respect max cache size limit', async () => {
+      // Create executor with small cache size for testing
+      const smallCacheExecutor = new CodeExecutor(mockEnv, { maxCacheSize: 3 })
+
+      // Execute 5 different functions to exceed cache size
+      for (let i = 0; i < 5; i++) {
+        const fn = createTestCodeFunction(
+          `lru-fn-${i}`,
+          `export default () => ({ id: ${i} })`
+        )
+        await smallCacheExecutor.execute(fn, {})
+      }
+
+      const stats = smallCacheExecutor.getCacheStats()
+      expect(stats.size).toBe(3) // Should not exceed max size
+    })
+
+    it('should evict least recently used entries when cache is full', async () => {
+      // Create executor with small cache size
+      const smallCacheExecutor = new CodeExecutor(mockEnv, { maxCacheSize: 3 })
+
+      // Execute 3 functions to fill cache
+      const fn0 = createTestCodeFunction('evict-fn-0', 'export default () => ({ id: 0 })')
+      const fn1 = createTestCodeFunction('evict-fn-1', 'export default () => ({ id: 1 })')
+      const fn2 = createTestCodeFunction('evict-fn-2', 'export default () => ({ id: 2 })')
+
+      await smallCacheExecutor.execute(fn0, {})
+      await smallCacheExecutor.execute(fn1, {})
+      await smallCacheExecutor.execute(fn2, {})
+
+      // Access fn0 to make it recently used
+      await smallCacheExecutor.execute(fn0, {})
+
+      // Add a 4th function - should evict fn1 (least recently used)
+      const fn3 = createTestCodeFunction('evict-fn-3', 'export default () => ({ id: 3 })')
+      await smallCacheExecutor.execute(fn3, {})
+
+      // fn0 should still be cached (was recently accessed)
+      const statsBeforeFn0 = smallCacheExecutor.getCacheStats()
+      await smallCacheExecutor.execute(fn0, {})
+      const statsAfterFn0 = smallCacheExecutor.getCacheStats()
+      expect(statsAfterFn0.hits).toBe(statsBeforeFn0.hits + 1)
+
+      // fn1 should have been evicted (was LRU)
+      const statsBeforeFn1 = smallCacheExecutor.getCacheStats()
+      await smallCacheExecutor.execute(fn1, {})
+      const statsAfterFn1 = smallCacheExecutor.getCacheStats()
+      expect(statsAfterFn1.misses).toBe(statsBeforeFn1.misses + 1)
+    })
+
+    it('should support TTL expiration', async () => {
+      // Create executor with short TTL for testing
+      const ttlExecutor = new CodeExecutor(mockEnv, { cacheTTLMs: 100 })
+
+      const fn = createTestCodeFunction('ttl-fn', 'export default () => ({ ttl: true })')
+
+      // First execution - cache miss
+      await ttlExecutor.execute(fn, {})
+
+      // Second execution - cache hit (within TTL)
+      const result2 = await ttlExecutor.execute(fn, {})
+      expect((result2 as { cacheHit: boolean }).cacheHit).toBe(true)
+
+      // Wait for TTL to expire
+      await new Promise(resolve => setTimeout(resolve, 150))
+
+      // Third execution - cache miss (TTL expired)
+      const statsBeforeExpiry = ttlExecutor.getCacheStats()
+      await ttlExecutor.execute(fn, {})
+      const statsAfterExpiry = ttlExecutor.getCacheStats()
+      expect(statsAfterExpiry.misses).toBe(statsBeforeExpiry.misses + 1)
+    })
+
+    it('should report evictions in getCacheStats', async () => {
+      const smallCacheExecutor = new CodeExecutor(mockEnv, { maxCacheSize: 2 })
+
+      // Fill cache
+      const fn0 = createTestCodeFunction('stats-fn-0', 'export default () => ({ id: 0 })')
+      const fn1 = createTestCodeFunction('stats-fn-1', 'export default () => ({ id: 1 })')
+      await smallCacheExecutor.execute(fn0, {})
+      await smallCacheExecutor.execute(fn1, {})
+
+      const statsBeforeEviction = smallCacheExecutor.getCacheStats()
+      expect(statsBeforeEviction.evictions).toBe(0)
+
+      // Trigger eviction
+      const fn2 = createTestCodeFunction('stats-fn-2', 'export default () => ({ id: 2 })')
+      await smallCacheExecutor.execute(fn2, {})
+
+      const statsAfterEviction = smallCacheExecutor.getCacheStats()
+      expect(statsAfterEviction.evictions).toBe(1)
+    })
+
+    it('should update LRU order on cache hit', async () => {
+      const smallCacheExecutor = new CodeExecutor(mockEnv, { maxCacheSize: 3 })
+
+      // Fill cache with A, B, C (order: A -> B -> C)
+      const fnA = createTestCodeFunction('order-fn-A', 'export default () => "A"')
+      const fnB = createTestCodeFunction('order-fn-B', 'export default () => "B"')
+      const fnC = createTestCodeFunction('order-fn-C', 'export default () => "C"')
+
+      await smallCacheExecutor.execute(fnA, {})
+      await smallCacheExecutor.execute(fnB, {})
+      await smallCacheExecutor.execute(fnC, {})
+
+      // Access A (moves to end: B -> C -> A)
+      await smallCacheExecutor.execute(fnA, {})
+
+      // Add D (should evict B, which is now oldest: C -> A -> D)
+      const fnD = createTestCodeFunction('order-fn-D', 'export default () => "D"')
+      await smallCacheExecutor.execute(fnD, {})
+
+      // A should still be cached (was accessed after B)
+      const statsBeforeA = smallCacheExecutor.getCacheStats()
+      await smallCacheExecutor.execute(fnA, {})
+      const statsAfterA = smallCacheExecutor.getCacheStats()
+      expect(statsAfterA.hits).toBe(statsBeforeA.hits + 1)
+
+      // B should be evicted
+      const statsBeforeB = smallCacheExecutor.getCacheStats()
+      await smallCacheExecutor.execute(fnB, {})
+      const statsAfterB = smallCacheExecutor.getCacheStats()
+      expect(statsAfterB.misses).toBe(statsBeforeB.misses + 1)
+    })
+
+    it('should handle concurrent cache operations correctly', async () => {
+      const smallCacheExecutor = new CodeExecutor(mockEnv, { maxCacheSize: 5 })
+
+      // Create 10 different functions
+      const functions = Array.from({ length: 10 }, (_, i) =>
+        createTestCodeFunction(`concurrent-fn-${i}`, `export default () => ({ id: ${i} })`)
+      )
+
+      // Execute all concurrently
+      await Promise.all(functions.map(fn => smallCacheExecutor.execute(fn, {})))
+
+      const stats = smallCacheExecutor.getCacheStats()
+      expect(stats.size).toBe(5) // Should maintain max size
+      expect(stats.evictions).toBeGreaterThanOrEqual(5) // Should have evicted entries
+    })
+
+    it('should reset eviction count on invalidateCache', async () => {
+      const smallCacheExecutor = new CodeExecutor(mockEnv, { maxCacheSize: 2 })
+
+      // Fill and trigger evictions
+      for (let i = 0; i < 5; i++) {
+        const fn = createTestCodeFunction(`reset-fn-${i}`, `export default () => ({ id: ${i} })`)
+        await smallCacheExecutor.execute(fn, {})
+      }
+
+      expect(smallCacheExecutor.getCacheStats().evictions).toBeGreaterThan(0)
+
+      // Invalidate cache
+      await smallCacheExecutor.invalidateCache('reset-fn-0')
+
+      // Eviction count should be reset
+      expect(smallCacheExecutor.getCacheStats().evictions).toBe(0)
+    })
+  })
+
+  // ==========================================================================
   // 8. Source Types
   // ==========================================================================
 

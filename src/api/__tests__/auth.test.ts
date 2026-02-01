@@ -319,7 +319,10 @@ describe('Auth Middleware', () => {
 
       expect(result.authContext).toBeDefined()
       expect(result.authContext?.userId).toBe('user-456')
-      expect(result.authContext?.apiKey).toBe('valid-api-key-123')
+      // API key should be hashed/hinted, not stored in full
+      // 'valid-api-key-123' -> last 4 chars = '-123'
+      expect(result.authContext?.keyHint).toBe('****-123')
+      expect(result.authContext?.keyHash).toBeDefined()
       expect(result.authContext?.scopes).toContain('read')
       expect(result.authContext?.scopes).toContain('write')
       expect(result.authContext?.scopes).toContain('deploy')
@@ -489,6 +492,284 @@ describe('Auth Middleware', () => {
 
       expect(result.shouldContinue).toBe(true)
       expect(result.authContext?.isInternal).toBe(true)
+    })
+  })
+})
+
+describe('API key security in AuthContext', () => {
+  let mockEnv: {
+    FUNCTIONS_API_KEYS: KVNamespace
+  }
+  let mockCtx: ExecutionContext
+
+  beforeEach(async () => {
+    mockEnv = {
+      FUNCTIONS_API_KEYS: createMockKV(),
+    }
+    mockCtx = {
+      waitUntil: vi.fn(),
+      passThroughOnException: vi.fn(),
+    } as unknown as ExecutionContext
+
+    // Set up test API key with a realistic format
+    await mockEnv.FUNCTIONS_API_KEYS.put(
+      'fnkey_live_abcdefghijklmnopqrstuvwxyz1234',
+      JSON.stringify({
+        userId: 'user-secure-test',
+        active: true,
+        scopes: ['read', 'write'],
+      })
+    )
+  })
+
+  describe('AuthContext should NOT contain full API key', () => {
+    it('should not have apiKey field with full key value', async () => {
+      const config: AuthMiddlewareConfig = {
+        publicEndpoints: ['/health'],
+        apiKeysKV: mockEnv.FUNCTIONS_API_KEYS,
+      }
+
+      const middleware = createAuthMiddleware(config)
+
+      const request = new Request('https://functions.do/api/functions', {
+        method: 'GET',
+        headers: {
+          'X-API-Key': 'fnkey_live_abcdefghijklmnopqrstuvwxyz1234',
+        },
+      })
+
+      const result = await middleware(request, mockEnv, mockCtx)
+
+      expect(result.shouldContinue).toBe(true)
+      expect(result.authContext).toBeDefined()
+
+      // The full API key should NOT be accessible
+      // Using type assertion to check the old field doesn't exist
+      const ctx = result.authContext as Record<string, unknown>
+      expect(ctx.apiKey).toBeUndefined()
+    })
+
+    it('should contain keyHint with last 4 characters only', async () => {
+      const config: AuthMiddlewareConfig = {
+        publicEndpoints: ['/health'],
+        apiKeysKV: mockEnv.FUNCTIONS_API_KEYS,
+      }
+
+      const middleware = createAuthMiddleware(config)
+
+      const request = new Request('https://functions.do/api/functions', {
+        method: 'GET',
+        headers: {
+          'X-API-Key': 'fnkey_live_abcdefghijklmnopqrstuvwxyz1234',
+        },
+      })
+
+      const result = await middleware(request, mockEnv, mockCtx)
+
+      expect(result.authContext).toBeDefined()
+      // Should have keyHint with masked format showing last 4 chars
+      expect(result.authContext?.keyHint).toBe('****1234')
+    })
+
+    it('should contain keyHash for correlation', async () => {
+      const config: AuthMiddlewareConfig = {
+        publicEndpoints: ['/health'],
+        apiKeysKV: mockEnv.FUNCTIONS_API_KEYS,
+      }
+
+      const middleware = createAuthMiddleware(config)
+
+      const request = new Request('https://functions.do/api/functions', {
+        method: 'GET',
+        headers: {
+          'X-API-Key': 'fnkey_live_abcdefghijklmnopqrstuvwxyz1234',
+        },
+      })
+
+      const result = await middleware(request, mockEnv, mockCtx)
+
+      expect(result.authContext).toBeDefined()
+      // Should have keyHash - a hex string of reasonable length (SHA-256 = 64 hex chars)
+      expect(result.authContext?.keyHash).toBeDefined()
+      expect(typeof result.authContext?.keyHash).toBe('string')
+      expect(result.authContext?.keyHash).toMatch(/^[a-f0-9]{64}$/)
+    })
+  })
+
+  describe('logging AuthContext should not expose full key', () => {
+    it('JSON.stringify of AuthContext should not contain full API key', async () => {
+      const config: AuthMiddlewareConfig = {
+        publicEndpoints: ['/health'],
+        apiKeysKV: mockEnv.FUNCTIONS_API_KEYS,
+      }
+
+      const middleware = createAuthMiddleware(config)
+
+      const apiKey = 'fnkey_live_abcdefghijklmnopqrstuvwxyz1234'
+      const request = new Request('https://functions.do/api/functions', {
+        method: 'GET',
+        headers: {
+          'X-API-Key': apiKey,
+        },
+      })
+
+      const result = await middleware(request, mockEnv, mockCtx)
+
+      expect(result.authContext).toBeDefined()
+
+      // Serializing the context should NOT expose the full key
+      const serialized = JSON.stringify(result.authContext)
+      expect(serialized).not.toContain(apiKey)
+      expect(serialized).not.toContain('fnkey_live_abcdefghijklmnopqrstuvwxyz')
+    })
+
+    it('Object.values of AuthContext should not contain full API key', async () => {
+      const config: AuthMiddlewareConfig = {
+        publicEndpoints: ['/health'],
+        apiKeysKV: mockEnv.FUNCTIONS_API_KEYS,
+      }
+
+      const middleware = createAuthMiddleware(config)
+
+      const apiKey = 'fnkey_live_abcdefghijklmnopqrstuvwxyz1234'
+      const request = new Request('https://functions.do/api/functions', {
+        method: 'GET',
+        headers: {
+          'X-API-Key': apiKey,
+        },
+      })
+
+      const result = await middleware(request, mockEnv, mockCtx)
+
+      expect(result.authContext).toBeDefined()
+
+      // None of the values should be the full API key
+      const values = Object.values(result.authContext!)
+      expect(values).not.toContain(apiKey)
+    })
+  })
+
+  describe('key correlation for debugging', () => {
+    it('same API key should produce same keyHash', async () => {
+      const config: AuthMiddlewareConfig = {
+        publicEndpoints: ['/health'],
+        apiKeysKV: mockEnv.FUNCTIONS_API_KEYS,
+      }
+
+      const middleware = createAuthMiddleware(config)
+
+      const apiKey = 'fnkey_live_abcdefghijklmnopqrstuvwxyz1234'
+
+      // First request
+      const request1 = new Request('https://functions.do/api/functions', {
+        method: 'GET',
+        headers: { 'X-API-Key': apiKey },
+      })
+      const result1 = await middleware(request1, mockEnv, mockCtx)
+
+      // Second request with same key
+      const request2 = new Request('https://functions.do/api/other', {
+        method: 'GET',
+        headers: { 'X-API-Key': apiKey },
+      })
+      const result2 = await middleware(request2, mockEnv, mockCtx)
+
+      // Both should have the same keyHash for correlation
+      expect(result1.authContext?.keyHash).toBe(result2.authContext?.keyHash)
+    })
+
+    it('different API keys should produce different keyHash', async () => {
+      // Add another API key
+      await mockEnv.FUNCTIONS_API_KEYS.put(
+        'fnkey_live_zyxwvutsrqponmlkjihgfedcba9876',
+        JSON.stringify({
+          userId: 'user-different',
+          active: true,
+          scopes: ['read'],
+        })
+      )
+
+      const config: AuthMiddlewareConfig = {
+        publicEndpoints: ['/health'],
+        apiKeysKV: mockEnv.FUNCTIONS_API_KEYS,
+      }
+
+      const middleware = createAuthMiddleware(config)
+
+      // First key
+      const request1 = new Request('https://functions.do/api/functions', {
+        method: 'GET',
+        headers: { 'X-API-Key': 'fnkey_live_abcdefghijklmnopqrstuvwxyz1234' },
+      })
+      const result1 = await middleware(request1, mockEnv, mockCtx)
+
+      // Second key
+      const request2 = new Request('https://functions.do/api/functions', {
+        method: 'GET',
+        headers: { 'X-API-Key': 'fnkey_live_zyxwvutsrqponmlkjihgfedcba9876' },
+      })
+      const result2 = await middleware(request2, mockEnv, mockCtx)
+
+      // Should have different keyHash values
+      expect(result1.authContext?.keyHash).not.toBe(result2.authContext?.keyHash)
+    })
+
+    it('keyHint should show last 4 characters for identification', async () => {
+      // Add keys with different endings
+      await mockEnv.FUNCTIONS_API_KEYS.put(
+        'fnkey_test_endingXYZW',
+        JSON.stringify({ userId: 'user-xyzw', active: true })
+      )
+
+      const config: AuthMiddlewareConfig = {
+        publicEndpoints: ['/health'],
+        apiKeysKV: mockEnv.FUNCTIONS_API_KEYS,
+      }
+
+      const middleware = createAuthMiddleware(config)
+
+      const request = new Request('https://functions.do/api/functions', {
+        method: 'GET',
+        headers: { 'X-API-Key': 'fnkey_test_endingXYZW' },
+      })
+
+      const result = await middleware(request, mockEnv, mockCtx)
+
+      expect(result.authContext?.keyHint).toBe('****XYZW')
+    })
+  })
+
+  describe('internal requests should also have secure context', () => {
+    it('internal auth context should not expose secrets', async () => {
+      const config: AuthMiddlewareConfig = {
+        publicEndpoints: ['/health'],
+        apiKeysKV: mockEnv.FUNCTIONS_API_KEYS,
+        trustInternalRequests: true,
+        internalHeader: 'X-Internal-Request',
+        internalSecret: 'super-secret-internal-token',
+      }
+
+      const middleware = createAuthMiddleware(config)
+
+      const request = new Request('https://functions.do/api/functions', {
+        method: 'GET',
+        headers: {
+          'X-Internal-Request': 'super-secret-internal-token',
+        },
+      })
+
+      const result = await middleware(request, mockEnv, mockCtx)
+
+      expect(result.shouldContinue).toBe(true)
+      expect(result.authContext?.isInternal).toBe(true)
+
+      // Internal context should also not expose any secret
+      const ctx = result.authContext as Record<string, unknown>
+      expect(ctx.apiKey).toBeUndefined()
+
+      // Should have safe identifiers
+      expect(result.authContext?.keyHint).toBe('internal')
+      expect(result.authContext?.keyHash).toBe('internal')
     })
   })
 })

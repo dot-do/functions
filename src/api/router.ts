@@ -13,6 +13,7 @@ import { logsHandler } from './handlers/logs'
 import { createAuthMiddleware, authMiddleware, AuthMiddlewareResult } from './middleware/auth'
 import { createRateLimitMiddleware, rateLimitMiddleware, RateLimitResult } from './middleware/rate-limit'
 import { InMemoryRateLimiter, CompositeRateLimiter, RateLimitConfig } from '../core/rate-limiter'
+import { jsonResponse } from './http-utils'
 
 /**
  * Environment type for the API
@@ -88,16 +89,6 @@ export interface RouterGroup {
   get(pattern: string, ...args: (Middleware | Handler)[]): void
   post(pattern: string, ...args: (Middleware | Handler)[]): void
   delete(pattern: string, ...args: (Middleware | Handler)[]): void
-}
-
-/**
- * JSON response helper
- */
-function jsonResponse(data: unknown, status = 200, headers: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { 'Content-Type': 'application/json', ...headers },
-  })
 }
 
 /**
@@ -283,8 +274,14 @@ export function createRouter(): Router {
         // Build context
         const context: RouteContext = {
           params: routeParams,
-          functionId: routeParams['id'] || routeParams['functionId'],
-          version: url.searchParams.get('version') || undefined,
+        }
+        const functionId = routeParams['id'] || routeParams['functionId']
+        if (functionId) {
+          context.functionId = functionId
+        }
+        const version = url.searchParams.get('version')
+        if (version) {
+          context.version = version
         }
 
         // Check if this is a protected endpoint and run auth

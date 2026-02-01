@@ -387,10 +387,16 @@ export class KVCodeStorage implements CodeStorage {
     const hasMore = versions.length > limit || !result.list_complete
     const returnVersions = versions.slice(0, limit)
 
-    return {
+    const paginatedVersions: PaginatedVersions = {
       versions: returnVersions,
-      cursor: hasMore && !result.list_complete ? (result as { cursor?: string }).cursor : undefined,
       hasMore,
     }
+    if (hasMore && !result.list_complete) {
+      const cursor = (result as { cursor?: string }).cursor
+      if (cursor !== undefined) {
+        paginatedVersions.cursor = cursor
+      }
+    }
+    return paginatedVersions
   }
 }

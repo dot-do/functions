@@ -22,7 +22,6 @@ import type {
   FunctionType,
   ExecutionContext,
   Duration,
-  parseDuration,
 } from './types.js'
 import type { CodeFunctionDefinition } from './code/index.js'
 import type { GenerativeFunctionDefinition } from './generative/index.js'
@@ -150,15 +149,15 @@ export interface TierSkipCondition {
 }
 
 // Default timeouts per tier
-export const DEFAULT_TIER_TIMEOUTS: Record<FunctionType, Duration> = {
+export const DEFAULT_TIER_TIMEOUTS = {
   code: '5s',
   generative: '30s',
   agentic: '5m',
   human: '24h',
-}
+} as const satisfies Record<FunctionType, Duration>
 
 // Tier order for escalation
-export const TIER_ORDER: FunctionType[] = ['code', 'generative', 'agentic', 'human']
+export const TIER_ORDER = ['code', 'generative', 'agentic', 'human'] as const satisfies readonly FunctionType[]
 
 // =============================================================================
 // CASCADE RESULT
@@ -246,13 +245,18 @@ export function defineCascade<TInput, TOutput>(
   tiers: CascadeTiers<TInput, TOutput>,
   options?: CascadeOptions & { name?: string; description?: string }
 ): CascadeDefinition<TInput, TOutput> {
-  return {
+  const result: CascadeDefinition<TInput, TOutput> = {
     id,
     name: options?.name ?? id,
-    description: options?.description,
     tiers,
-    options,
   }
+  if (options?.description !== undefined) {
+    result.description = options.description
+  }
+  if (options !== undefined) {
+    result.options = options
+  }
+  return result
 }
 
 // =============================================================================

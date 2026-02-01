@@ -134,15 +134,17 @@ export class FunctionClient {
       'Authorization': `Bearer ${this.apiKey}`,
     }
 
-    if (body !== undefined) {
-      headers['Content-Type'] = 'application/json'
-    }
-
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const fetchOptions: RequestInit = {
       method,
       headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    })
+    }
+
+    if (body !== undefined) {
+      headers['Content-Type'] = 'application/json'
+      fetchOptions.body = JSON.stringify(body)
+    }
+
+    const response = await fetch(`${this.baseUrl}${path}`, fetchOptions)
 
     if (!response) {
       // If we have a cached auth error, re-throw it (for retries after auth failure)

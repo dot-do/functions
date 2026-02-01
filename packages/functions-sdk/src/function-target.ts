@@ -198,8 +198,12 @@ export class RpcError extends Error {
   constructor(message: string, code?: string, failedAt?: number) {
     super(message)
     this.name = 'RpcError'
-    this.code = code
-    this.failedAt = failedAt
+    if (code !== undefined) {
+      this.code = code
+    }
+    if (failedAt !== undefined) {
+      this.failedAt = failedAt
+    }
   }
 }
 
@@ -332,7 +336,7 @@ export class FunctionTarget extends RpcTarget {
   constructor(stub: WorkerStub, options: FunctionTargetOptions = {}) {
     super()
     this.stub = stub
-    this._options = {
+    const _options: Required<Pick<FunctionTargetOptions, "timeout" | "retries" | "serializer" | "baseUrl" | "enableDeduplication" | "deduplicationTtlMs" | "enableBatching" | "batchWindowMs" | "maxBatchSize" | "enableMetrics" | "maxMetricsSamples">> & Pick<FunctionTargetOptions, 'tracingHooks' | 'parentTraceId'> = {
       timeout: options.timeout ?? 30000,
       retries: options.retries ?? 0,
       serializer: options.serializer ?? 'json',
@@ -342,11 +346,16 @@ export class FunctionTarget extends RpcTarget {
       enableBatching: options.enableBatching ?? true,
       batchWindowMs: options.batchWindowMs ?? 5,
       maxBatchSize: options.maxBatchSize ?? 50,
-      tracingHooks: options.tracingHooks,
-      parentTraceId: options.parentTraceId,
       enableMetrics: options.enableMetrics ?? true,
       maxMetricsSamples: options.maxMetricsSamples ?? 1000,
     }
+    if (options.tracingHooks !== undefined) {
+      _options.tracingHooks = options.tracingHooks
+    }
+    if (options.parentTraceId !== undefined) {
+      _options.parentTraceId = options.parentTraceId
+    }
+    this._options = _options
     this._traceId = options.parentTraceId ?? generateTraceId()
   }
 
@@ -397,7 +406,9 @@ export class FunctionTarget extends RpcTarget {
       params: args,
       traceId: this._traceId,
       spanId: span.spanId,
-      parentSpanId: span.parentSpanId,
+    }
+    if (span.parentSpanId !== undefined) {
+      requestBody.parentSpanId = span.parentSpanId
     }
 
     const promise = this.executeRequest(requestBody, span)

@@ -10,6 +10,7 @@ import {
   RateLimitConfig,
   RateLimitResult as CoreRateLimitResult,
 } from '../../core/rate-limiter'
+import { jsonResponse } from '../http-utils'
 
 /**
  * Rate limit configuration for middleware
@@ -132,16 +133,6 @@ function getEndpointLimit(
   }
 
   return undefined
-}
-
-/**
- * JSON response helper
- */
-function jsonResponse(data: unknown, status = 200, headers: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { 'Content-Type': 'application/json', ...headers },
-  })
 }
 
 /**

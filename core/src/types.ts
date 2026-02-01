@@ -14,6 +14,8 @@
  * 4. HumanFunctions - Human-in-the-loop (approval, review, input)
  */
 
+import { assertNever } from './utils.js'
+
 // =============================================================================
 // FUNCTION TYPE DISCRIMINATOR
 // =============================================================================
@@ -188,8 +190,8 @@ export function parseDuration(duration: Duration): number {
   const match = duration.match(/^(\d+)\s*(ms|s|seconds?|m|minutes?|h|hours?|d|days?)$/)
   if (!match) throw new Error(`Invalid duration: ${duration}`)
 
-  const value = parseInt(match[1], 10)
-  const unit = match[2]
+  const value = parseInt(match[1] ?? '', 10)
+  const unit = match[2] ?? ''
 
   switch (unit) {
     case 'ms': return value
@@ -197,7 +199,7 @@ export function parseDuration(duration: Duration): number {
     case 'm': case 'minute': case 'minutes': return value * 60 * 1000
     case 'h': case 'hour': case 'hours': return value * 60 * 60 * 1000
     case 'd': case 'day': case 'days': return value * 24 * 60 * 60 * 1000
-    default: throw new Error(`Unknown duration unit: ${unit}`)
+    default: return assertNever(unit as never, `Unknown duration unit: ${unit}`)
   }
 }
 

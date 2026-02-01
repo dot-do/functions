@@ -178,13 +178,18 @@ export function inlineFunction<TInput, TOutput>(
     outputSchema?: JsonSchema
   }
 ): CodeFunctionDefinition<TInput, TOutput> {
-  return defineCodeFunction({
+  const config: Omit<CodeFunctionDefinition<TInput, TOutput>, 'type'> = {
     id,
     name: options?.name ?? id,
     version: '1.0.0',
     language: options?.language ?? 'typescript',
     source: { type: 'inline', code },
-    inputSchema: options?.inputSchema,
-    outputSchema: options?.outputSchema,
-  })
+  }
+  if (options?.inputSchema !== undefined) {
+    config.inputSchema = options.inputSchema
+  }
+  if (options?.outputSchema !== undefined) {
+    config.outputSchema = options.outputSchema
+  }
+  return defineCodeFunction(config)
 }

@@ -43,3 +43,6 @@ export { CascadeExecutor, type CascadeExecutionResult, type CascadeFunctionMetad
 
 // Validation
 export { FunctionValidator } from './validation/function-validator'
+
+// HTTP Utilities
+export { jsonResponse } from './http-utils'

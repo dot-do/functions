@@ -318,7 +318,9 @@ class SpanImpl implements Span {
     this.links = options?.links ? [...options.links] : []
     this.sampled = options?.sampled ?? true
     this.recording = this.sampled
-    this.onEnd = options?.onEnd
+    if (options?.onEnd !== undefined) {
+      this.onEnd = options.onEnd
+    }
   }
 
   isRecording(): boolean {
@@ -356,7 +358,9 @@ class SpanImpl implements Span {
       const exception: SpanException = {
         type: error.name,
         message: error.message,
-        stacktrace: error.stack,
+      }
+      if (error.stack !== undefined) {
+        exception.stacktrace = error.stack
       }
       this.exceptions.push(exception)
 
@@ -403,18 +407,25 @@ class SpanImpl implements Span {
    * Convert span to exportable format
    */
   toTraceSpan(): TraceSpan {
-    return {
+    const span: TraceSpan = {
       traceId: this.traceId,
       spanId: this.spanId,
-      parentSpanId: this.parentSpanId,
       name: this.name,
       kind: this.kind,
       startTimeUnixNano: this.startTime * 1_000_000,
-      endTimeUnixNano: this.endTime ? this.endTime * 1_000_000 : undefined,
       attributes: { ...this.attributes },
       status: { ...this.status },
-      links: this.links.length > 0 ? [...this.links] : undefined,
     }
+    if (this.parentSpanId !== undefined) {
+      span.parentSpanId = this.parentSpanId
+    }
+    if (this.endTime !== undefined) {
+      span.endTimeUnixNano = this.endTime * 1_000_000
+    }
+    if (this.links.length > 0) {
+      span.links = [...this.links]
+    }
+    return span
   }
 }
 
@@ -488,13 +499,22 @@ export class SpanBuilder {
    * Build the span using the provided tracer
    */
   build(tracer: DistributedTracer): Span {
-    return tracer.startSpan(this.name, {
-      parent: this.parent,
+    const options: StartSpanOptions = {
       kind: this.kind,
-      attributes: this.attributes,
-      links: this.links,
-      startTime: this.startTime,
-    })
+    }
+    if (this.parent !== undefined) {
+      options.parent = this.parent
+    }
+    if (Object.keys(this.attributes).length > 0) {
+      options.attributes = this.attributes
+    }
+    if (this.links.length > 0) {
+      options.links = this.links
+    }
+    if (this.startTime !== undefined) {
+      options.startTime = this.startTime
+    }
+    return tracer.startSpan(this.name, options)
   }
 }
 
@@ -596,12 +616,23 @@ export class DistributedTracer {
     // Determine sampling
     const samplingDecision = this.shouldSample(parentContext ?? null, name, parentSampled)
 
-    const span = new SpanImpl(traceId, spanId, name, kind, startTime, parentSpanId, {
-      attributes: options?.attributes,
-      links: options?.links,
+    const spanOptions: {
+      attributes?: Record<string, unknown>
+      links?: SpanLink[]
+      sampled?: boolean
+      onEnd?: (span: SpanImpl) => void
+    } = {
       sampled: samplingDecision.sampled,
       onEnd: (s) => this.onSpanEnd(s),
-    })
+    }
+    if (options?.attributes !== undefined) {
+      spanOptions.attributes = options.attributes
+    }
+    if (options?.links !== undefined) {
+      spanOptions.links = options.links
+    }
+
+    const span = new SpanImpl(traceId, spanId, name, kind, startTime, parentSpanId, spanOptions)
 
     // Add sampling attributes if any
     if (samplingDecision.attributes) {

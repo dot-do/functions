@@ -418,44 +418,55 @@ export function approvalFunction<TInput>(
     sla?: SLAConfig
   }
 ): HumanFunctionDefinition<TInput, { approved: boolean; comment?: string }> {
-  return defineHumanFunction({
+  const ui: HumanUI = {
+    title,
+    quickActions: [
+      {
+        id: 'approve',
+        label: 'Approve',
+        variant: 'primary',
+        value: { approved: true },
+        shortcut: 'a',
+      },
+      {
+        id: 'reject',
+        label: 'Reject',
+        variant: 'danger',
+        value: { approved: false },
+        confirmMessage: 'Are you sure you want to reject?',
+        shortcut: 'r',
+      },
+    ],
+    form: [
+      {
+        name: 'comment',
+        label: 'Comment',
+        type: 'textarea',
+        placeholder: 'Optional comment...',
+      },
+    ],
+  }
+  if (options?.description !== undefined) {
+    ui.description = options.description
+  }
+  if (options?.context !== undefined) {
+    ui.context = options.context
+  }
+
+  const config: Omit<HumanFunctionDefinition<TInput, { approved: boolean; comment?: string }>, 'type'> = {
     id,
     name: title,
     version: '1.0.0',
     interactionType: 'approval',
-    ui: {
-      title,
-      description: options?.description,
-      context: options?.context,
-      quickActions: [
-        {
-          id: 'approve',
-          label: 'Approve',
-          variant: 'primary',
-          value: { approved: true },
-          shortcut: 'a',
-        },
-        {
-          id: 'reject',
-          label: 'Reject',
-          variant: 'danger',
-          value: { approved: false },
-          confirmMessage: 'Are you sure you want to reject?',
-          shortcut: 'r',
-        },
-      ],
-      form: [
-        {
-          name: 'comment',
-          label: 'Comment',
-          type: 'textarea',
-          placeholder: 'Optional comment...',
-        },
-      ],
-    },
-    assignees: options?.assignees,
-    sla: options?.sla,
-  })
+    ui,
+  }
+  if (options?.assignees !== undefined) {
+    config.assignees = options.assignees
+  }
+  if (options?.sla !== undefined) {
+    config.sla = options.sla
+  }
+  return defineHumanFunction(config)
 }
 
 // =============================================================================
@@ -472,17 +483,26 @@ export function inputFunction<TOutput>(
     context?: UIContext[]
   }
 ): HumanFunctionDefinition<unknown, TOutput> {
-  return defineHumanFunction({
+  const ui: HumanUI = {
+    title,
+    form,
+  }
+  if (options?.description !== undefined) {
+    ui.description = options.description
+  }
+  if (options?.context !== undefined) {
+    ui.context = options.context
+  }
+
+  const config: Omit<HumanFunctionDefinition<unknown, TOutput>, 'type'> = {
     id,
     name: title,
     version: '1.0.0',
     interactionType: 'input',
-    ui: {
-      title,
-      description: options?.description,
-      context: options?.context,
-      form,
-    },
-    assignees: options?.assignees,
-  })
+    ui,
+  }
+  if (options?.assignees !== undefined) {
+    config.assignees = options.assignees
+  }
+  return defineHumanFunction(config)
 }

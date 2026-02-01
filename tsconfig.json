@@ -18,7 +18,7 @@
     "isolatedModules": true,
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
-    "exactOptionalPropertyTypes": false,
+    "exactOptionalPropertyTypes": true,
     "noFallthroughCasesInSwitch": true,
     "noPropertyAccessFromIndexSignature": false,
     "useDefineForClassFields": true

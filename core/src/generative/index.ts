@@ -177,16 +177,23 @@ export function generativeFunction<TOutput>(
     examples?: GenerativeExample[]
   }
 ): GenerativeFunctionDefinition<Record<string, unknown>, TOutput> {
-  return defineGenerativeFunction({
+  const config: Omit<GenerativeFunctionDefinition<Record<string, unknown>, TOutput>, 'type'> = {
     id,
     name: options?.name ?? id,
     version: '1.0.0',
     userPrompt: prompt,
     outputSchema,
-    systemPrompt: options?.systemPrompt,
-    model: options?.model,
-    examples: options?.examples,
-  })
+  }
+  if (options?.systemPrompt !== undefined) {
+    config.systemPrompt = options.systemPrompt
+  }
+  if (options?.model !== undefined) {
+    config.model = options.model
+  }
+  if (options?.examples !== undefined) {
+    config.examples = options.examples
+  }
+  return defineGenerativeFunction(config)
 }
 
 // =============================================================================

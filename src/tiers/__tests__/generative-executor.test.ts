@@ -1365,4 +1365,247 @@ describe('GenerativeExecutor', () => {
       expect(rendered).toContain('value')
     })
   })
+
+  // ==========================================================================
+  // 11. LRU Cache Eviction
+  // ==========================================================================
+
+  describe('LRU Cache Eviction', () => {
+    it('should have configurable max cache size', async () => {
+      const executorWithLimit = new GenerativeExecutor({
+        aiClient: mockAIClient,
+        maxCacheSize: 3,
+      })
+
+      const definition = defineGenerativeFunction({
+        id: 'test-cache-limit',
+        name: 'Cache Limit Test',
+        version: '1.0.0',
+        userPrompt: 'Process: {{input}}',
+        outputSchema: simpleOutputSchema,
+      })
+      const config: GenerativeFunctionConfig = { cacheEnabled: true }
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      // Fill cache with 3 entries
+      await executorWithLimit.execute(definition, { input: 'value1' }, config)
+      await executorWithLimit.execute(definition, { input: 'value2' }, config)
+      await executorWithLimit.execute(definition, { input: 'value3' }, config)
+
+      const stats = executorWithLimit.getCacheStats()
+      expect(stats.size).toBe(3)
+    })
+
+    it('should evict LRU entry when cache is full', async () => {
+      const executorWithLimit = new GenerativeExecutor({
+        aiClient: mockAIClient,
+        maxCacheSize: 2,
+      })
+
+      const definition = defineGenerativeFunction({
+        id: 'test-lru-eviction',
+        name: 'LRU Eviction Test',
+        version: '1.0.0',
+        userPrompt: 'Process: {{input}}',
+        outputSchema: simpleOutputSchema,
+      })
+      const config: GenerativeFunctionConfig = { cacheEnabled: true }
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      // Fill cache with 2 entries
+      await executorWithLimit.execute(definition, { input: 'first' }, config)
+      await executorWithLimit.execute(definition, { input: 'second' }, config)
+
+      // Access 'first' to make it recently used
+      await executorWithLimit.execute(definition, { input: 'first' }, config)
+
+      // Add a third entry - should evict 'second' (LRU)
+      await executorWithLimit.execute(definition, { input: 'third' }, config)
+
+      const stats = executorWithLimit.getCacheStats()
+      expect(stats.size).toBe(2)
+      expect(stats.evictions).toBe(1)
+
+      // 'first' should still be cached (was recently used)
+      mockAIClient.messages.create.mockClear()
+      await executorWithLimit.execute(definition, { input: 'first' }, config)
+      expect(mockAIClient.messages.create).not.toHaveBeenCalled()
+
+      // 'second' should be evicted (was LRU)
+      await executorWithLimit.execute(definition, { input: 'second' }, config)
+      expect(mockAIClient.messages.create).toHaveBeenCalledTimes(1)
+    })
+
+    it('should track evictions in cache stats', async () => {
+      const executorWithLimit = new GenerativeExecutor({
+        aiClient: mockAIClient,
+        maxCacheSize: 2,
+      })
+
+      const definition = defineGenerativeFunction({
+        id: 'test-eviction-stats',
+        name: 'Eviction Stats Test',
+        version: '1.0.0',
+        userPrompt: 'Process: {{input}}',
+        outputSchema: simpleOutputSchema,
+      })
+      const config: GenerativeFunctionConfig = { cacheEnabled: true }
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      // Fill cache
+      await executorWithLimit.execute(definition, { input: 'a' }, config)
+      await executorWithLimit.execute(definition, { input: 'b' }, config)
+
+      // Trigger evictions
+      await executorWithLimit.execute(definition, { input: 'c' }, config)
+      await executorWithLimit.execute(definition, { input: 'd' }, config)
+      await executorWithLimit.execute(definition, { input: 'e' }, config)
+
+      const stats = executorWithLimit.getCacheStats()
+      expect(stats.evictions).toBe(3)
+    })
+
+    it('should proactively clean stale entries', async () => {
+      const executorWithCleanup = new GenerativeExecutor({
+        aiClient: mockAIClient,
+        maxCacheSize: 100,
+        staleCleanupIntervalMs: 1000, // Cleanup every 1 second
+      })
+
+      const definition = defineGenerativeFunction({
+        id: 'test-stale-cleanup',
+        name: 'Stale Cleanup Test',
+        version: '1.0.0',
+        userPrompt: 'Process: {{input}}',
+        outputSchema: simpleOutputSchema,
+      })
+      const config: GenerativeFunctionConfig = { cacheEnabled: true, cacheTtlSeconds: 2 }
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      // Add entries to cache
+      await executorWithCleanup.execute(definition, { input: 'value1' }, config)
+      await executorWithCleanup.execute(definition, { input: 'value2' }, config)
+
+      let stats = executorWithCleanup.getCacheStats()
+      expect(stats.size).toBe(2)
+
+      // Advance time past TTL
+      await vi.advanceTimersByTimeAsync(3000)
+
+      // Trigger cleanup (either via interval or manual call)
+      executorWithCleanup.cleanupStaleEntries()
+
+      stats = executorWithCleanup.getCacheStats()
+      expect(stats.size).toBe(0)
+      expect(stats.staleEvictions).toBeGreaterThan(0)
+    })
+
+    it('should track stale evictions separately from LRU evictions', async () => {
+      const executorWithCleanup = new GenerativeExecutor({
+        aiClient: mockAIClient,
+        maxCacheSize: 2,
+        staleCleanupIntervalMs: 1000,
+      })
+
+      const definition = defineGenerativeFunction({
+        id: 'test-eviction-tracking',
+        name: 'Eviction Tracking Test',
+        version: '1.0.0',
+        userPrompt: 'Process: {{input}}',
+        outputSchema: simpleOutputSchema,
+      })
+      const config: GenerativeFunctionConfig = { cacheEnabled: true, cacheTtlSeconds: 2 }
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      // Fill cache and trigger 1 LRU eviction
+      await executorWithCleanup.execute(definition, { input: 'a' }, config)
+      await executorWithCleanup.execute(definition, { input: 'b' }, config)
+      await executorWithCleanup.execute(definition, { input: 'c' }, config)
+
+      // Advance time past TTL
+      await vi.advanceTimersByTimeAsync(3000)
+      executorWithCleanup.cleanupStaleEntries()
+
+      const stats = executorWithCleanup.getCacheStats()
+      expect(stats.evictions).toBe(1) // LRU eviction
+      expect(stats.staleEvictions).toBe(2) // TTL-based cleanup
+    })
+
+    it('should stop cleanup timer when stopCleanup is called', async () => {
+      const executorWithCleanup = new GenerativeExecutor({
+        aiClient: mockAIClient,
+        maxCacheSize: 100,
+        staleCleanupIntervalMs: 1000,
+      })
+
+      const definition = defineGenerativeFunction({
+        id: 'test-stop-cleanup',
+        name: 'Stop Cleanup Test',
+        version: '1.0.0',
+        userPrompt: 'Process: {{input}}',
+        outputSchema: simpleOutputSchema,
+      })
+      const config: GenerativeFunctionConfig = { cacheEnabled: true, cacheTtlSeconds: 1 }
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      await executorWithCleanup.execute(definition, { input: 'value' }, config)
+
+      // Stop the cleanup timer
+      executorWithCleanup.stopCleanup()
+
+      // Advance time past TTL and cleanup interval
+      await vi.advanceTimersByTimeAsync(5000)
+
+      // Entry should still be in cache (cleanup didn't run)
+      const stats = executorWithCleanup.getCacheStats()
+      expect(stats.size).toBe(1)
+    })
+
+    it('should use default maxCacheSize of 1000 when not specified', async () => {
+      // Create executor without maxCacheSize option
+      const defaultExecutor = new GenerativeExecutor({
+        aiClient: mockAIClient,
+      })
+
+      const definition = defineGenerativeFunction({
+        id: 'test-default-size',
+        name: 'Default Size Test',
+        version: '1.0.0',
+        userPrompt: 'Process: {{input}}',
+        outputSchema: simpleOutputSchema,
+      })
+      const config: GenerativeFunctionConfig = { cacheEnabled: true }
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      // Fill cache with 1000+ entries and verify no eviction until limit
+      // This is a simplified test - just verify the executor accepts it
+      await defaultExecutor.execute(definition, { input: 'value' }, config)
+
+      const stats = defaultExecutor.getCacheStats()
+      expect(stats.maxSize).toBe(1000)
+    })
+
+    it('should return cache stats with all tracking fields', async () => {
+      const executorWithStats = new GenerativeExecutor({
+        aiClient: mockAIClient,
+        maxCacheSize: 5,
+      })
+
+      const definition = createSimpleFunction()
+      const config: GenerativeFunctionConfig = { cacheEnabled: true }
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      await executorWithStats.execute(definition, {}, config)
+
+      const stats = executorWithStats.getCacheStats()
+
+      // Verify all expected fields are present
+      expect(stats).toHaveProperty('size')
+      expect(stats).toHaveProperty('maxSize')
+      expect(stats).toHaveProperty('hits')
+      expect(stats).toHaveProperty('misses')
+      expect(stats).toHaveProperty('evictions')
+      expect(stats).toHaveProperty('staleEvictions')
+    })
+  })
 })

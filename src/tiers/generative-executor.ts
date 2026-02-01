@@ -90,6 +90,28 @@ interface GPTResponse {
  */
 export interface GenerativeExecutorOptions {
   aiClient: AIClient
+  /** Maximum number of entries in the cache (default: 1000) */
+  maxCacheSize?: number
+  /** Interval in milliseconds for proactive stale entry cleanup (default: 60000ms = 1 minute) */
+  staleCleanupIntervalMs?: number
+}
+
+/**
+ * Cache statistics
+ */
+export interface GenerativeCacheStats {
+  /** Current number of entries in the cache */
+  size: number
+  /** Maximum cache size */
+  maxSize: number
+  /** Number of cache hits */
+  hits: number
+  /** Number of cache misses */
+  misses: number
+  /** Number of LRU evictions (when cache is full) */
+  evictions: number
+  /** Number of stale entries cleaned up (TTL expired) */
+  staleEvictions: number
 }
 
 /**
@@ -134,9 +156,78 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
 {
   private aiClient: AIClient
   private cache: Map<string, CacheEntry> = new Map()
+  private maxCacheSize: number
+  private staleCleanupIntervalMs: number
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null
+
+  // Cache statistics
+  private cacheHits: number = 0
+  private cacheMisses: number = 0
+  private cacheEvictions: number = 0
+  private cacheStaleEvictions: number = 0
 
   constructor(options: GenerativeExecutorOptions) {
     this.aiClient = options.aiClient
+    this.maxCacheSize = options.maxCacheSize ?? 1000
+    // Default to 0 (no automatic cleanup) - users can explicitly set interval if needed
+    this.staleCleanupIntervalMs = options.staleCleanupIntervalMs ?? 0
+
+    // Start proactive cleanup only if explicitly configured
+    if (this.staleCleanupIntervalMs > 0) {
+      this.startCleanupTimer()
+    }
+  }
+
+  /**
+   * Get cache statistics
+   */
+  getCacheStats(): GenerativeCacheStats {
+    return {
+      size: this.cache.size,
+      maxSize: this.maxCacheSize,
+      hits: this.cacheHits,
+      misses: this.cacheMisses,
+      evictions: this.cacheEvictions,
+      staleEvictions: this.cacheStaleEvictions,
+    }
+  }
+
+  /**
+   * Proactively clean up stale (TTL-expired) cache entries
+   */
+  cleanupStaleEntries(): void {
+    const now = Date.now()
+    const keysToDelete: string[] = []
+
+    for (const [key, entry] of this.cache.entries()) {
+      if (now - entry.timestamp > entry.ttl * 1000) {
+        keysToDelete.push(key)
+      }
+    }
+
+    for (const key of keysToDelete) {
+      this.cache.delete(key)
+      this.cacheStaleEvictions++
+    }
+  }
+
+  /**
+   * Stop the cleanup timer (useful for tests or shutdown)
+   */
+  stopCleanup(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer)
+      this.cleanupTimer = null
+    }
+  }
+
+  /**
+   * Start the periodic cleanup timer
+   */
+  private startCleanupTimer(): void {
+    this.cleanupTimer = setInterval(() => {
+      this.cleanupStaleEntries()
+    }, this.staleCleanupIntervalMs)
   }
 
   /**
@@ -482,13 +573,21 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
 
   private getFromCache(key: string): GenerativeFunctionResult<unknown> | null {
     const entry = this.cache.get(key)
-    if (!entry) return null
+    if (!entry) {
+      this.cacheMisses++
+      return null
+    }
 
     const now = Date.now()
     if (now - entry.timestamp > entry.ttl * 1000) {
       this.cache.delete(key)
+      this.cacheMisses++
       return null
     }
+
+    // Touch the entry to mark it as recently used (LRU)
+    this.touchCacheEntry(key, entry)
+    this.cacheHits++
 
     // Mark as cached
     return {
@@ -505,11 +604,37 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
     result: GenerativeFunctionResult<unknown>,
     ttlSeconds: number
   ): void {
+    // Evict oldest (LRU) entry if cache is full
+    if (this.cache.size >= this.maxCacheSize && !this.cache.has(key)) {
+      this.evictOldest()
+    }
+
     this.cache.set(key, {
       result,
       timestamp: Date.now(),
       ttl: ttlSeconds,
     })
+  }
+
+  /**
+   * Move a cache entry to the end of the Map to mark it as recently used.
+   * This is O(1) and maintains LRU ordering by deletion and re-insertion.
+   */
+  private touchCacheEntry(key: string, entry: CacheEntry): void {
+    this.cache.delete(key)
+    this.cache.set(key, entry)
+  }
+
+  /**
+   * Evict the oldest (least recently used) entry from the cache.
+   * Uses Map's insertion order for O(1) eviction - the first entry is always the oldest.
+   */
+  private evictOldest(): void {
+    const firstKey = this.cache.keys().next().value
+    if (firstKey !== undefined) {
+      this.cache.delete(firstKey)
+      this.cacheEvictions++
+    }
   }
 
   private resolveTimeout(

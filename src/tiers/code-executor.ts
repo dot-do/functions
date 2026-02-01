@@ -29,6 +29,7 @@ import type {
   ExecutionContext,
 } from '../../core/src/types.js'
 import { parseDuration } from '../../core/src/types.js'
+import { stripTypeScript } from '../core/ts-strip'
 
 // ============================================================================
 // Types
@@ -58,6 +59,18 @@ export interface CacheStats {
   hits: number
   /** Number of cache misses */
   misses: number
+  /** Number of cache evictions */
+  evictions: number
+}
+
+/**
+ * Configuration options for CodeExecutor
+ */
+export interface CodeExecutorConfig {
+  /** Maximum number of entries in the compiled code cache (default: 1000) */
+  maxCacheSize?: number
+  /** Time-to-live for cache entries in milliseconds (default: 3600000 = 1 hour) */
+  cacheTTLMs?: number
 }
 
 /**
@@ -144,59 +157,6 @@ function calculateByteSize(value: unknown): number {
 }
 
 /**
- * Strip TypeScript types from code
- * This is a more comprehensive implementation that handles:
- * - Interface declarations
- * - Type aliases
- * - Parameter type annotations (including object types)
- * - Return type annotations
- * - Type assertions
- * - Generic type parameters
- */
-function stripTypeScript(code: string): string {
-  let result = code
-
-  // Remove interface declarations (handles nested braces)
-  result = result.replace(/interface\s+\w+(?:\s+extends\s+[^{]+)?\s*\{[^}]*(?:\{[^}]*\}[^}]*)?\}/gs, '')
-
-  // Remove type alias declarations
-  result = result.replace(/type\s+\w+(?:<[^>]*>)?\s*=\s*[^;]+;/g, '')
-
-  // Remove type imports
-  result = result.replace(/import\s+type\s+.*?from\s+['"][^'"]+['"]\s*;?/g, '')
-  result = result.replace(/import\s*\{[^}]*\btype\s+[^}]+\}\s*from\s+['"][^'"]+['"]\s*;?/g, (match) => {
-    // Keep non-type imports
-    return match.replace(/\btype\s+\w+\s*,?/g, '').replace(/,\s*,/g, ',').replace(/\{\s*,/g, '{').replace(/,\s*\}/g, '}')
-  })
-
-  // Remove generic type parameters from function declarations
-  result = result.replace(/(function\s+\w*)\s*<[^>]+>/g, '$1')
-
-  // Remove parameter type annotations - handle object types like { x: number }
-  // Match `: Type` where Type can be:
-  // - Simple identifier (string, number, MyType)
-  // - Object type { ... }
-  // - Array type Type[] or Array<Type>
-  // - Union type Type | Type
-  // - Generic type Type<T>
-  result = result.replace(/:\s*(?:\{[^}]*\}|\w+(?:<[^>]*>)?(?:\[\])?)(?:\s*\|\s*(?:\{[^}]*\}|\w+(?:<[^>]*>)?(?:\[\])?))*(?=\s*[,)=])/g, '')
-
-  // Remove return type annotations (after closing paren, before opening brace or arrow)
-  result = result.replace(/\)\s*:\s*(?:\{[^}]*\}|\w+(?:<[^>]*>)?(?:\[\])?)(?:\s*\|\s*(?:\{[^}]*\}|\w+(?:<[^>]*>)?(?:\[\])?))*\s*(?=\{|=>)/g, ') ')
-
-  // Remove type assertions (as Type)
-  result = result.replace(/\s+as\s+\w+(?:<[^>]*>)?/g, '')
-
-  // Remove non-null assertions (!)
-  result = result.replace(/(\w+)!/g, '$1')
-
-  // Clean up any double spaces
-  result = result.replace(/  +/g, ' ')
-
-  return result
-}
-
-/**
  * Wrap error in FunctionError format
  */
 function wrapError(error: unknown, retryable = false): FunctionError {
@@ -246,17 +206,26 @@ function wrapError(error: unknown, retryable = false): FunctionError {
 // Code Executor
 // ============================================================================
 
+// Default cache configuration
+const DEFAULT_MAX_CACHE_SIZE = 1000
+const DEFAULT_CACHE_TTL_MS = 3600000 // 1 hour
+
 /**
  * CodeExecutor executes code functions in sandboxed environments
  */
 export class CodeExecutor {
   private readonly env: CodeExecutorEnv
   private readonly compiledCache = new Map<string, CompiledCodeCache>()
+  private readonly maxCacheSize: number
+  private readonly cacheTTLMs: number
   private cacheHits = 0
   private cacheMisses = 0
+  private cacheEvictions = 0
 
-  constructor(env: CodeExecutorEnv) {
+  constructor(env: CodeExecutorEnv, config?: CodeExecutorConfig) {
     this.env = env
+    this.maxCacheSize = config?.maxCacheSize ?? DEFAULT_MAX_CACHE_SIZE
+    this.cacheTTLMs = config?.cacheTTLMs ?? DEFAULT_CACHE_TTL_MS
   }
 
   /**
@@ -302,12 +271,18 @@ export class CodeExecutor {
     let cacheHit = false
 
     const cached = this.compiledCache.get(codeHash)
-    if (cached) {
+    if (cached && !this.isExpired(cached)) {
+      // Move to end of Map for LRU ordering
+      this.touchCacheEntry(codeHash, cached)
       compiledCode = cached.compiledCode
       compilationTimeMs = 0 // No compilation needed
       cacheHit = true
       this.cacheHits++
     } else {
+      // Remove expired entry if present
+      if (cached) {
+        this.compiledCache.delete(codeHash)
+      }
       // Compile the code
       const compileStart = Date.now()
       try {
@@ -347,6 +322,11 @@ export class CodeExecutor {
         }
       }
       compilationTimeMs = Date.now() - compileStart
+
+      // Evict oldest entry if cache is full
+      if (this.compiledCache.size >= this.maxCacheSize) {
+        this.evictOldest()
+      }
 
       // Cache the compiled code
       this.compiledCache.set(codeHash, {
@@ -466,6 +446,7 @@ export class CodeExecutor {
     this.compiledCache.clear()
     this.cacheHits = 0
     this.cacheMisses = 0
+    this.cacheEvictions = 0
   }
 
   /**
@@ -476,12 +457,41 @@ export class CodeExecutor {
       size: this.compiledCache.size,
       hits: this.cacheHits,
       misses: this.cacheMisses,
+      evictions: this.cacheEvictions,
     }
   }
 
   // ==========================================================================
   // Private Methods
   // ==========================================================================
+
+  /**
+   * Check if a cache entry has expired based on TTL
+   */
+  private isExpired(entry: CompiledCodeCache): boolean {
+    return Date.now() - entry.cachedAt > this.cacheTTLMs
+  }
+
+  /**
+   * Evict the oldest (least recently used) entry from the cache.
+   * Uses Map's insertion order for O(1) eviction - the first entry is always the oldest.
+   */
+  private evictOldest(): void {
+    const firstKey = this.compiledCache.keys().next().value
+    if (firstKey !== undefined) {
+      this.compiledCache.delete(firstKey)
+      this.cacheEvictions++
+    }
+  }
+
+  /**
+   * Move a cache entry to the end of the Map to mark it as recently used.
+   * This is O(1) and maintains LRU ordering by deletion and re-insertion.
+   */
+  private touchCacheEntry(key: string, entry: CompiledCodeCache): void {
+    this.compiledCache.delete(key)
+    this.compiledCache.set(key, entry)
+  }
 
   /**
    * Determine the isolate type based on language and sandbox config

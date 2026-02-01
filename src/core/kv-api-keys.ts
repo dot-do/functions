@@ -480,11 +480,15 @@ export class KVApiKeyStore {
     const cursor = options?.cursor
     const includeRevoked = options?.includeRevoked ?? true
 
-    const listResult = await this.kv.list({
+    const listOptions: KVNamespaceListOptions = {
       prefix: `owner:${ownerId}:keys:`,
       limit,
-      cursor,
-    })
+    }
+    if (cursor !== undefined) {
+      listOptions.cursor = cursor
+    }
+
+    const listResult = await this.kv.list(listOptions)
 
     const keys: Array<{ keyHash: string; metadata: ApiKeyMetadata }> = []
 

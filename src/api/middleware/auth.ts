@@ -4,6 +4,8 @@
  * Provides API key-based authentication for protected endpoints.
  */
 
+import { jsonResponse } from '../http-utils'
+
 /**
  * API key record stored in KV
  */
@@ -16,10 +18,16 @@ export interface ApiKeyRecord {
 
 /**
  * Auth context attached to authenticated requests
+ *
+ * Note: The full API key is NOT stored to prevent exposure if this object
+ * is logged or serialized. Instead, we store:
+ * - keyHash: SHA-256 hash for unique identification/correlation
+ * - keyHint: Masked hint showing only last 4 characters (e.g., "****abcd")
  */
 export interface AuthContext {
   userId: string
-  apiKey: string
+  keyHash: string
+  keyHint: string
   scopes: string[]
   authenticatedAt: number
   isInternal?: boolean
@@ -49,13 +57,26 @@ export interface AuthMiddlewareResult {
 }
 
 /**
- * JSON response helper
+ * Hash an API key using SHA-256
+ * Returns a hex string for logging/correlation without exposing the actual key
  */
-function jsonResponse(data: unknown, status = 200, headers: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { 'Content-Type': 'application/json', ...headers },
-  })
+async function hashApiKey(apiKey: string): Promise<string> {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(apiKey)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * Create a safe hint from an API key showing only the last 4 characters
+ * Example: "sk_live_abc123xyz" -> "****3xyz"
+ */
+function createKeyHint(apiKey: string): string {
+  if (apiKey.length <= 4) {
+    return '****'
+  }
+  return '****' + apiKey.slice(-4)
 }
 
 /**
@@ -193,7 +214,8 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig) {
           shouldContinue: true,
           authContext: {
             userId: 'internal',
-            apiKey: 'internal',
+            keyHash: 'internal',
+            keyHint: 'internal',
             scopes: ['*'],
             authenticatedAt: Date.now(),
             isInternal: true,
@@ -263,10 +285,11 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig) {
       }
     }
 
-    // Build auth context
+    // Build auth context with hashed/hinted key (never store full key)
     const authContext: AuthContext = {
       userId: record.userId || 'anonymous',
-      apiKey,
+      keyHash: await hashApiKey(apiKey),
+      keyHint: createKeyHint(apiKey),
       scopes: record.scopes || [],
       authenticatedAt: Date.now(),
     }

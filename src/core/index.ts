@@ -36,3 +36,4 @@ export { DistributedTracer, TraceContext, W3CTraceContextPropagator, OpenTelemet
 
 // Utilities
 export { encodeULEB128, encodeSLEB128, encodeName, createSection } from './wasm-encoding'
+export { stripTypeScript } from './ts-strip'
