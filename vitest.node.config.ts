@@ -1,8 +1,16 @@
 import { defineConfig } from 'vitest/config'
 
+// Limit Node.js memory to prevent OOM
+process.env.NODE_OPTIONS = process.env.NODE_OPTIONS || '--max-old-space-size=4096'
+
 export default defineConfig({
   test: {
     globals: true,
+    // CRITICAL: Aggressive RAM limits - multiple agents can spawn vitest concurrently
+    maxConcurrency: 1,  // Only 1 test at a time
+    maxWorkers: 1,      // Only 1 worker process
+    isolate: false,     // Reduce memory by not isolating each test
+    fileParallelism: false,  // Run test files sequentially
     include: [
       // CLI tests use node:child_process for spawning processes
       'src/cli/**/*.test.ts',
@@ -41,6 +49,8 @@ export default defineConfig({
       'core/src/__tests__/schemas.test.ts',
       // AI tests
       'src/ai/__tests__/*.test.ts',
+      // Generative executor tests (require ai-functions package)
+      'src/tiers/__tests__/generative-executor.test.ts',
     ],
     exclude: ['node_modules/**'],
     testTimeout: 30000,
