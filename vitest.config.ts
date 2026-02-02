@@ -62,7 +62,11 @@ export default defineWorkersProject({
       workers: {
         wrangler: { configPath: './wrangler.test.jsonc' },
         miniflare: {
-          compatibilityFlags: ['nodejs_compat']
+          compatibilityFlags: ['nodejs_compat'],
+          // Note: @cloudflare/vitest-pool-workers automatically sets
+          // unsafeEvalBinding = "__VITEST_POOL_WORKERS_UNSAFE_EVAL" on the runner
+          // worker and patches globalThis.Function to use it. This means
+          // new Function(code) works in tests without explicit configuration.
         },
         singleWorker: true,  // Use single worker instance to limit RAM usage
       }
