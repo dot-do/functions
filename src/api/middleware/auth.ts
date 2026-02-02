@@ -204,7 +204,7 @@ function isApiKeyFormat(token: string): boolean {
 /**
  * Create auth middleware with custom configuration
  */
-export function createAuthMiddleware(config: AuthMiddlewareConfig) {
+export function createAuthMiddleware(config: AuthMiddlewareConfig): (request: Request, env: Record<string, unknown>, ctx: ExecutionContext) => Promise<AuthMiddlewareResult> {
   const {
     publicEndpoints = [...PUBLIC_ENDPOINTS.CORE],
     apiKeysKV,

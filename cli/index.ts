@@ -22,6 +22,9 @@ import { runInvoke } from './commands/invoke.js'
 import { runList } from './commands/list.js'
 import { runLogs } from './commands/logs.js'
 import { runDelete } from './commands/delete.js'
+import { runStatus } from './commands/status.js'
+import { runSecrets } from './commands/secrets.js'
+import { runRollback } from './commands/rollback.js'
 import { createDefaultContext, createDefaultAPIClient, createDefaultPrompt, createDefaultCompiler } from './context.js'
 import type { CLIContext } from './types.js'
 
@@ -163,26 +166,69 @@ export function createCLI() {
   // rollback command
   cli.command('rollback <functionId>', 'Rollback to previous version')
     .option('-v, --version <version>', 'Specific version to rollback to')
-    .action(async (functionId: string, options: { version?: string }) => {
-      console.log(`Rolling back ${functionId} to ${options.version || 'previous version'}...`)
-      console.log('Rollback command not yet implemented.')
+    .option('-f, --force', 'Skip confirmation')
+    .action(async (functionId: string, options: { version?: string; force?: boolean }) => {
+      const context = createDefaultContext()
+      const api = createDefaultAPIClient(context)
+      const prompt = createDefaultPrompt()
+      const result = await runRollback(functionId, {
+        version: options.version,
+        force: options.force,
+      }, context, api, prompt)
+      process.exit(result.exitCode)
     })
 
-  // secrets command
-  cli.command('secrets', 'Manage function secrets')
-    .option('list', 'List all secrets')
-    .option('set <name> <value>', 'Set a secret')
-    .option('delete <name>', 'Delete a secret')
-    .action(() => {
-      console.log('Secrets command not yet implemented.')
+  // secrets list command
+  cli.command('secrets list <functionName>', 'List function secrets')
+    .option('--json', 'Output as JSON')
+    .action(async (functionName: string, options: { json?: boolean }) => {
+      const context = createDefaultContext()
+      const api = createDefaultAPIClient(context)
+      const result = await runSecrets({
+        action: 'list',
+        functionName,
+        json: options.json,
+      }, context, api)
+      process.exit(result.exitCode)
+    })
+
+  // secrets set command
+  cli.command('secrets set <functionName> <secretName> <secretValue>', 'Set a function secret')
+    .action(async (functionName: string, secretName: string, secretValue: string) => {
+      const context = createDefaultContext()
+      const api = createDefaultAPIClient(context)
+      const result = await runSecrets({
+        action: 'set',
+        functionName,
+        secretName,
+        secretValue,
+      }, context, api)
+      process.exit(result.exitCode)
+    })
+
+  // secrets delete command
+  cli.command('secrets delete <functionName> <secretName>', 'Delete a function secret')
+    .action(async (functionName: string, secretName: string) => {
+      const context = createDefaultContext()
+      const api = createDefaultAPIClient(context)
+      const result = await runSecrets({
+        action: 'delete',
+        functionName,
+        secretName,
+      }, context, api)
+      process.exit(result.exitCode)
     })
 
   // status command
   cli.command('status <functionId>', 'View function status')
     .option('--json', 'Output as JSON')
     .action(async (functionId: string, options: { json?: boolean }) => {
-      console.log(`Fetching status for ${functionId}...`)
-      console.log('Status command not yet implemented.')
+      const context = createDefaultContext()
+      const api = createDefaultAPIClient(context)
+      const result = await runStatus(functionId, {
+        json: options.json,
+      }, context, api)
+      process.exit(result.exitCode)
     })
 
   return {
@@ -361,17 +407,54 @@ Documentation: https://functions.do/docs
       return result
     }
 
-    case 'rollback':
-      stdout('Rolling back function...')
-      return { exitCode: 0 }
+    case 'rollback': {
+      const functionId = commandArgs[0] || ''
+      const api = createDefaultAPIClient(ctx)
+      const prompt = createDefaultPrompt()
+      const force = commandArgs.includes('--force') || commandArgs.includes('-f')
+      const versionIdx = commandArgs.indexOf('--version')
+      const vIdx = commandArgs.indexOf('-v')
+      const version = versionIdx !== -1 ? commandArgs[versionIdx + 1] : (vIdx !== -1 ? commandArgs[vIdx + 1] : undefined)
 
-    case 'secrets':
-      stdout('Managing secrets...')
-      return { exitCode: 0 }
+      const result = await runRollback(functionId, { version, force }, ctx, api, prompt)
+      return result
+    }
 
-    case 'status':
-      stdout('Fetching status...')
-      return { exitCode: 0 }
+    case 'secrets': {
+      const subcommand = commandArgs[0] || ''
+      const functionName = commandArgs[1] || ''
+      const api = createDefaultAPIClient(ctx)
+
+      if (subcommand === 'list') {
+        const json = commandArgs.includes('--json')
+        const result = await runSecrets({ action: 'list', functionName, json }, ctx, api)
+        return result
+      } else if (subcommand === 'set') {
+        const secretName = commandArgs[2] || ''
+        const secretValue = commandArgs[3] || ''
+        const result = await runSecrets({ action: 'set', functionName, secretName, secretValue }, ctx, api)
+        return result
+      } else if (subcommand === 'delete') {
+        const secretName = commandArgs[2] || ''
+        const result = await runSecrets({ action: 'delete', functionName, secretName }, ctx, api)
+        return result
+      } else {
+        stderr('Usage:')
+        stderr('  dotdo secrets list <function-name>')
+        stderr('  dotdo secrets set <function-name> <KEY> <value>')
+        stderr('  dotdo secrets delete <function-name> <KEY>')
+        return { exitCode: 1, error: 'Invalid secrets subcommand' }
+      }
+    }
+
+    case 'status': {
+      const functionId = commandArgs[0] || ''
+      const api = createDefaultAPIClient(ctx)
+      const json = commandArgs.includes('--json')
+
+      const result = await runStatus(functionId, { json }, ctx, api)
+      return result
+    }
 
     default:
       stderr(`Unknown command: ${command}`)

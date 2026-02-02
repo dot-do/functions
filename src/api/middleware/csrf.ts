@@ -124,7 +124,7 @@ function hasApiKeyAuth(request: Request): boolean {
 /**
  * Create CSRF middleware with custom configuration
  */
-export function createCSRFMiddleware(config: CSRFMiddlewareConfig = {}) {
+export function createCSRFMiddleware(config: CSRFMiddlewareConfig = {}): CSRFMiddleware {
   const {
     cookieName = 'csrf',
     headerName = 'X-CSRF-Token',

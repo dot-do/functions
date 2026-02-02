@@ -393,6 +393,143 @@ describe('stripTypeScript', () => {
     })
   })
 
+  describe('abstract classes and methods', () => {
+    it('should strip abstract keyword from class declarations', () => {
+      const code = 'abstract class Shape {\n  abstract area(): number;\n  perimeter(): number { return 0; }\n}'
+      const result = stripTypeScript(code)
+      expect(result).toContain('class Shape')
+      expect(result).not.toMatch(/\babstract\b/)
+      expect(result).toContain('perimeter()')
+    })
+
+    it('should strip abstract method signatures', () => {
+      const code = 'abstract class Animal {\n  abstract makeSound(): string;\n  move(distance: number): void {\n    console.log("moving");\n  }\n}'
+      const result = stripTypeScript(code)
+      expect(result).toContain('class Animal')
+      expect(result).not.toMatch(/\babstract\b/)
+      expect(result).toContain('move(distance)')
+    })
+  })
+
+  describe('implements clause', () => {
+    it('should strip implements clause from class', () => {
+      const code = "class Dog implements Animal {\n  bark() { return 'woof'; }\n}"
+      const result = stripTypeScript(code)
+      expect(result).toContain('class Dog')
+      expect(result).not.toContain('implements')
+      expect(result).toContain('bark()')
+    })
+
+    it('should strip implements with multiple interfaces', () => {
+      const code = 'class Service implements Disposable, Serializable {\n  dispose() {}\n}'
+      const result = stripTypeScript(code)
+      expect(result).toContain('class Service')
+      expect(result).not.toContain('implements')
+      expect(result).toContain('dispose()')
+    })
+
+    it('should strip implements while preserving extends', () => {
+      const code = "class AdminUser extends User implements Serializable {\n  serialize() { return '{}'; }\n}"
+      const result = stripTypeScript(code)
+      expect(result).toContain('class AdminUser extends User')
+      expect(result).not.toContain('implements')
+      expect(result).toContain('serialize()')
+    })
+  })
+
+  describe('function overloads', () => {
+    it('should strip function overload signatures', () => {
+      const code = 'function process(x: string): string;\nfunction process(x: number): number;\nfunction process(x: string | number): string | number {\n  return x;\n}'
+      const result = stripTypeScript(code)
+      // Only the implementation should remain (with types stripped)
+      const processCount = (result.match(/function process/g) || []).length
+      expect(processCount).toBe(1)
+      expect(result).toContain('return x')
+    })
+  })
+
+  describe('this parameter type', () => {
+    it('should strip this parameter type with other params', () => {
+      const code = 'function onClick(this: HTMLElement, event: Event) {\n  console.log(this.tagName);\n}'
+      const result = stripTypeScript(code)
+      expect(result).not.toContain('this:')
+      expect(result).not.toContain('HTMLElement')
+      expect(result).toContain('(event)')
+      expect(result).toContain('console.log(this.tagName)')
+    })
+
+    it('should strip this parameter type when it is the only param', () => {
+      const code = 'function getTag(this: Element) {\n  return this.tagName;\n}'
+      const result = stripTypeScript(code)
+      expect(result).toContain('function getTag()')
+      expect(result).not.toContain('this:')
+    })
+  })
+
+  describe('tuple types', () => {
+    it('should strip tuple type annotations from parameters', () => {
+      const code = 'function first(pair: [string, number]) { return pair[0]; }'
+      const result = stripTypeScript(code)
+      expect(result).toContain('function first(pair)')
+      expect(result).not.toContain('[string, number]')
+    })
+
+    it('should strip tuple type from variable declarations', () => {
+      const code = "const pair: [string, number] = ['hello', 42];"
+      const result = stripTypeScript(code)
+      expect(result).not.toContain('[string, number]')
+      expect(result).toContain("= ['hello', 42]")
+    })
+  })
+
+  describe('nested generics', () => {
+    it('should strip nested generic type parameters from classes', () => {
+      const code = 'class Cache<K, V> {\n  private store = new Map();\n}'
+      const result = stripTypeScript(code)
+      expect(result).toContain('class Cache')
+      // The class generic <K, V> should be stripped from the class declaration
+      expect(result).not.toMatch(/class Cache\s*</)
+    })
+
+    it('should strip nested generic return type Promise<Map<string, number>>', () => {
+      const code = 'async function getData(): Promise<Map<string, number>> {\n  return new Map();\n}'
+      const result = stripTypeScript(code)
+      expect(result).toContain('async function getData()')
+      expect(result).not.toContain('Promise<Map<string, number>>')
+      expect(result).toContain('return new Map()')
+    })
+
+    it('should strip deeply nested generic function type parameters', () => {
+      const code = 'function transform<T extends Record<string, Array<number>>>(input: T) {\n  return input;\n}'
+      const result = stripTypeScript(code)
+      expect(result).toContain('function transform(input)')
+      expect(result).not.toContain('<T extends')
+    })
+  })
+
+  describe('variable type annotations', () => {
+    it('should strip const type annotations with assignment', () => {
+      const code = "const name: string = 'hello';"
+      const result = stripTypeScript(code)
+      expect(result).toContain("const name = 'hello'")
+      expect(result).not.toContain(': string')
+    })
+
+    it('should strip let type annotations without assignment', () => {
+      const code = 'let count: number;'
+      const result = stripTypeScript(code)
+      expect(result).toContain('let count')
+      expect(result).not.toContain(': number')
+    })
+
+    it('should strip union type annotations from variables', () => {
+      const code = 'let result: string | null = null;'
+      const result = stripTypeScript(code)
+      expect(result).toContain('let result = null')
+      expect(result).not.toContain('string | null')
+    })
+  })
+
   describe('edge cases', () => {
     it('should handle empty input', () => {
       const result = stripTypeScript('')

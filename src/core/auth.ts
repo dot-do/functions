@@ -129,7 +129,7 @@ export async function authenticateRequest(
  * @param config - Authentication configuration
  * @returns A function that can be used as middleware
  */
-export function createAuthMiddleware(config: AuthConfig) {
+export function createAuthMiddleware(config: AuthConfig): (request: Request) => Promise<AuthResult | null> {
   return async (request: Request): Promise<AuthResult | null> => {
     const url = new URL(request.url)
     const path = url.pathname

@@ -77,17 +77,26 @@ interface DeleteResult {
 
 /**
  * Function client error
+ *
+ * Carries structured error information from the API's error response format:
+ * { error: { code, message, details? }, requestId? }
+ *
+ * Use `errorCode` for programmatic error handling instead of string matching on `message`.
  */
 class FunctionClientError extends Error {
+  /** Machine-readable error code from the API (e.g., 'UNAUTHORIZED', 'CONFLICT', 'TIMEOUT') */
+  public errorCode?: string
   constructor(
     message: string,
     public statusCode: number,
     public details?: unknown,
     public requestId?: string,
-    public retryAfter?: number
+    public retryAfter?: number,
+    errorCode?: string,
   ) {
     super(message)
     this.name = 'FunctionClientError'
+    this.errorCode = errorCode
   }
 }
 
@@ -125,17 +134,39 @@ class FunctionClient {
 
     if (!response.ok) {
       const requestId = response.headers?.get?.('x-request-id') ?? undefined
-      let errorData: { error?: string; details?: unknown } = {}
+      const retryAfter = response.headers?.get?.('retry-after')
+      let errorMessage = response.statusText
+      let errorCode: string | undefined
+      let errorDetails: unknown
+
       try {
-        errorData = await response.json()
+        const responseBody = await response.json() as Record<string, unknown>
+        // Handle structured API error format: { error: { code, message, details? } }
+        if (responseBody.error && typeof responseBody.error === 'object') {
+          const errorObj = responseBody.error as { code?: string; message?: string; details?: unknown }
+          errorCode = errorObj.code
+          errorMessage = errorObj.message || errorMessage
+          errorDetails = errorObj.details
+        } else if (typeof responseBody.error === 'string') {
+          // Legacy flat error format: { error: "message" }
+          errorMessage = responseBody.error
+          errorDetails = responseBody.details
+        }
+        // Use response-level requestId if available
+        if (responseBody.requestId) {
+          // Prefer response body requestId over header
+        }
       } catch {
-        // Ignore parse errors
+        // Ignore parse errors - use defaults from status line
       }
+
       throw new FunctionClientError(
-        errorData.error ?? response.statusText,
+        errorMessage,
         response.status,
-        errorData.details,
-        requestId
+        errorDetails,
+        requestId,
+        retryAfter ? parseInt(retryAfter, 10) * 1000 : undefined,
+        errorCode,
       )
     }
 

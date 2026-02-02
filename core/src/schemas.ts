@@ -67,9 +67,18 @@ export type DurationFromSchema = z.infer<typeof DurationSchema>
 
 /**
  * JsonSchema type - simplified JSON Schema interface
+ *
+ * All known JSON Schema keywords are explicitly typed instead of using
+ * an open index signature (`[key: string]: unknown`), which would weaken
+ * type safety on every property access.
+ *
+ * The Zod schema uses `.passthrough()` for runtime flexibility, but the
+ * TypeScript interface restricts to known keywords for compile-time safety.
+ *
  * @canonical This is the source of truth for JsonSchema
  */
 export interface JsonSchema {
+  // Core keywords
   type?: 'object' | 'array' | 'string' | 'number' | 'boolean' | 'null'
   properties?: Record<string, JsonSchema>
   items?: JsonSchema
@@ -77,7 +86,56 @@ export interface JsonSchema {
   enum?: unknown[]
   description?: string
   default?: unknown
-  [key: string]: unknown
+
+  // Schema composition
+  allOf?: JsonSchema[]
+  anyOf?: JsonSchema[]
+  oneOf?: JsonSchema[]
+  not?: JsonSchema
+  if?: JsonSchema
+  then?: JsonSchema
+  else?: JsonSchema
+
+  // Object keywords
+  additionalProperties?: boolean | JsonSchema
+  patternProperties?: Record<string, JsonSchema>
+  minProperties?: number
+  maxProperties?: number
+  propertyNames?: JsonSchema
+
+  // Array keywords
+  additionalItems?: boolean | JsonSchema
+  minItems?: number
+  maxItems?: number
+  uniqueItems?: boolean
+  contains?: JsonSchema
+  prefixItems?: JsonSchema[]
+
+  // String keywords
+  minLength?: number
+  maxLength?: number
+  pattern?: string
+  format?: string
+
+  // Number keywords
+  minimum?: number
+  maximum?: number
+  exclusiveMinimum?: number | boolean
+  exclusiveMaximum?: number | boolean
+  multipleOf?: number
+
+  // Metadata & references
+  title?: string
+  $ref?: string
+  $schema?: string
+  $id?: string
+  $defs?: Record<string, JsonSchema>
+  definitions?: Record<string, JsonSchema>
+  const?: unknown
+  examples?: unknown[]
+  readOnly?: boolean
+  writeOnly?: boolean
+  deprecated?: boolean
 }
 
 /**
@@ -459,40 +517,40 @@ export function validateFunctionResult(data: unknown): ValidationResult {
  */
 export function validateInput(
   input: unknown,
-  schema: Record<string, unknown>
+  schema: JsonSchema
 ): ValidationResult {
   // For now, perform basic validation based on JSON schema structure
   // Full JSON Schema validation would require a dedicated library
   const errors: ValidationError[] = []
 
-  if (schema['type'] === 'object' && typeof input !== 'object') {
+  if (schema.type === 'object' && typeof input !== 'object') {
     errors.push({ path: 'input', message: 'Expected object' })
   }
 
-  if (schema['type'] === 'string' && typeof input !== 'string') {
+  if (schema.type === 'string' && typeof input !== 'string') {
     errors.push({ path: 'input', message: 'Expected string' })
   }
 
-  if (schema['type'] === 'number' && typeof input !== 'number') {
+  if (schema.type === 'number' && typeof input !== 'number') {
     errors.push({ path: 'input', message: 'Expected number' })
   }
 
-  if (schema['type'] === 'boolean' && typeof input !== 'boolean') {
+  if (schema.type === 'boolean' && typeof input !== 'boolean') {
     errors.push({ path: 'input', message: 'Expected boolean' })
   }
 
-  if (schema['type'] === 'array' && !Array.isArray(input)) {
+  if (schema.type === 'array' && !Array.isArray(input)) {
     errors.push({ path: 'input', message: 'Expected array' })
   }
 
   // Check required properties for objects
   if (
-    schema['type'] === 'object' &&
+    schema.type === 'object' &&
     typeof input === 'object' &&
     input !== null &&
-    Array.isArray(schema['required'])
+    Array.isArray(schema.required)
   ) {
-    for (const requiredProp of schema['required'] as string[]) {
+    for (const requiredProp of schema.required) {
       if (!(requiredProp in input)) {
         errors.push({
           path: `input.${requiredProp}`,
@@ -510,27 +568,27 @@ export function validateInput(
  */
 export function validateOutput(
   output: unknown,
-  schema: Record<string, unknown>
+  schema: JsonSchema
 ): ValidationResult {
   const errors: ValidationError[] = []
 
-  if (schema['type'] === 'object' && typeof output !== 'object') {
+  if (schema.type === 'object' && typeof output !== 'object') {
     errors.push({ path: 'output', message: 'Expected object' })
   }
 
-  if (schema['type'] === 'string' && typeof output !== 'string') {
+  if (schema.type === 'string' && typeof output !== 'string') {
     errors.push({ path: 'output', message: 'Expected string' })
   }
 
-  if (schema['type'] === 'number' && typeof output !== 'number') {
+  if (schema.type === 'number' && typeof output !== 'number') {
     errors.push({ path: 'output', message: 'Expected number' })
   }
 
-  if (schema['type'] === 'boolean' && typeof output !== 'boolean') {
+  if (schema.type === 'boolean' && typeof output !== 'boolean') {
     errors.push({ path: 'output', message: 'Expected boolean' })
   }
 
-  if (schema['type'] === 'array' && !Array.isArray(output)) {
+  if (schema.type === 'array' && !Array.isArray(output)) {
     errors.push({ path: 'output', message: 'Expected array' })
   }
 

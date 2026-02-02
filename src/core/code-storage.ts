@@ -228,6 +228,10 @@ export class KVCodeStorage implements CodeStorage {
    * Get the code for a function, optionally for a specific version.
    * Automatically decompresses gzip-compressed code.
    *
+   * Compression metadata is stored inline via KV's metadata parameter,
+   * eliminating the need for a separate `:compression` key and halving
+   * the number of KV operations.
+   *
    * @param functionId - The unique function identifier
    * @param version - Optional version to retrieve
    * @returns The function code or null if not found
@@ -237,40 +241,25 @@ export class KVCodeStorage implements CodeStorage {
     validateFunctionId(functionId)
     const key = version ? `code:${functionId}:v:${version}` : `code:${functionId}`
 
-    // First check for compression metadata
-    const metaKey = `${key}:compression`
-    const metaStr = await this.kv.get(metaKey, 'text')
+    // Single KV operation: get value + inline metadata together
+    const { value: textData, metadata } = await this.kv.getWithMetadata<CompressionMetadata>(key, 'text')
 
-    if (metaStr) {
-      // Compressed data - stored as base64 in KV
-      let meta: CompressionMetadata
-      try {
-        meta = JSON.parse(metaStr) as CompressionMetadata
-      } catch {
-        // Corrupted metadata, fall back to uncompressed retrieval
-        return this.kv.get(key, 'text')
-      }
-      const base64Data = await this.kv.get(key, 'text')
-      if (!base64Data) {
-        return null
-      }
-
-      const compressedBytes = this.base64ToUint8Array(base64Data)
-      return this.decompress(compressedBytes.buffer, meta.encoding)
-    }
-
-    // Try to get as text (uncompressed or legacy data)
-    const textData = await this.kv.get(key, 'text')
     if (!textData) {
       return null
     }
 
+    // Check inline metadata for compression info (new format)
+    if (metadata && metadata.encoding && metadata.encoding !== 'none') {
+      const compressedBytes = this.base64ToUint8Array(textData as string)
+      return this.decompress(compressedBytes.buffer, metadata.encoding)
+    }
+
     // Check if it looks like base64-encoded gzip by attempting to decode and check magic bytes
-    // This handles backward compatibility for data stored without metadata
+    // This handles backward compatibility for data stored without inline metadata
     try {
-      // If it starts with H4sI (base64 for gzip magic bytes), try to decompress
-      if (textData.startsWith('H4sI')) {
-        const bytes = this.base64ToUint8Array(textData)
+      const text = textData as string
+      if (text.startsWith('H4sI')) {
+        const bytes = this.base64ToUint8Array(text)
         if (this.isGzipCompressed(bytes.buffer)) {
           return this.decompress(bytes.buffer, 'gzip')
         }
@@ -279,12 +268,15 @@ export class KVCodeStorage implements CodeStorage {
       // Not compressed, return as-is
     }
 
-    return textData
+    return textData as string
   }
 
   /**
    * Store code for a function, optionally for a specific version.
    * Automatically compresses code using gzip if compression is enabled.
+   *
+   * Compression metadata is stored inline via KV's metadata parameter,
+   * so each put is a single KV operation instead of two.
    *
    * @param functionId - The unique function identifier
    * @param code - The function code to store
@@ -300,29 +292,23 @@ export class KVCodeStorage implements CodeStorage {
     const { compressed, encoding } = await this.compress(code)
 
     if (encoding === 'gzip') {
-      // Store compressed data as base64 (KV doesn't support binary directly)
+      // Store compressed data as base64 with inline metadata (single KV operation)
       const base64 = this.uint8ArrayToBase64(compressed)
-      await this.kv.put(key, base64)
-
-      // Store compression metadata
       const meta: CompressionMetadata = {
         encoding,
         originalSize,
         compressedSize: compressed.length,
       }
-      await this.kv.put(`${key}:compression`, JSON.stringify(meta))
+      await this.kv.put(key, base64, { metadata: meta })
     } else {
-      // Store uncompressed
+      // Store uncompressed (no metadata needed)
       await this.kv.put(key, code)
-
-      // Clean up any existing compression metadata
-      await this.kv.delete(`${key}:compression`)
     }
   }
 
   /**
    * Delete code for a function, optionally for a specific version.
-   * Also deletes associated compression metadata.
+   * Compression metadata is stored inline, so only one delete is needed.
    *
    * @param functionId - The unique function identifier
    * @param version - Optional version to delete
@@ -332,8 +318,6 @@ export class KVCodeStorage implements CodeStorage {
     validateFunctionId(functionId)
     const key = version ? `code:${functionId}:v:${version}` : `code:${functionId}`
     await this.kv.delete(key)
-    // Also delete compression metadata
-    await this.kv.delete(`${key}:compression`)
   }
 
   /**
@@ -400,21 +384,17 @@ export class KVCodeStorage implements CodeStorage {
     const { compressed, encoding } = await this.compress(compiledCode)
 
     if (encoding === 'gzip') {
-      // Store compressed data as base64
+      // Store compressed data as base64 with inline metadata (single KV operation)
       const base64 = this.uint8ArrayToBase64(compressed)
-      await this.kv.put(key, base64)
-
-      // Store compression metadata
       const meta: CompressionMetadata = {
         encoding,
         originalSize,
         compressedSize: compressed.length,
       }
-      await this.kv.put(`${key}:compression`, JSON.stringify(meta))
+      await this.kv.put(key, base64, { metadata: meta })
     } else {
-      // Store uncompressed
+      // Store uncompressed (no metadata needed)
       await this.kv.put(key, compiledCode)
-      await this.kv.delete(`${key}:compression`)
     }
   }
 
@@ -433,35 +413,26 @@ export class KVCodeStorage implements CodeStorage {
       ? `code:${functionId}:v:${version}:compiled`
       : `code:${functionId}:compiled`
 
-    // Check for compression metadata
-    const metaKey = `${key}:compression`
-    const metaStr = await this.kv.get(metaKey, 'text')
+    // Single KV operation: get value + inline metadata together
+    const { value: textData, metadata } = await this.kv.getWithMetadata<CompressionMetadata>(key, 'text')
 
-    if (metaStr) {
-      // Compressed data
-      let meta: CompressionMetadata
-      try {
-        meta = JSON.parse(metaStr) as CompressionMetadata
-      } catch {
-        // Corrupted metadata, fall back to uncompressed retrieval
-        return this.kv.get(key, 'text')
-      }
-      const base64Data = await this.kv.get(key, 'text')
-      if (!base64Data) {
-        return null
-      }
-
-      const compressedBytes = this.base64ToUint8Array(base64Data)
-      return this.decompress(compressedBytes.buffer, meta.encoding)
+    if (!textData) {
+      return null
     }
 
-    // Try to get as text (uncompressed or legacy data)
-    return this.kv.get(key, 'text')
+    // Check inline metadata for compression info
+    if (metadata && metadata.encoding && metadata.encoding !== 'none') {
+      const compressedBytes = this.base64ToUint8Array(textData as string)
+      return this.decompress(compressedBytes.buffer, metadata.encoding)
+    }
+
+    // Return as-is (uncompressed)
+    return textData as string
   }
 
   /**
    * Delete pre-compiled code for a function.
-   * Also deletes associated compression metadata.
+   * Compression metadata is stored inline, so only one delete is needed.
    *
    * @param functionId - The unique function identifier
    * @param version - Optional version for version-specific deletion
@@ -472,7 +443,6 @@ export class KVCodeStorage implements CodeStorage {
       ? `code:${functionId}:v:${version}:compiled`
       : `code:${functionId}:compiled`
     await this.kv.delete(key)
-    await this.kv.delete(`${key}:compression`)
   }
 
   /**
@@ -534,21 +504,17 @@ export class KVCodeStorage implements CodeStorage {
     const { compressed, encoding } = await this.compress(sourceMap)
 
     if (encoding === 'gzip') {
-      // Store compressed data as base64
+      // Store compressed data as base64 with inline metadata (single KV operation)
       const base64 = this.uint8ArrayToBase64(compressed)
-      await this.kv.put(key, base64)
-
-      // Store compression metadata
       const meta: CompressionMetadata = {
         encoding,
         originalSize,
         compressedSize: compressed.length,
       }
-      await this.kv.put(`${key}:compression`, JSON.stringify(meta))
+      await this.kv.put(key, base64, { metadata: meta })
     } else {
-      // Store uncompressed
+      // Store uncompressed (no metadata needed)
       await this.kv.put(key, sourceMap)
-      await this.kv.delete(`${key}:compression`)
     }
   }
 
@@ -566,35 +532,26 @@ export class KVCodeStorage implements CodeStorage {
       ? `code:${functionId}:v:${version}:map`
       : `code:${functionId}:map`
 
-    // Check for compression metadata
-    const metaKey = `${key}:compression`
-    const metaStr = await this.kv.get(metaKey, 'text')
+    // Single KV operation: get value + inline metadata together
+    const { value: textData, metadata } = await this.kv.getWithMetadata<CompressionMetadata>(key, 'text')
 
-    if (metaStr) {
-      // Compressed data
-      let meta: CompressionMetadata
-      try {
-        meta = JSON.parse(metaStr) as CompressionMetadata
-      } catch {
-        // Corrupted metadata, fall back to uncompressed retrieval
-        return this.kv.get(key, 'text')
-      }
-      const base64Data = await this.kv.get(key, 'text')
-      if (!base64Data) {
-        return null
-      }
-
-      const compressedBytes = this.base64ToUint8Array(base64Data)
-      return this.decompress(compressedBytes.buffer, meta.encoding)
+    if (!textData) {
+      return null
     }
 
-    // Try to get as text (uncompressed or legacy data)
-    return this.kv.get(key, 'text')
+    // Check inline metadata for compression info
+    if (metadata && metadata.encoding && metadata.encoding !== 'none') {
+      const compressedBytes = this.base64ToUint8Array(textData as string)
+      return this.decompress(compressedBytes.buffer, metadata.encoding)
+    }
+
+    // Return as-is (uncompressed)
+    return textData as string
   }
 
   /**
    * Delete code and its associated source map.
-   * Also deletes associated compression metadata.
+   * Compression metadata is stored inline, so no separate cleanup needed.
    *
    * @param functionId - The unique function identifier
    * @param version - Optional version for version-specific deletion
@@ -606,7 +563,6 @@ export class KVCodeStorage implements CodeStorage {
       ? `code:${functionId}:v:${version}:map`
       : `code:${functionId}:map`
     await this.kv.delete(mapKey)
-    await this.kv.delete(`${mapKey}:compression`)
   }
 
   // ============ Large Code Handling (Chunking) ============
@@ -999,26 +955,19 @@ export class KVCodeStorage implements CodeStorage {
   } | null> {
     validateFunctionId(functionId)
     const key = version ? `code:${functionId}:v:${version}` : `code:${functionId}`
-    const metaKey = `${key}:compression`
 
-    const metaStr = await this.kv.get(metaKey, 'text')
-    if (!metaStr) {
-      return null
-    }
+    // Single KV operation: get inline metadata
+    const { metadata } = await this.kv.getWithMetadata<CompressionMetadata>(key, 'text')
 
-    let meta: CompressionMetadata
-    try {
-      meta = JSON.parse(metaStr) as CompressionMetadata
-    } catch {
-      // Corrupted metadata
+    if (!metadata || !metadata.encoding || metadata.encoding === 'none') {
       return null
     }
 
     return {
-      originalSize: meta.originalSize,
-      compressedSize: meta.compressedSize,
-      compressionRatio: meta.originalSize > 0 ? 1 - meta.compressedSize / meta.originalSize : 0,
-      encoding: meta.encoding,
+      originalSize: metadata.originalSize,
+      compressedSize: metadata.compressedSize,
+      compressionRatio: metadata.originalSize > 0 ? 1 - metadata.compressedSize / metadata.originalSize : 0,
+      encoding: metadata.encoding,
     }
   }
 

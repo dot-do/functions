@@ -8,16 +8,14 @@
  */
 
 import * as esbuild from 'esbuild-wasm'
-// @ts-ignore - wasm import
+// @ts-expect-error -- Cloudflare Workers supports direct .wasm imports; no TS declaration exists
 import wasmModule from '../../node_modules/esbuild-wasm/esbuild.wasm'
 
 // Required polyfill for esbuild-wasm (provides performance.now())
-// @ts-ignore
+// In older Workers runtimes, globalThis.performance may not exist.
 if (!globalThis.performance) {
-  globalThis.performance = {
+  ;(globalThis as Record<string, unknown>).performance = {
     now: () => Date.now(),
-    // @ts-ignore
-    ...Date
   }
 }
 

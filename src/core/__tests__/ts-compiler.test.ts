@@ -39,12 +39,23 @@ describe('TypeScript Compiler Service', () => {
       expect(needsFullCompilation(code)).toBe(true)
     })
 
-    it('returns true for code with abstract classes', () => {
+    it('returns false for code with abstract classes (regex handles them)', () => {
       const code = `
         abstract class BaseClass {
           abstract method(): void;
         }
       `
+      // Abstract classes can be handled by regex stripping (just remove abstract keyword)
+      expect(needsFullCompilation(code)).toBe(false)
+    })
+
+    it('returns true for code with constructor parameter properties', () => {
+      const code = `
+        class User {
+          constructor(private name: string, public age: number) {}
+        }
+      `
+      // Constructor parameter properties require code generation (this.name = name)
       expect(needsFullCompilation(code)).toBe(true)
     })
 

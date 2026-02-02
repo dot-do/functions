@@ -17,37 +17,8 @@ import { evaluate, type SandboxEnv, type EvaluateResult } from 'ai-evaluate'
 import { createLogger, noopLogger as coreNoopLogger, type Logger, type LoggerConfig } from './logger'
 import { LOADER, CIRCUIT_BREAKER } from '../config'
 
-/**
- * Logger interface for WorkerLoader debugging
- * @deprecated Use Logger from './logger' instead
- */
-export interface WorkerLoaderLogger {
-  debug(message: string, context?: Record<string, unknown>): void
-  info(message: string, context?: Record<string, unknown>): void
-  warn(message: string, context?: Record<string, unknown>): void
-  error(message: string, context?: Record<string, unknown>): void
-}
-
-/**
- * Default no-op logger
- * @deprecated Use noopLogger from './logger' instead
- */
-const noopLogger: WorkerLoaderLogger = {
-  debug: () => {},
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-}
-
-/**
- * Console-based logger for development
- * @deprecated Use createLogger() from './logger' instead with format: 'text'
- */
-export const consoleLogger: WorkerLoaderLogger = createLogger({
-  level: 'debug',
-  format: 'text',
-  context: { component: 'WorkerLoader' },
-})
+// Logger, noopLogger, and consoleLogger have been removed.
+// Use Logger, noopLogger, and createLogger() from './logger' instead.
 
 /**
  * Base error class for WorkerLoader errors
@@ -243,7 +214,7 @@ interface CachedStub {
  */
 export interface WorkerLoaderExtendedOptions extends WorkerLoaderOptions {
   /** Logger instance for debugging */
-  logger?: WorkerLoaderLogger
+  logger?: Logger
   /** Circuit breaker configuration */
   circuitBreaker?: Partial<CircuitBreakerConfig>
   /** TTL for cached entries in milliseconds (0 = no expiry) */
@@ -296,7 +267,7 @@ export class WorkerLoader {
   private misses = 0
 
   /** Logger for debugging */
-  private readonly logger: WorkerLoaderLogger
+  private readonly logger: Logger
   /** Cache TTL in milliseconds (0 = no expiry) */
   private readonly cacheTTL: number
 
@@ -311,7 +282,7 @@ export class WorkerLoader {
       maxCacheSize: options?.maxCacheSize ?? LOADER.MAX_CACHE_SIZE,
     }
 
-    this.logger = options?.logger ?? noopLogger
+    this.logger = options?.logger ?? coreNoopLogger
     this.cacheTTL = options?.cacheTTL ?? LOADER.DEFAULT_CACHE_TTL_MS
 
     // Initialize circuit breaker config with defaults (from centralized config)

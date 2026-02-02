@@ -150,7 +150,7 @@ const CLEANUP_INTERVAL_MS = 5 * 60 * 1000
 /**
  * Create rate limit middleware with custom configuration
  */
-export function createRateLimitMiddleware(config: RateLimitMiddlewareConfig) {
+export function createRateLimitMiddleware(config: RateLimitMiddlewareConfig): (request: Request, env: Record<string, unknown>, ctx: ExecutionContext, context?: RateLimitContext) => Promise<RateLimitResult> {
   const {
     limits = { ip: { windowMs: 60_000, maxRequests: 100 } },
     bypass = [],

@@ -29,36 +29,5 @@ export type {
   TierSkipCondition,
 } from '@dotdo/functions'
 
-// Legacy type aliases for backward compatibility
-// Note: These map to the real cascade types, not the old stub types
-
-import type { CascadeResult } from '@dotdo/functions'
-
-/**
- * @deprecated Use CascadeResult from core/src/cascade instead
- * This is a backward-compatible alias
- */
-export type CascadeExecutionResult = CascadeResult
-
-// Legacy interface for step-based cascades (deprecated)
-// The new cascade system uses tier-based execution, not step-based
-
-/**
- * @deprecated The new cascade system uses tier-based execution.
- * Consider migrating to CascadeTiers instead.
- */
-export interface CascadeStep {
-  function: string
-  transform?: string
-  condition?: string
-}
-
-/**
- * @deprecated Use CascadeDefinition from core/src/cascade instead.
- * This interface is maintained for backward compatibility.
- */
-export interface CascadeFunctionMetadata {
-  type: 'cascade'
-  steps: CascadeStep[]
-  errorHandling?: 'fail-fast' | 'continue' | 'retry'
-}
+// Legacy type aliases removed (CascadeExecutionResult, CascadeStep, CascadeFunctionMetadata).
+// Use CascadeResult, CascadeDefinition, and CascadeTiers from @dotdo/functions instead.

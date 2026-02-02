@@ -547,7 +547,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Code Function Lifecycle', () => {
       const code = `
         export default {
           async fetch(request: Request): Promise<Response> {
-            // @ts-ignore - intentionally returning undefined
+            // @ts-expect-error -- intentionally returning undefined to test error handling
             return undefined
           }
         }

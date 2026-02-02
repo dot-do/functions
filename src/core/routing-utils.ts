@@ -17,14 +17,20 @@
  * - Interface and type declarations
  * - Import/export type statements
  * - Type assertions (as Type)
- * - Generic type parameters
+ * - Generic type parameters (including nested generics)
  * - Access modifiers (public, private, protected, readonly)
+ * - Abstract classes and methods
+ * - Implements clauses
+ * - Function overload declarations
+ * - This parameter types
+ * - Tuple type annotations
+ * - Satisfies expressions
  *
- * Limitations (not supported):
+ * Limitations (require full esbuild compilation):
  * - Enums (require code generation)
  * - Decorators (require transformation)
- * - Namespace declarations
- * - Complex mapped/conditional types in expressions
+ * - Constructor parameter properties (require assignment generation)
+ * - Namespace declarations (require transformation)
  *
  * For full TypeScript support, pre-compile code before deployment.
  */
@@ -38,6 +44,9 @@ export function stripTypeScript(code: string): string {
   result = result.replace(/^\s*(export\s+)?interface\s+\w+[^{]*\{[\s\S]*?\n\}\s*$/gm, '')
 
   // Remove type alias declarations: type Foo = ...
+  // Multi-line type aliases with object types
+  result = result.replace(/^\s*(export\s+)?type\s+\w+\s*(<[^>]+>)?\s*=\s*\{[\s\S]*?\n\s*\}\s*;?\s*$/gm, '')
+  // Single-line type aliases (including object types)
   result = result.replace(/^\s*(export\s+)?type\s+\w+\s*(<[^>]+>)?\s*=\s*[^;]+;?\s*$/gm, '')
 
   // Remove import type statements: import type { ... } from '...'
@@ -54,9 +63,19 @@ export function stripTypeScript(code: string): string {
   // Remove declare statements
   result = result.replace(/^\s*declare\s+(const|let|var|function|class|module|namespace|global|type|interface)\s+[^;]+;?\s*$/gm, '')
 
+  // Remove function overload declarations (signature lines ending with ; not {)
+  result = result.replace(/^\s*(?:export\s+)?(?:async\s+)?function\s+\w+\s*(?:<[^>]*>)?\s*\([^)]*\)\s*:\s*[^;{]+;\s*$/gm, '')
+
   // Remove access modifiers: public, private, protected, readonly
   result = result.replace(/\b(public|private|protected)\s+(?=\w)/g, '')
   result = result.replace(/\breadonly\s+(?=\w)/g, '')
+
+  // Remove abstract keyword from classes and methods
+  result = result.replace(/\babstract\s+(class\s)/g, '$1')
+  result = result.replace(/^\s*abstract\s+\w+\s*\([^)]*\)\s*:\s*[^;]+;\s*$/gm, '')
+
+  // Remove implements clause from classes
+  result = result.replace(/(class\s+\w+(?:\s+extends\s+\w+(?:<[^>]*>)?)?)\s+implements\s+[\w<>,\s]+(?=\s*\{)/g, '$1')
 
   // Remove type assertions with inline object types: as { key: Type }
   // Must come before simpler as Type removal
@@ -70,20 +89,22 @@ export function stripTypeScript(code: string): string {
   // Remove angle bracket type assertions: <Type>expression
   result = result.replace(/<([A-Z][\w<>[\],\s|&.?]*)>(?=\s*[\w({[])/g, '')
 
+  // Remove `this` parameter type (first parameter named `this` with a type)
+  result = result.replace(/\(\s*this\s*:\s*\w+\s*,\s*/g, '(')
+  result = result.replace(/\(\s*this\s*:\s*\w+\s*\)/g, '()')
+
   // Remove type annotations from parameters: (param: Type) -> (param)
   // Only match after ( or , to avoid matching object properties like { key: value }
-  // Note: Don't use case-insensitive flag here - types start with uppercase
-  result = result.replace(/([(,])(\s*)(\w+)\s*\??\s*:\s*([A-Z][\w<>[\],\s|&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint)(?=\s*[,)=])/g, '$1$2$3')
+  // Supports tuple types in brackets [Type, Type]
+  result = result.replace(/([(,])(\s*)(\w+)\s*\??\s*:\s*(\[[^\]]*\]|\{[^}]*\}|[A-Z][\w<>[\],\s|&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint)(?=\s*[,)=])/g, '$1$2$3')
 
   // Remove return type annotations: ): Type { or ): Type =>
-  // Note: Don't use case-insensitive flag - types start with uppercase (except primitives)
-  result = result.replace(/\)\s*:\s*([A-Z][\w<>[\],\s|&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint|Promise<[^>]+>)\s*(?=[{=])/g, ') ')
+  result = result.replace(/\)\s*:\s*(\[[^\]]*\]|\{[^}]*\}|[A-Z][\w<>[\],\s|&.?]*|string|number|boolean|any|unknown|void|never|null|undefined|object|symbol|bigint|Promise<[^>]+>)\s*(?=[{=])/g, ') ')
 
-  // Remove generic type parameters from functions: function foo<T>(...) -> function foo(...)
-  result = result.replace(/(<[A-Z][\w,\s]*(?:\s+extends\s+[^>]+)?>)(?=\s*\()/gi, '')
-
-  // Remove generic type parameters from classes: class Foo<T> -> class Foo
-  result = result.replace(/(class\s+\w+)\s*<[A-Z][\w,\s]*(?:\s+extends\s+[^>]+)?>/gi, '$1')
+  // Remove generic type parameters from functions and classes
+  // Use balanced bracket scanning for arbitrary nesting depth
+  result = stripBalancedAngleBrackets(result, /function\s+\w+\s*</g)
+  result = stripBalancedAngleBrackets(result, /class\s+\w+\s*</g)
 
   // Remove non-null assertions: expression! -> expression
   // Only match non-null assertions that are clearly TypeScript patterns:
@@ -108,6 +129,39 @@ export function stripTypeScript(code: string): string {
   result = result.replace(/  +/g, ' ')
 
   return result.trim()
+}
+
+/**
+ * Strip balanced angle-bracket generic type parameters from code.
+ *
+ * Given a pattern that matches up to the opening `<`, this function
+ * scans forward to find the matching `>` (handling arbitrary nesting depth)
+ * and removes the entire generic parameter section.
+ *
+ * @internal
+ */
+function stripBalancedAngleBrackets(code: string, pattern: RegExp): string {
+  const matches: Array<{ angleBracketStart: number }> = []
+  let m
+  while ((m = pattern.exec(code)) !== null) {
+    const angleBracketStart = m.index + m[0].length - 1
+    matches.push({ angleBracketStart })
+  }
+  let result = code
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const { angleBracketStart } = matches[i]
+    let depth = 1
+    let j = angleBracketStart + 1
+    while (j < result.length && depth > 0) {
+      if (result[j] === '<') depth++
+      else if (result[j] === '>') depth--
+      j++
+    }
+    if (depth === 0) {
+      result = result.slice(0, angleBracketStart) + result.slice(j)
+    }
+  }
+  return result
 }
 
 /**

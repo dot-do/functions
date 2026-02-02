@@ -97,17 +97,25 @@ export interface CompileOptions {
  * Check if code contains TypeScript features that require full compilation.
  *
  * The regex stripper cannot handle these features:
- * - Enums (require code generation)
+ * - Enums (require code generation, not just stripping)
  * - Decorators (require transformation)
- * - Namespaces (require transformation)
- * - Abstract classes (require partial transformation)
+ * - Namespaces (require code transformation)
+ * - Constructor parameter properties (require `this.x = x` generation)
+ *
+ * The regex stripper CAN handle these features (no full compilation needed):
+ * - Abstract classes and methods (stripped)
+ * - Implements clauses (stripped)
+ * - Generic type parameters (including nested)
+ * - Function overloads (stripped)
+ * - This parameter types (stripped)
+ * - Tuple types in annotations (stripped)
  *
  * @param code - TypeScript source code
  * @returns true if code needs esbuild for proper compilation
  */
 export function needsFullCompilation(code: string): boolean {
-  // Check for enum declarations
-  if (/\benum\s+\w+\s*\{/.test(code)) {
+  // Check for enum declarations (including const enum)
+  if (/\b(?:const\s+)?enum\s+\w+\s*\{/.test(code)) {
     return true
   }
 
@@ -126,8 +134,9 @@ export function needsFullCompilation(code: string): boolean {
     return true
   }
 
-  // Check for abstract classes/methods
-  if (/\babstract\s+(?:class|async)/.test(code)) {
+  // Check for constructor parameter properties (shorthand that generates assignment code)
+  // e.g., constructor(private name: string) or constructor(public readonly id: number)
+  if (/constructor\s*\([^)]*\b(?:private|protected|public)\s+(?:readonly\s+)?\w+\s*:/m.test(code)) {
     return true
   }
 

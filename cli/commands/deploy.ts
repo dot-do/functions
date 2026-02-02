@@ -232,25 +232,62 @@ export async function runDeploy(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
 
-    // Provide helpful error messages
-    if (message.includes('timeout')) {
-      stderr(`Error: Request timeout - deployment may still be in progress`)
-    } else if (message.includes('401') || message.includes('Unauthorized')) {
-      stderr('Error: Authentication failed. Please run: dotdo login')
-    } else if (message.includes('429') || message.includes('rate limit')) {
-      stderr('Error: Rate limit exceeded. Please try again later.')
-    } else if (message.includes('size') || message.includes('limit')) {
-      stderr('Error: Bundle size exceeds limit. Try reducing your bundle size.')
-    } else if (message.includes('already in progress')) {
-      stderr('Error: A deployment is already in progress. Please wait and try again.')
-    } else if (message.includes('taken') || message.includes('conflict')) {
-      stderr('Error: Function name is already taken by another user.')
-    } else if (message.includes('Token expired')) {
-      stderr('Error: Your authentication token has expired. Please login again: dotdo login')
-    } else if (message.includes('connection') || message.includes('network')) {
-      stderr(`Error: Network error - ${message}`)
+    // Use structured error codes from API responses when available
+    // FunctionClientError carries errorCode and statusCode from the API's structured error response
+    const statusCode = (error as { statusCode?: number }).statusCode
+    const errorCode = (error as { errorCode?: string }).errorCode
+
+    if (errorCode) {
+      // Handle structured API error codes (from ApiErrorResponse format)
+      switch (errorCode) {
+        case 'UNAUTHORIZED':
+          stderr('Error: Authentication failed. Please run: dotdo login')
+          break
+        case 'TIMEOUT':
+          stderr('Error: Request timeout - deployment may still be in progress')
+          break
+        case 'CONFLICT':
+          stderr('Error: Function name is already taken by another user.')
+          break
+        case 'PAYLOAD_TOO_LARGE':
+          stderr('Error: Bundle size exceeds limit. Try reducing your bundle size.')
+          break
+        default:
+          stderr(`Error: Deployment failed - ${message}`)
+      }
+    } else if (statusCode) {
+      // Fall back to HTTP status code matching
+      switch (statusCode) {
+        case 401:
+        case 403:
+          stderr('Error: Authentication failed. Please run: dotdo login')
+          break
+        case 408:
+        case 504:
+          stderr('Error: Request timeout - deployment may still be in progress')
+          break
+        case 409:
+          stderr('Error: A deployment is already in progress. Please wait and try again.')
+          break
+        case 413:
+          stderr('Error: Bundle size exceeds limit. Try reducing your bundle size.')
+          break
+        case 429:
+          stderr('Error: Rate limit exceeded. Please try again later.')
+          break
+        default:
+          stderr(`Error: Deployment failed - ${message}`)
+      }
     } else {
-      stderr(`Error: Deployment failed - ${message}`)
+      // Network-level errors (no HTTP status) - check error type/name
+      const errorName = (error as { name?: string }).name || ''
+      if (errorName === 'AbortError' || errorName === 'TimeoutError') {
+        stderr('Error: Request timeout - deployment may still be in progress')
+      } else if (errorName === 'TypeError' && message.includes('fetch')) {
+        stderr(`Error: Network error - ${message}`)
+      } else {
+        stderr(`Error: Deployment failed - ${message}`)
+      }
     }
 
     return { exitCode: 1, error: message }
