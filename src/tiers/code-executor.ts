@@ -227,16 +227,14 @@ const DEFAULT_TIMEOUT_MS = TIER_TIMEOUTS.CODE_MS
 const SUPPORTED_LANGUAGES: CodeLanguage[] = [
   'typescript',
   'javascript',
-  'rust',
-  'go',
   'python',
-  'zig',
-  'assemblyscript',
-  'csharp',
 ]
 
 // Languages that compile to WASM
-const WASM_LANGUAGES: CodeLanguage[] = ['rust', 'go', 'zig', 'assemblyscript']
+// NOTE: No WASM languages are currently supported. The previous fake compilers
+// (Rust, Go, Zig, AssemblyScript) have been removed because they produced
+// silently incorrect results. Real compiler support will be added in the future.
+const WASM_LANGUAGES: CodeLanguage[] = []
 
 // Fixed values for deterministic mode (from centralized config)
 const DETERMINISTIC_RANDOM_SEED = DETERMINISTIC.RANDOM_SEED
@@ -795,8 +793,8 @@ export class CodeExecutor {
       case 'zig':
       case 'assemblyscript':
       case 'csharp':
-        // For WASM languages, we simulate compilation
-        // In production, this would call the appropriate compiler
+        // WASM language compilation from source is not yet supported.
+        // Pre-compiled WASM (from assets/KV/inline) is still handled via markers.
         return this.compileToWasm(source, language)
 
       case 'python':
@@ -859,13 +857,14 @@ export class CodeExecutor {
   }
 
   /**
-   * Compile to WASM (mock implementation for non-assets source)
+   * Compile to WASM - handles pre-compiled WASM markers only.
    *
-   * When source code (not pre-compiled WASM) is provided for a WASM language,
-   * this method simulates compilation by returning a JavaScript wrapper.
-   * In production, this would call the appropriate compiler (rustc, tinygo, etc.)
+   * Source code compilation for WASM languages (Rust, Go, Zig, AssemblyScript, C/C++)
+   * is not yet supported. The previous implementation faked compilation by pattern-matching
+   * source strings and returning hardcoded JavaScript, which produced silently wrong results.
    *
-   * For pre-compiled WASM from assets/KV, use executeWasmViaWorkerLoader() instead.
+   * For pre-compiled WASM from assets/KV/inline, pass-through markers are handled.
+   * For source code, a clear error is thrown.
    */
   private compileToWasm(source: string, language: CodeLanguage): string {
     // Check if this is a WASM marker - if so, return it as-is
@@ -876,60 +875,12 @@ export class CodeExecutor {
       return source
     }
 
-    // In production, this would compile to actual WASM
-    // For now, we return a JavaScript wrapper that simulates the WASM behavior
-
-    // Extract the handler function logic based on language
-    let handlerBody = ''
-
-    if (language === 'rust') {
-      // Parse Rust-like factorial: if n <= 1 { 1 } else { n * handler(n - 1) }
-      if (source.includes('factorial') || source.includes('n <= 1')) {
-        handlerBody = `
-          function factorial(n) {
-            if (n <= 1) return 1;
-            return n * factorial(n - 1);
-          }
-          return { factorial: factorial(input.n) };
-        `
-      } else {
-        handlerBody = 'return 42;'
-      }
-    } else if (language === 'go') {
-      // Parse Go-like uppercase
-      if (source.includes('ToUpper')) {
-        handlerBody = 'return { upper: input.text.toUpperCase() };'
-      } else {
-        handlerBody = 'return {};'
-      }
-    } else if (language === 'assemblyscript') {
-      // Parse AS-like multiply
-      if (source.includes('a * b') || source.includes('product')) {
-        handlerBody = 'return { product: input.a * input.b };'
-      } else {
-        handlerBody = 'return {};'
-      }
-    } else if (language === 'zig') {
-      // Parse Zig-like square
-      if (source.includes('x * x') || source.includes('squared')) {
-        handlerBody = 'return { squared: input.x * input.x };'
-      } else {
-        handlerBody = 'return {};'
-      }
-    } else if (language === 'csharp') {
-      // Parse C#-like greeting
-      if (source.includes('Hello') || source.includes('greeting')) {
-        handlerBody = 'return { greeting: "Hello, " + input.name + "!" };'
-      } else {
-        handlerBody = 'return {};'
-      }
-    }
-
-    return `
-      export default function handler(input) {
-        ${handlerBody}
-      }
-    `
+    // Source code compilation is not supported for any WASM language
+    throw new Error(
+      `WASM compilation for ${language} is not yet supported. ` +
+      'Supported languages: TypeScript, JavaScript, Python (beta). ' +
+      'For pre-compiled WASM, use the assets, kv, or inline-wasm source types.'
+    )
   }
 
   /**
@@ -945,7 +896,7 @@ export class CodeExecutor {
   private compilePython(source: string): string {
     // Return a marker string that identifies this as Python code
     // The actual execution happens via PyodideExecutor
-    return `__PYTHON_CODE__:${Buffer.from(source).toString('base64')}`
+    return `__PYTHON_CODE__:${btoa(source)}`
   }
 
   /**
@@ -956,7 +907,7 @@ export class CodeExecutor {
       return null
     }
     const base64Code = source.slice('__PYTHON_CODE__:'.length)
-    return Buffer.from(base64Code, 'base64').toString('utf-8')
+    return atob(base64Code)
   }
 
   /**
