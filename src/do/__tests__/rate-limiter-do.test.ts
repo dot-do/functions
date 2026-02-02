@@ -16,7 +16,7 @@
  * @module durable-object/rate-limiter-do.test
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { env } from 'cloudflare:test'
 import type { RateLimiterDO } from '../rate-limiter'
 
@@ -185,12 +185,11 @@ describe('RateLimiterDO', () => {
       const denied = await stub.check('expire-key', limit, windowMs)
       expect(denied.allowed).toBe(false)
 
-      // Wait for the window to expire
-      await new Promise(resolve => setTimeout(resolve, windowMs + 50))
-
-      // Should be allowed again
-      const allowed = await stub.check('expire-key', limit, windowMs)
-      expect(allowed.allowed).toBe(true)
+      // Poll until the window expires instead of fixed delay
+      await vi.waitFor(async () => {
+        const allowed = await stub.check('expire-key', limit, windowMs)
+        expect(allowed.allowed).toBe(true)
+      }, { timeout: windowMs + 500, interval: 20 })
     })
 
     it('should start a new window after expiration on increment', async () => {
@@ -200,14 +199,13 @@ describe('RateLimiterDO', () => {
       const r1 = await stub.checkAndIncrement('new-window-key', limit, windowMs)
       const firstResetAt = r1.resetAt
 
-      // Wait for window to expire
-      await new Promise(resolve => setTimeout(resolve, windowMs + 50))
-
-      const r2 = await stub.checkAndIncrement('new-window-key', limit, windowMs)
-
-      // New window should have a later resetAt
-      expect(r2.resetAt).toBeGreaterThan(firstResetAt)
-      expect(r2.remaining).toBe(limit - 1)
+      // Poll until window expires instead of fixed delay
+      await vi.waitFor(async () => {
+        const r2 = await stub.checkAndIncrement('new-window-key', limit, windowMs)
+        // New window should have a later resetAt
+        expect(r2.resetAt).toBeGreaterThan(firstResetAt)
+        expect(r2.remaining).toBe(limit - 1)
+      }, { timeout: windowMs + 500, interval: 20 })
     })
   })
 
@@ -349,12 +347,11 @@ describe('RateLimiterDO', () => {
       // Create a rate limit entry
       await stub.increment('cleanup-key', windowMs)
 
-      // Wait for it to expire
-      await new Promise(resolve => setTimeout(resolve, windowMs + 50))
-
-      // Cleanup should remove it
-      const deleted = await stub.cleanup()
-      expect(deleted).toBeGreaterThanOrEqual(1)
+      // Poll until the window expires and cleanup finds expired entries
+      await vi.waitFor(async () => {
+        const deleted = await stub.cleanup()
+        expect(deleted).toBeGreaterThanOrEqual(1)
+      }, { timeout: windowMs + 500, interval: 20 })
     })
 
     it('should not remove active windows during cleanup', async () => {

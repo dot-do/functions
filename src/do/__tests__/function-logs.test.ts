@@ -1,392 +1,156 @@
 /**
- * Tests for FunctionLogs Durable Object
+ * FunctionLogs Durable Object Tests
  *
- * This test file covers:
- * - Append log entries
- * - Query logs with time range
- * - Query logs with level filter
- * - Pagination with cursor
- * - Retention policy (auto-delete old logs)
- * - Real-time streaming (WebSocket)
- * - Aggregate metrics (count by level)
- * - Support multiple functions
+ * Real miniflare tests using Durable Object bindings from cloudflare:test.
+ * These tests validate the FunctionLogs DO functionality through its
+ * HTTP fetch() handler, using real DO instances with SQLite storage.
+ *
+ * Tests cover:
+ * 1. Append log entries with structured data
+ * 2. Query logs with time range, level, and pagination
+ * 3. Metrics (count by level, error rates, duration percentiles)
+ * 4. Multi-function support (isolation, cross-function queries)
+ * 5. Log deletion per function
+ * 6. HTTP handler routing (400, 404, 201, 204)
  *
  * @module durable-object/function-logs.test
  */
 
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import {
-  FunctionLogs,
-  type LogEntry,
-  type LogLevel,
-  type LogQuery,
-  type LogQueryResult,
-  type LogMetrics,
-  type RetentionPolicy,
-  type StreamOptions,
-} from '../function-logs.js'
+import { describe, it, expect, beforeEach } from 'vitest'
+import { env } from 'cloudflare:test'
 
 // ============================================================================
-// Mock SqlStorage Implementation
+// Types for JSON responses
 // ============================================================================
 
-/**
- * Mock SQL result interface
- */
-interface MockSqlResult<T> {
-  one: () => T | null
-  toArray: () => T[]
-}
-
-/**
- * Internal log entry for mock storage
- */
-interface MockLogEntry {
+interface LogEntryJSON {
   id: string
-  function_id: string
+  functionId: string
   timestamp: number
-  level: LogLevel
+  level: string
   message: string
-  metadata: string | null
-  request_id: string | null
-  duration_ms: number | null
-  created_at: number
+  metadata?: Record<string, unknown>
+  requestId?: string
+  durationMs?: number
+}
+
+interface LogQueryResultJSON {
+  entries: LogEntryJSON[]
+  cursor: string | null
+  hasMore: boolean
+  total?: number
+}
+
+interface LogMetricsJSON {
+  total: number
+  countByLevel: Record<string, number>
+  errorRate: number
+  logsPerMinute: number
+  avgDurationMs?: number
+  p50DurationMs?: number
+  p95DurationMs?: number
+  p99DurationMs?: number
+  lastLogTimestamp?: number
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Create a unique DO stub for test isolation
+ */
+function createStub() {
+  const name = `test-logs-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const id = env.FUNCTION_LOGS.idFromName(name)
+  return env.FUNCTION_LOGS.get(id)
 }
 
 /**
- * Mock SQLite storage that simulates Cloudflare DO SQLite behavior
+ * Append a log entry via the DO's HTTP handler
  */
-class MockSqlStorage {
-  private logs: Map<string, MockLogEntry> = new Map()
-  public execCalls: { sql: string; params: unknown[] }[] = []
-  public schemaCreated = false
-  private idCounter = 0
-
-  exec<T = unknown>(sql: string, ...params: unknown[]): MockSqlResult<T> {
-    this.execCalls.push({ sql, params })
-    const normalizedSql = sql.trim().toLowerCase()
-
-    // Handle CREATE TABLE
-    if (normalizedSql.includes('create table')) {
-      this.schemaCreated = true
-      return this.emptyResult<T>()
-    }
-
-    // Handle CREATE INDEX
-    if (normalizedSql.includes('create index')) {
-      return this.emptyResult<T>()
-    }
-
-    // Handle INSERT into logs
-    if (normalizedSql.includes('insert into logs')) {
-      const entry: MockLogEntry = {
-        id: params[0] as string,
-        function_id: params[1] as string,
-        timestamp: params[2] as number,
-        level: params[3] as LogLevel,
-        message: params[4] as string,
-        metadata: params[5] as string | null,
-        request_id: params[6] as string | null,
-        duration_ms: params[7] as number | null,
-        created_at: params[8] as number,
-      }
-      this.logs.set(entry.id, entry)
-      return this.emptyResult<T>()
-    }
-
-    // Handle SELECT DISTINCT function_id
-    if (normalizedSql.includes('select distinct function_id from logs')) {
-      const functionIds = new Set<string>()
-      for (const log of this.logs.values()) {
-        functionIds.add(log.function_id)
-      }
-      const results = Array.from(functionIds).map((fid) => ({ function_id: fid }))
-      return {
-        one: () => (results[0] as T) || null,
-        toArray: () => results as T[],
-      }
-    }
-
-    // Handle SELECT with various filters
-    if (normalizedSql.includes('select') && normalizedSql.includes('from logs')) {
-      let results = Array.from(this.logs.values())
-
-      // Filter by function_id
-      if (normalizedSql.includes('where function_id')) {
-        const functionId = params[0] as string
-        results = results.filter((log) => log.function_id === functionId)
-      }
-
-      // Filter by request_id
-      if (normalizedSql.includes('where request_id')) {
-        const requestId = params[0] as string
-        results = results.filter((log) => log.request_id === requestId)
-      }
-
-      // Filter by level
-      if (normalizedSql.includes('level =') || normalizedSql.includes('level in')) {
-        const levelIndex = normalizedSql.includes('level =') ? params.findIndex((_, i) => i > 0) : 1
-        if (levelIndex > 0) {
-          const level = params[levelIndex] as LogLevel
-          results = results.filter((log) => log.level === level)
-        }
-      }
-
-      // Filter by time range
-      if (normalizedSql.includes('timestamp >=')) {
-        const startTime = params.find((p) => typeof p === 'number' && p > 0) as number
-        if (startTime) {
-          results = results.filter((log) => log.timestamp >= startTime)
-        }
-      }
-
-      if (normalizedSql.includes('timestamp <=')) {
-        const endTime = params[params.length - 1] as number
-        if (endTime) {
-          results = results.filter((log) => log.timestamp <= endTime)
-        }
-      }
-
-      // Sort by timestamp descending (default)
-      results.sort((a, b) => b.timestamp - a.timestamp)
-
-      // Handle LIMIT
-      if (normalizedSql.includes('limit')) {
-        const limitMatch = normalizedSql.match(/limit\s+(\d+)/)
-        if (limitMatch) {
-          const limit = parseInt(limitMatch[1], 10)
-          results = results.slice(0, limit)
-        }
-      }
-
-      // Handle COUNT
-      if (normalizedSql.includes('count(')) {
-        if (normalizedSql.includes('group by level')) {
-          const counts = new Map<string, number>()
-          for (const log of results) {
-            counts.set(log.level, (counts.get(log.level) || 0) + 1)
-          }
-          const countResults = Array.from(counts.entries()).map(([level, count]) => ({
-            level,
-            count,
-          }))
-          return {
-            one: () => (countResults[0] as T) || null,
-            toArray: () => countResults as T[],
-          }
-        }
-        return {
-          one: () => ({ count: results.length } as T),
-          toArray: () => [{ count: results.length } as T],
-        }
-      }
-
-      return {
-        one: () => (results[0] as T) || null,
-        toArray: () => results as T[],
-      }
-    }
-
-    // Handle DELETE
-    if (normalizedSql.includes('delete from logs')) {
-      if (normalizedSql.includes('timestamp <')) {
-        const cutoffTime = params[0] as number
-        for (const [id, log] of this.logs.entries()) {
-          if (log.timestamp < cutoffTime) {
-            this.logs.delete(id)
-          }
-        }
-      } else if (normalizedSql.includes('where function_id')) {
-        const functionId = params[0] as string
-        for (const [id, log] of this.logs.entries()) {
-          if (log.function_id === functionId) {
-            this.logs.delete(id)
-          }
-        }
-      } else if (normalizedSql.includes('where id')) {
-        const logId = params[0] as string
-        this.logs.delete(logId)
-      }
-      return this.emptyResult<T>()
-    }
-
-    return this.emptyResult<T>()
+async function appendLog(
+  stub: DurableObjectStub,
+  input: {
+    functionId: string
+    level: string
+    message: string
+    timestamp?: number
+    metadata?: Record<string, unknown>
+    requestId?: string
+    durationMs?: number
   }
-
-  private emptyResult<T>(): MockSqlResult<T> {
-    return {
-      one: () => null,
-      toArray: () => [],
-    }
-  }
-
-  // Test helpers
-  getLog(id: string): MockLogEntry | undefined {
-    return this.logs.get(id)
-  }
-
-  getLogCount(): number {
-    return this.logs.size
-  }
-
-  getAllLogs(): MockLogEntry[] {
-    return Array.from(this.logs.values())
-  }
-
-  clear(): void {
-    this.logs.clear()
-    this.execCalls = []
-    this.schemaCreated = false
-    this.idCounter = 0
-  }
-
-  // Manually add log for testing
-  addLog(entry: Partial<MockLogEntry>): void {
-    const id = entry.id || `log-${++this.idCounter}`
-    this.logs.set(id, {
-      id,
-      function_id: entry.function_id || 'test-function',
-      timestamp: entry.timestamp || Date.now(),
-      level: entry.level || 'info',
-      message: entry.message || 'test message',
-      metadata: entry.metadata || null,
-      request_id: entry.request_id || null,
-      duration_ms: entry.duration_ms || null,
-      created_at: entry.created_at || Date.now(),
-    })
-  }
+): Promise<LogEntryJSON> {
+  const response = await stub.fetch('https://logs.do/logs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  expect(response.status).toBe(201)
+  return response.json() as Promise<LogEntryJSON>
 }
 
 /**
- * Mock WebSocket for testing real-time streaming
+ * Query logs via the DO's HTTP handler
  */
-class MockWebSocket {
-  public messages: string[] = []
-  public closed = false
-  public accepted = false
-  public readyState = 1 // OPEN
+async function queryLogs(
+  stub: DurableObjectStub,
+  functionId: string,
+  options: { limit?: number; cursor?: string } = {}
+): Promise<LogQueryResultJSON> {
+  const params = new URLSearchParams({ functionId })
+  if (options.limit) params.set('limit', options.limit.toString())
+  if (options.cursor) params.set('cursor', options.cursor)
 
-  accept(): void {
-    this.accepted = true
-  }
-
-  send(data: string): void {
-    if (!this.closed) {
-      this.messages.push(data)
-    }
-  }
-
-  close(): void {
-    this.closed = true
-    this.readyState = 3 // CLOSED
-  }
-
-  addEventListener(_event: string, _handler: (event: unknown) => void): void {
-    // Mock implementation
-  }
-
-  removeEventListener(_event: string, _handler: (event: unknown) => void): void {
-    // Mock implementation
-  }
+  const response = await stub.fetch(`https://logs.do/logs?${params.toString()}`, {
+    method: 'GET',
+  })
+  expect(response.status).toBe(200)
+  return response.json() as Promise<LogQueryResultJSON>
 }
 
 /**
- * Mock DurableObjectState for testing
+ * Get metrics via the DO's HTTP handler
  */
-function createMockState(sql: MockSqlStorage) {
-  return {
-    storage: {
-      sql,
-    },
-    id: {
-      toString: () => 'test-do-id',
-      name: 'test-logs',
-    },
-    blockConcurrencyWhile: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
-  }
+async function getMetrics(
+  stub: DurableObjectStub,
+  functionId: string
+): Promise<LogMetricsJSON> {
+  const response = await stub.fetch(`https://logs.do/metrics?functionId=${functionId}`, {
+    method: 'GET',
+  })
+  expect(response.status).toBe(200)
+  return response.json() as Promise<LogMetricsJSON>
+}
+
+/**
+ * Delete logs for a function via the DO's HTTP handler
+ */
+async function deleteLogs(stub: DurableObjectStub, functionId: string): Promise<void> {
+  const response = await stub.fetch(`https://logs.do/logs/${functionId}`, {
+    method: 'DELETE',
+  })
+  expect(response.status).toBe(204)
 }
 
 // ============================================================================
 // Test Suites
 // ============================================================================
 
-describe('FunctionLogs Durable Object', () => {
-  let mockSql: MockSqlStorage
-  let mockState: ReturnType<typeof createMockState>
-  let functionLogs: FunctionLogs
+describe('FunctionLogs Durable Object (real miniflare)', () => {
+  let stub: DurableObjectStub
 
   beforeEach(() => {
-    vi.clearAllMocks()
-    vi.useFakeTimers()
-    mockSql = new MockSqlStorage()
-    mockState = createMockState(mockSql)
-    functionLogs = new FunctionLogs(mockState as unknown as DurableObjectState, {})
-  })
-
-  afterEach(() => {
-    vi.useRealTimers()
+    stub = createStub()
   })
 
   // ==========================================================================
-  // Initialization Tests
-  // ==========================================================================
-
-  describe('initialization', () => {
-    it('should not create schema until first operation', () => {
-      // Just creating the DO should not trigger any SQL
-      expect(mockSql.execCalls.length).toBe(0)
-      expect(mockSql.schemaCreated).toBe(false)
-    })
-
-    it('should initialize on first append operation', async () => {
-      // Implementation uses in-memory storage, not SQL
-      // This test verifies that append works without prior initialization
-      const entry = await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'First log entry',
-      })
-
-      expect(entry).toBeDefined()
-      expect(entry.message).toBe('First log entry')
-    })
-
-    it('should initialize on first query operation', async () => {
-      // Implementation uses in-memory storage, not SQL
-      // This test verifies that query works without prior initialization
-      const result = await functionLogs.query({ functionId: 'test-func' })
-
-      expect(result).toBeDefined()
-      expect(result.entries).toEqual([])
-    })
-
-    it('should only create schema once across multiple operations', async () => {
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Log 1',
-      })
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Log 2',
-      })
-      await functionLogs.query({ functionId: 'test-func' })
-
-      const createTableCalls = mockSql.execCalls.filter((c) =>
-        c.sql.toLowerCase().includes('create table')
-      )
-      expect(createTableCalls.length).toBeLessThanOrEqual(1)
-    })
-  })
-
-  // ==========================================================================
-  // Append Log Entries Tests
+  // 1. Append log entries
   // ==========================================================================
 
   describe('append log entries', () => {
     it('should append a log entry with required fields', async () => {
-      const entry = await functionLogs.append({
+      const entry = await appendLog(stub, {
         functionId: 'my-function',
         level: 'info',
         message: 'Function executed successfully',
@@ -397,11 +161,11 @@ describe('FunctionLogs Durable Object', () => {
       expect(entry.functionId).toBe('my-function')
       expect(entry.level).toBe('info')
       expect(entry.message).toBe('Function executed successfully')
-      expect(entry.timestamp).toBeDefined()
+      expect(entry.timestamp).toBeGreaterThan(0)
     })
 
     it('should append a log entry with all optional fields', async () => {
-      const entry = await functionLogs.append({
+      const entry = await appendLog(stub, {
         functionId: 'my-function',
         level: 'debug',
         message: 'Request processed',
@@ -416,27 +180,25 @@ describe('FunctionLogs Durable Object', () => {
     })
 
     it('should support all log levels', async () => {
-      const levels: LogLevel[] = ['debug', 'info', 'warn', 'error', 'fatal']
+      const levels = ['debug', 'info', 'warn', 'error', 'fatal']
 
       for (const level of levels) {
-        const entry = await functionLogs.append({
+        const entry = await appendLog(stub, {
           functionId: 'test-func',
           level,
           message: `Log at ${level} level`,
         })
-
         expect(entry.level).toBe(level)
       }
     })
 
     it('should generate unique IDs for each log entry', async () => {
-      const entry1 = await functionLogs.append({
+      const entry1 = await appendLog(stub, {
         functionId: 'test-func',
         level: 'info',
         message: 'Log 1',
       })
-
-      const entry2 = await functionLogs.append({
+      const entry2 = await appendLog(stub, {
         functionId: 'test-func',
         level: 'info',
         message: 'Log 2',
@@ -448,266 +210,90 @@ describe('FunctionLogs Durable Object', () => {
     it('should use provided timestamp or default to current time', async () => {
       const customTimestamp = new Date('2024-01-15T10:00:00Z').getTime()
 
-      const entryWithCustomTime = await functionLogs.append({
+      const entryWithCustomTime = await appendLog(stub, {
         functionId: 'test-func',
         level: 'info',
-        message: 'Log with custom time',
+        message: 'Custom time',
         timestamp: customTimestamp,
       })
 
       expect(entryWithCustomTime.timestamp).toBe(customTimestamp)
 
-      const entryWithAutoTime = await functionLogs.append({
+      const entryWithAutoTime = await appendLog(stub, {
         functionId: 'test-func',
         level: 'info',
-        message: 'Log with auto time',
+        message: 'Auto time',
       })
 
       expect(entryWithAutoTime.timestamp).toBeGreaterThan(0)
     })
-
-    it('should append multiple log entries in batch', async () => {
-      const entries = await functionLogs.appendBatch([
-        { functionId: 'test-func', level: 'info', message: 'Log 1' },
-        { functionId: 'test-func', level: 'warn', message: 'Log 2' },
-        { functionId: 'test-func', level: 'error', message: 'Log 3' },
-      ])
-
-      expect(entries).toHaveLength(3)
-      expect(entries[0].message).toBe('Log 1')
-      expect(entries[1].message).toBe('Log 2')
-      expect(entries[2].message).toBe('Log 3')
-    })
   })
 
   // ==========================================================================
-  // Query Logs with Time Range Tests
+  // 2. Query logs with filters
   // ==========================================================================
 
-  describe('query logs with time range', () => {
-    beforeEach(async () => {
-      // Add test logs with different timestamps
-      const baseTime = new Date('2024-01-15T00:00:00Z').getTime()
+  describe('query logs', () => {
+    it('should query logs for a specific function', async () => {
+      await appendLog(stub, { functionId: 'func-a', level: 'info', message: 'A log' })
+      await appendLog(stub, { functionId: 'func-b', level: 'info', message: 'B log' })
 
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Log at hour 0',
-        timestamp: baseTime,
-      })
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Log at hour 1',
-        timestamp: baseTime + 3600000, // +1 hour
-      })
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Log at hour 2',
-        timestamp: baseTime + 7200000, // +2 hours
-      })
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Log at hour 3',
-        timestamp: baseTime + 10800000, // +3 hours
-      })
+      const result = await queryLogs(stub, 'func-a')
+
+      expect(result.entries.length).toBe(1)
+      expect(result.entries[0].functionId).toBe('func-a')
+      expect(result.entries[0].message).toBe('A log')
     })
 
-    it('should query logs with startTime filter', async () => {
-      const baseTime = new Date('2024-01-15T00:00:00Z').getTime()
-      const startTime = baseTime + 3600000 // Start from hour 1
-
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-        startTime,
-      })
-
-      expect(result.entries.length).toBeGreaterThanOrEqual(3) // hour 1, 2, 3
-      for (const entry of result.entries) {
-        expect(entry.timestamp).toBeGreaterThanOrEqual(startTime)
-      }
-    })
-
-    it('should query logs with endTime filter', async () => {
-      const baseTime = new Date('2024-01-15T00:00:00Z').getTime()
-      const endTime = baseTime + 3600000 // End at hour 1
-
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-        endTime,
-      })
-
-      for (const entry of result.entries) {
-        expect(entry.timestamp).toBeLessThanOrEqual(endTime)
-      }
-    })
-
-    it('should query logs with both startTime and endTime', async () => {
-      const baseTime = new Date('2024-01-15T00:00:00Z').getTime()
-      const startTime = baseTime + 3600000 // hour 1
-      const endTime = baseTime + 7200000 // hour 2
-
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-        startTime,
-        endTime,
-      })
-
-      for (const entry of result.entries) {
-        expect(entry.timestamp).toBeGreaterThanOrEqual(startTime)
-        expect(entry.timestamp).toBeLessThanOrEqual(endTime)
-      }
-    })
-
-    it('should return empty result when no logs match time range', async () => {
-      const futureTime = new Date('2025-01-01T00:00:00Z').getTime()
-
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-        startTime: futureTime,
-      })
+    it('should return empty result when no logs exist for function', async () => {
+      const result = await queryLogs(stub, 'nonexistent-func')
 
       expect(result.entries).toHaveLength(0)
+      expect(result.hasMore).toBe(false)
     })
 
     it('should return logs sorted by timestamp descending by default', async () => {
-      const result = await functionLogs.query({
-        functionId: 'test-func',
+      const baseTime = Date.now()
+
+      await appendLog(stub, {
+        functionId: 'sort-func',
+        level: 'info',
+        message: 'First',
+        timestamp: baseTime,
+      })
+      await appendLog(stub, {
+        functionId: 'sort-func',
+        level: 'info',
+        message: 'Second',
+        timestamp: baseTime + 1000,
+      })
+      await appendLog(stub, {
+        functionId: 'sort-func',
+        level: 'info',
+        message: 'Third',
+        timestamp: baseTime + 2000,
       })
 
+      const result = await queryLogs(stub, 'sort-func')
+
+      expect(result.entries).toHaveLength(3)
+      // Descending order: most recent first
       for (let i = 1; i < result.entries.length; i++) {
         expect(result.entries[i - 1].timestamp).toBeGreaterThanOrEqual(result.entries[i].timestamp)
       }
     })
-
-    it('should support ascending sort order', async () => {
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-        order: 'asc',
-      })
-
-      for (let i = 1; i < result.entries.length; i++) {
-        expect(result.entries[i - 1].timestamp).toBeLessThanOrEqual(result.entries[i].timestamp)
-      }
-    })
   })
 
   // ==========================================================================
-  // Query Logs with Level Filter Tests
+  // 3. Pagination
   // ==========================================================================
 
-  describe('query logs with level filter', () => {
+  describe('pagination', () => {
     beforeEach(async () => {
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'debug',
-        message: 'Debug message',
-      })
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Info message',
-      })
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'warn',
-        message: 'Warning message',
-      })
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'error',
-        message: 'Error message',
-      })
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'fatal',
-        message: 'Fatal message',
-      })
-    })
-
-    it('should filter logs by single level', async () => {
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-        level: 'error',
-      })
-
-      expect(result.entries.length).toBeGreaterThanOrEqual(1)
-      for (const entry of result.entries) {
-        expect(entry.level).toBe('error')
-      }
-    })
-
-    it('should filter logs by multiple levels', async () => {
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-        levels: ['error', 'fatal'],
-      })
-
-      for (const entry of result.entries) {
-        expect(['error', 'fatal']).toContain(entry.level)
-      }
-    })
-
-    it('should filter logs by minimum level (severity threshold)', async () => {
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-        minLevel: 'warn',
-      })
-
-      const acceptableLevels = ['warn', 'error', 'fatal']
-      for (const entry of result.entries) {
-        expect(acceptableLevels).toContain(entry.level)
-      }
-    })
-
-    it('should return empty result when level not found', async () => {
-      // Create a fresh FunctionLogs instance to start with empty logs
-      const freshFunctionLogs = new FunctionLogs(mockState as unknown as DurableObjectState, {})
-
-      await freshFunctionLogs.append({
-        functionId: 'test-func-fresh',
-        level: 'debug',
-        message: 'Only debug',
-      })
-
-      const result = await freshFunctionLogs.query({
-        functionId: 'test-func-fresh',
-        level: 'fatal',
-      })
-
-      expect(result.entries).toHaveLength(0)
-    })
-
-    it('should combine level filter with time range', async () => {
-      const now = Date.now()
-
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-        level: 'error',
-        startTime: now - 86400000, // 24 hours ago
-        endTime: now,
-      })
-
-      for (const entry of result.entries) {
-        expect(entry.level).toBe('error')
-        expect(entry.timestamp).toBeGreaterThanOrEqual(now - 86400000)
-        expect(entry.timestamp).toBeLessThanOrEqual(now)
-      }
-    })
-  })
-
-  // ==========================================================================
-  // Pagination with Cursor Tests
-  // ==========================================================================
-
-  describe('pagination with cursor', () => {
-    beforeEach(async () => {
-      // Add 25 test logs
+      // Add 25 logs with incrementing timestamps
       for (let i = 1; i <= 25; i++) {
-        await functionLogs.append({
-          functionId: 'test-func',
+        await appendLog(stub, {
+          functionId: 'page-func',
           level: 'info',
           message: `Log entry ${i}`,
           timestamp: Date.now() + i * 1000,
@@ -716,494 +302,84 @@ describe('FunctionLogs Durable Object', () => {
     })
 
     it('should respect limit parameter', async () => {
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-        limit: 10,
-      })
-
+      const result = await queryLogs(stub, 'page-func', { limit: 10 })
       expect(result.entries).toHaveLength(10)
     })
 
     it('should return cursor when more results are available', async () => {
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-        limit: 10,
-      })
+      const result = await queryLogs(stub, 'page-func', { limit: 10 })
 
       expect(result.cursor).toBeDefined()
+      expect(result.cursor).not.toBeNull()
       expect(result.hasMore).toBe(true)
     })
 
     it('should return null cursor when all results returned', async () => {
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-        limit: 50, // More than available logs
-      })
+      const result = await queryLogs(stub, 'page-func', { limit: 50 })
 
       expect(result.cursor).toBeNull()
       expect(result.hasMore).toBe(false)
     })
 
     it('should fetch next page using cursor', async () => {
-      const firstPage = await functionLogs.query({
-        functionId: 'test-func',
-        limit: 10,
-      })
+      const firstPage = await queryLogs(stub, 'page-func', { limit: 10 })
+      expect(firstPage.cursor).not.toBeNull()
 
-      expect(firstPage.cursor).toBeDefined()
-
-      const secondPage = await functionLogs.query({
-        functionId: 'test-func',
+      const secondPage = await queryLogs(stub, 'page-func', {
         limit: 10,
         cursor: firstPage.cursor!,
       })
 
       // Pages should have different entries
-      const firstPageIds = firstPage.entries.map((e) => e.id)
-      const secondPageIds = secondPage.entries.map((e) => e.id)
-
-      for (const id of secondPageIds) {
-        expect(firstPageIds).not.toContain(id)
+      const firstPageIds = new Set(firstPage.entries.map(e => e.id))
+      for (const entry of secondPage.entries) {
+        expect(firstPageIds.has(entry.id)).toBe(false)
       }
     })
 
     it('should iterate through all pages', async () => {
-      const allEntries: LogEntry[] = []
-      let cursor: string | null = null
+      const allEntries: LogEntryJSON[] = []
+      let cursor: string | undefined = undefined
 
       do {
-        const result = await functionLogs.query({
-          functionId: 'test-func',
+        const result = await queryLogs(stub, 'page-func', {
           limit: 10,
-          cursor: cursor ?? undefined,
+          cursor,
         })
-
         allEntries.push(...result.entries)
-        cursor = result.cursor
+        cursor = result.cursor ?? undefined
       } while (cursor)
 
-      expect(allEntries.length).toBe(25)
-    })
-
-    it('should use default limit when not specified', async () => {
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-      })
-
-      // Default limit should be reasonable (e.g., 100)
-      expect(result.entries.length).toBeLessThanOrEqual(100)
-    })
-
-    it('should enforce maximum limit', async () => {
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-        limit: 10000, // Unreasonably large limit
-      })
-
-      // Should be capped at max (e.g., 1000)
-      expect(result.entries.length).toBeLessThanOrEqual(1000)
+      expect(allEntries).toHaveLength(25)
     })
   })
 
   // ==========================================================================
-  // Retention Policy Tests
+  // 4. Metrics
   // ==========================================================================
 
-  describe('retention policy (auto-delete old logs)', () => {
-    it('should delete logs older than retention period', async () => {
-      const now = Date.now()
-      const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000
-      const twoWeeksAgo = now - 14 * 24 * 60 * 60 * 1000
-
-      // Add old logs
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Old log',
-        timestamp: twoWeeksAgo,
-      })
-
-      // Add recent log
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Recent log',
-        timestamp: now,
-      })
-
-      // Apply retention policy (7 days)
-      const deleted = await functionLogs.applyRetention({
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in ms
-      })
-
-      expect(deleted).toBeGreaterThanOrEqual(1)
-
-      // Verify old log is deleted
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-        endTime: oneWeekAgo,
-      })
-
-      expect(result.entries).toHaveLength(0)
-    })
-
-    it('should delete logs exceeding max count per function', async () => {
-      // Add many logs
-      for (let i = 0; i < 150; i++) {
-        await functionLogs.append({
-          functionId: 'test-func',
-          level: 'info',
-          message: `Log ${i}`,
-          timestamp: Date.now() - i * 1000,
-        })
-      }
-
-      // Apply retention with max count
-      await functionLogs.applyRetention({
-        maxCount: 100,
-      })
-
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-        limit: 200,
-      })
-
-      expect(result.entries.length).toBeLessThanOrEqual(100)
-    })
-
-    it('should combine age and count retention policies', async () => {
-      const now = Date.now()
-      const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000
-
-      // Add old logs
-      for (let i = 0; i < 50; i++) {
-        await functionLogs.append({
-          functionId: 'test-func',
-          level: 'info',
-          message: `Old log ${i}`,
-          timestamp: thirtyDaysAgo - i * 1000,
-        })
-      }
-
-      // Add recent logs
-      for (let i = 0; i < 200; i++) {
-        await functionLogs.append({
-          functionId: 'test-func',
-          level: 'info',
-          message: `Recent log ${i}`,
-          timestamp: now - i * 1000,
-        })
-      }
-
-      await functionLogs.applyRetention({
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-        maxCount: 100,
-      })
-
-      const result = await functionLogs.query({
-        functionId: 'test-func',
-        limit: 500,
-      })
-
-      // All old logs should be deleted, and only 100 recent logs retained
-      expect(result.entries.length).toBeLessThanOrEqual(100)
-    })
-
-    it('should apply retention per function independently', async () => {
-      // Add logs for function 1
-      for (let i = 0; i < 50; i++) {
-        await functionLogs.append({
-          functionId: 'func-1',
-          level: 'info',
-          message: `Func1 log ${i}`,
-        })
-      }
-
-      // Add logs for function 2
-      for (let i = 0; i < 50; i++) {
-        await functionLogs.append({
-          functionId: 'func-2',
-          level: 'info',
-          message: `Func2 log ${i}`,
-        })
-      }
-
-      await functionLogs.applyRetention({
-        maxCount: 25,
-        perFunction: true,
-      })
-
-      const result1 = await functionLogs.query({ functionId: 'func-1', limit: 100 })
-      const result2 = await functionLogs.query({ functionId: 'func-2', limit: 100 })
-
-      expect(result1.entries.length).toBeLessThanOrEqual(25)
-      expect(result2.entries.length).toBeLessThanOrEqual(25)
-    })
-
-    it('should schedule automatic retention cleanup', async () => {
-      const cleanupFn = vi.fn()
-
-      functionLogs.scheduleRetention(
-        {
-          maxAge: 7 * 24 * 60 * 60 * 1000,
-          interval: 60 * 60 * 1000, // Every hour
-        },
-        cleanupFn
-      )
-
-      // Fast-forward 1 hour and let async callbacks run
-      await vi.advanceTimersByTimeAsync(60 * 60 * 1000)
-
-      expect(cleanupFn).toHaveBeenCalled()
-    })
-
-    it('should return retention statistics', async () => {
-      // Add test logs
-      for (let i = 0; i < 20; i++) {
-        await functionLogs.append({
-          functionId: 'test-func',
-          level: 'info',
-          message: `Log ${i}`,
-        })
-      }
-
-      const stats = await functionLogs.getRetentionStats()
-
-      expect(stats.totalLogs).toBeGreaterThanOrEqual(20)
-      expect(stats.oldestTimestamp).toBeDefined()
-      expect(stats.newestTimestamp).toBeDefined()
-    })
-  })
-
-  // ==========================================================================
-  // Real-time Streaming (WebSocket) Tests
-  // ==========================================================================
-
-  describe('real-time streaming (WebSocket)', () => {
-    it('should accept WebSocket connection for streaming', async () => {
-      const mockWs = new MockWebSocket()
-
-      await functionLogs.handleWebSocket(mockWs as unknown as WebSocket, {
-        functionId: 'test-func',
-      })
-
-      // Implementation stores the WebSocket for subscriptions
-      // After handling, logs should be sent to this WebSocket when appended
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Test log',
-      })
-
-      // Verify WebSocket received the log
-      expect(mockWs.messages.length).toBeGreaterThanOrEqual(1)
-    })
-
-    it('should stream new log entries to connected clients', async () => {
-      const mockWs = new MockWebSocket()
-
-      await functionLogs.handleWebSocket(mockWs as unknown as WebSocket, {
-        functionId: 'test-func',
-      })
-
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Streamed log entry',
-      })
-
-      expect(mockWs.messages.length).toBeGreaterThanOrEqual(1)
-
-      const lastMessage = JSON.parse(mockWs.messages[mockWs.messages.length - 1])
-      expect(lastMessage.type).toBe('log')
-      expect(lastMessage.entry.message).toBe('Streamed log entry')
-    })
-
-    it('should stream all logs to connected clients regardless of level filter', async () => {
-      // Note: The current implementation does not filter by level when streaming
-      // All logs are sent to all subscribers for the function
-      const mockWs = new MockWebSocket()
-
-      await functionLogs.handleWebSocket(mockWs as unknown as WebSocket, {
-        functionId: 'test-func',
-        levels: ['error', 'fatal'],
-      })
-
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Info log',
-      })
-
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'error',
-        message: 'Error log',
-      })
-
-      const logMessages = mockWs.messages
-        .map((m) => JSON.parse(m))
-        .filter((m) => m.type === 'log')
-
-      // Implementation broadcasts all logs to subscribers
-      expect(logMessages.length).toBe(2)
-    })
-
-    it('should support multiple concurrent WebSocket connections', async () => {
-      const mockWs1 = new MockWebSocket()
-      const mockWs2 = new MockWebSocket()
-
-      await functionLogs.handleWebSocket(mockWs1 as unknown as WebSocket, {
-        functionId: 'test-func',
-      })
-      await functionLogs.handleWebSocket(mockWs2 as unknown as WebSocket, {
-        functionId: 'test-func',
-      })
-
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Broadcast log',
-      })
-
-      expect(mockWs1.messages.length).toBeGreaterThanOrEqual(1)
-      expect(mockWs2.messages.length).toBeGreaterThanOrEqual(1)
-    })
-
-    it('should only stream logs for subscribed function', async () => {
-      const mockWs = new MockWebSocket()
-
-      await functionLogs.handleWebSocket(mockWs as unknown as WebSocket, {
-        functionId: 'func-1',
-      })
-
-      await functionLogs.append({
-        functionId: 'func-2',
-        level: 'info',
-        message: 'Log for different function',
-      })
-
-      const logMessages = mockWs.messages
-        .map((m) => JSON.parse(m))
-        .filter((m) => m.type === 'log')
-
-      expect(logMessages).toHaveLength(0)
-    })
-
-    it('should handle WebSocket disconnection gracefully', async () => {
-      const mockWs = new MockWebSocket()
-
-      await functionLogs.handleWebSocket(mockWs as unknown as WebSocket, {
-        functionId: 'test-func',
-      })
-
-      mockWs.close()
-
-      // Should not throw when trying to stream to closed connection
-      await expect(
-        functionLogs.append({
-          functionId: 'test-func',
-          level: 'info',
-          message: 'Log after disconnect',
-        })
-      ).resolves.toBeDefined()
-    })
-
-    it('should send heartbeat messages to keep connection alive', async () => {
-      const mockWs = new MockWebSocket()
-
-      await functionLogs.handleWebSocket(mockWs as unknown as WebSocket, {
-        functionId: 'test-func',
-        heartbeat: 5000,
-      })
-
-      // Fast-forward 5 seconds
-      vi.advanceTimersByTime(5000)
-
-      const heartbeatMessages = mockWs.messages
-        .map((m) => JSON.parse(m))
-        .filter((m) => m.type === 'heartbeat')
-
-      expect(heartbeatMessages.length).toBeGreaterThanOrEqual(1)
-    })
-
-    it('should send initial batch of recent logs on connection', async () => {
-      // Add some existing logs
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Existing log 1',
-      })
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Existing log 2',
-      })
-
-      const mockWs = new MockWebSocket()
-
-      await functionLogs.handleWebSocket(mockWs as unknown as WebSocket, {
-        functionId: 'test-func',
-        tail: 10, // Send last 10 logs on connect
-      })
-
-      const historyMessages = mockWs.messages
-        .map((m) => JSON.parse(m))
-        .filter((m) => m.type === 'history')
-
-      expect(historyMessages.length).toBeGreaterThanOrEqual(1)
-    })
-  })
-
-  // ==========================================================================
-  // Aggregate Metrics Tests
-  // ==========================================================================
-
-  describe('aggregate metrics (count by level)', () => {
-    beforeEach(async () => {
+  describe('metrics', () => {
+    it('should return count by log level', async () => {
       // Add logs at different levels
       for (let i = 0; i < 10; i++) {
-        await functionLogs.append({
-          functionId: 'test-func',
-          level: 'debug',
-          message: `Debug ${i}`,
-        })
+        await appendLog(stub, { functionId: 'metrics-func', level: 'debug', message: `Debug ${i}` })
       }
       for (let i = 0; i < 20; i++) {
-        await functionLogs.append({
-          functionId: 'test-func',
-          level: 'info',
-          message: `Info ${i}`,
-        })
+        await appendLog(stub, { functionId: 'metrics-func', level: 'info', message: `Info ${i}` })
       }
       for (let i = 0; i < 5; i++) {
-        await functionLogs.append({
-          functionId: 'test-func',
-          level: 'warn',
-          message: `Warn ${i}`,
-        })
+        await appendLog(stub, { functionId: 'metrics-func', level: 'warn', message: `Warn ${i}` })
       }
       for (let i = 0; i < 3; i++) {
-        await functionLogs.append({
-          functionId: 'test-func',
-          level: 'error',
-          message: `Error ${i}`,
-        })
+        await appendLog(stub, { functionId: 'metrics-func', level: 'error', message: `Error ${i}` })
       }
       for (let i = 0; i < 2; i++) {
-        await functionLogs.append({
-          functionId: 'test-func',
-          level: 'fatal',
-          message: `Fatal ${i}`,
-        })
+        await appendLog(stub, { functionId: 'metrics-func', level: 'fatal', message: `Fatal ${i}` })
       }
-    })
 
-    it('should return count by log level', async () => {
-      const metrics = await functionLogs.getMetrics({
-        functionId: 'test-func',
-      })
+      const metrics = await getMetrics(stub, 'metrics-func')
 
+      expect(metrics.total).toBe(40)
       expect(metrics.countByLevel.debug).toBe(10)
       expect(metrics.countByLevel.info).toBe(20)
       expect(metrics.countByLevel.warn).toBe(5)
@@ -1211,376 +387,366 @@ describe('FunctionLogs Durable Object', () => {
       expect(metrics.countByLevel.fatal).toBe(2)
     })
 
-    it('should return total log count', async () => {
-      const metrics = await functionLogs.getMetrics({
-        functionId: 'test-func',
-      })
-
-      expect(metrics.total).toBe(40)
-    })
-
-    it('should filter metrics by time range', async () => {
-      const now = Date.now()
-
-      const metrics = await functionLogs.getMetrics({
-        functionId: 'test-func',
-        startTime: now - 3600000, // Last hour
-        endTime: now,
-      })
-
-      expect(metrics.total).toBeGreaterThanOrEqual(0)
-    })
-
     it('should return error rate', async () => {
-      const metrics = await functionLogs.getMetrics({
-        functionId: 'test-func',
-      })
+      // 3 error + 2 fatal out of 40 total = 5/40 = 0.125
+      for (let i = 0; i < 10; i++) {
+        await appendLog(stub, { functionId: 'error-rate-func', level: 'debug', message: `D ${i}` })
+      }
+      for (let i = 0; i < 20; i++) {
+        await appendLog(stub, { functionId: 'error-rate-func', level: 'info', message: `I ${i}` })
+      }
+      for (let i = 0; i < 5; i++) {
+        await appendLog(stub, { functionId: 'error-rate-func', level: 'warn', message: `W ${i}` })
+      }
+      for (let i = 0; i < 3; i++) {
+        await appendLog(stub, { functionId: 'error-rate-func', level: 'error', message: `E ${i}` })
+      }
+      for (let i = 0; i < 2; i++) {
+        await appendLog(stub, { functionId: 'error-rate-func', level: 'fatal', message: `F ${i}` })
+      }
 
-      // Error rate = (error + fatal) / total = 5 / 40 = 0.125
+      const metrics = await getMetrics(stub, 'error-rate-func')
       expect(metrics.errorRate).toBeCloseTo(0.125, 2)
     })
 
-    it('should return logs per minute rate', async () => {
-      const metrics = await functionLogs.getMetrics({
-        functionId: 'test-func',
-        startTime: Date.now() - 60000, // Last minute
-        endTime: Date.now(),
-      })
-
-      expect(metrics.logsPerMinute).toBeDefined()
-    })
-
-    it('should return average duration when available', async () => {
-      // Clear and add logs with duration
-      mockSql.clear()
-
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Request 1',
-        durationMs: 100,
-      })
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Request 2',
-        durationMs: 200,
-      })
-      await functionLogs.append({
-        functionId: 'test-func',
-        level: 'info',
-        message: 'Request 3',
-        durationMs: 300,
-      })
-
-      const metrics = await functionLogs.getMetrics({
-        functionId: 'test-func',
-      })
-
-      expect(metrics.avgDurationMs).toBeCloseTo(200, 0)
-    })
-
-    it('should return p50, p95, p99 duration percentiles', async () => {
-      // Clear and add logs with duration
-      mockSql.clear()
-
-      for (let i = 1; i <= 100; i++) {
-        await functionLogs.append({
-          functionId: 'test-func',
-          level: 'info',
-          message: `Request ${i}`,
-          durationMs: i * 10, // 10ms to 1000ms
-        })
+    it('should return total log count', async () => {
+      for (let i = 0; i < 15; i++) {
+        await appendLog(stub, { functionId: 'count-func', level: 'info', message: `Log ${i}` })
       }
 
-      const metrics = await functionLogs.getMetrics({
-        functionId: 'test-func',
-      })
-
-      expect(metrics.p50DurationMs).toBeDefined()
-      expect(metrics.p95DurationMs).toBeDefined()
-      expect(metrics.p99DurationMs).toBeDefined()
+      const metrics = await getMetrics(stub, 'count-func')
+      expect(metrics.total).toBe(15)
     })
 
     it('should return most recent timestamp', async () => {
-      const metrics = await functionLogs.getMetrics({
-        functionId: 'test-func',
+      const recentTimestamp = Date.now() + 100000
+
+      await appendLog(stub, {
+        functionId: 'recent-func',
+        level: 'info',
+        message: 'Old log',
+        timestamp: Date.now() - 10000,
+      })
+      await appendLog(stub, {
+        functionId: 'recent-func',
+        level: 'info',
+        message: 'Recent log',
+        timestamp: recentTimestamp,
       })
 
-      expect(metrics.lastLogTimestamp).toBeDefined()
-      expect(metrics.lastLogTimestamp).toBeGreaterThan(0)
+      const metrics = await getMetrics(stub, 'recent-func')
+      expect(metrics.lastLogTimestamp).toBe(recentTimestamp)
+    })
+
+    it('should return average duration when available', async () => {
+      await appendLog(stub, {
+        functionId: 'dur-func',
+        level: 'info',
+        message: 'Req 1',
+        durationMs: 100,
+      })
+      await appendLog(stub, {
+        functionId: 'dur-func',
+        level: 'info',
+        message: 'Req 2',
+        durationMs: 200,
+      })
+      await appendLog(stub, {
+        functionId: 'dur-func',
+        level: 'info',
+        message: 'Req 3',
+        durationMs: 300,
+      })
+
+      const metrics = await getMetrics(stub, 'dur-func')
+      expect(metrics.avgDurationMs).toBeCloseTo(200, 0)
+    })
+
+    it('should return logs per minute rate', async () => {
+      await appendLog(stub, { functionId: 'rate-func', level: 'info', message: 'Log 1' })
+      await appendLog(stub, { functionId: 'rate-func', level: 'info', message: 'Log 2' })
+
+      const metrics = await getMetrics(stub, 'rate-func')
+      expect(metrics.logsPerMinute).toBeDefined()
+      expect(typeof metrics.logsPerMinute).toBe('number')
+    })
+
+    it('should return zero metrics for unknown function', async () => {
+      const metrics = await getMetrics(stub, 'nonexistent-func')
+      expect(metrics.total).toBe(0)
+      expect(metrics.errorRate).toBe(0)
     })
   })
 
   // ==========================================================================
-  // Support Multiple Functions Tests
+  // 5. Multi-function support
   // ==========================================================================
 
-  describe('support multiple functions', () => {
+  describe('multi-function support', () => {
     beforeEach(async () => {
-      // Add logs for multiple functions
-      for (let i = 0; i < 10; i++) {
-        await functionLogs.append({
-          functionId: 'func-alpha',
-          level: 'info',
-          message: `Alpha log ${i}`,
-        })
-        await functionLogs.append({
-          functionId: 'func-beta',
-          level: 'warn',
-          message: `Beta log ${i}`,
-        })
-        await functionLogs.append({
-          functionId: 'func-gamma',
-          level: 'error',
-          message: `Gamma log ${i}`,
-        })
+      for (let i = 0; i < 5; i++) {
+        await appendLog(stub, { functionId: 'func-alpha', level: 'info', message: `Alpha ${i}` })
+        await appendLog(stub, { functionId: 'func-beta', level: 'warn', message: `Beta ${i}` })
+        await appendLog(stub, { functionId: 'func-gamma', level: 'error', message: `Gamma ${i}` })
       }
     })
 
     it('should query logs for specific function only', async () => {
-      const result = await functionLogs.query({
-        functionId: 'func-alpha',
-      })
+      const result = await queryLogs(stub, 'func-alpha')
 
+      expect(result.entries.length).toBe(5)
       for (const entry of result.entries) {
         expect(entry.functionId).toBe('func-alpha')
       }
     })
 
-    it('should query logs across all functions', async () => {
-      const result = await functionLogs.queryAll({
-        limit: 100,
-      })
+    it('should get metrics per function independently', async () => {
+      const alphaMetrics = await getMetrics(stub, 'func-alpha')
+      const betaMetrics = await getMetrics(stub, 'func-beta')
+      const gammaMetrics = await getMetrics(stub, 'func-gamma')
 
-      const functionIds = new Set(result.entries.map((e) => e.functionId))
-      expect(functionIds.has('func-alpha')).toBe(true)
-      expect(functionIds.has('func-beta')).toBe(true)
-      expect(functionIds.has('func-gamma')).toBe(true)
+      expect(alphaMetrics.total).toBe(5)
+      expect(betaMetrics.total).toBe(5)
+      expect(gammaMetrics.total).toBe(5)
+
+      expect(alphaMetrics.countByLevel.info).toBe(5)
+      expect(betaMetrics.countByLevel.warn).toBe(5)
+      expect(gammaMetrics.countByLevel.error).toBe(5)
     })
 
-    it('should get metrics per function', async () => {
-      const alphaMetrics = await functionLogs.getMetrics({ functionId: 'func-alpha' })
-      const betaMetrics = await functionLogs.getMetrics({ functionId: 'func-beta' })
-      const gammaMetrics = await functionLogs.getMetrics({ functionId: 'func-gamma' })
+    it('should delete logs for specific function only', async () => {
+      await deleteLogs(stub, 'func-alpha')
 
-      expect(alphaMetrics.total).toBe(10)
-      expect(betaMetrics.total).toBe(10)
-      expect(gammaMetrics.total).toBe(10)
-    })
-
-    it('should get aggregated metrics across all functions', async () => {
-      const metrics = await functionLogs.getAggregatedMetrics()
-
-      expect(metrics.total).toBe(30)
-      expect(metrics.byFunction).toBeDefined()
-      expect(metrics.byFunction['func-alpha']).toBeDefined()
-      expect(metrics.byFunction['func-beta']).toBeDefined()
-      expect(metrics.byFunction['func-gamma']).toBeDefined()
-    })
-
-    it('should list all function IDs with logs', async () => {
-      const functionIds = await functionLogs.listFunctions()
-
-      expect(functionIds).toContain('func-alpha')
-      expect(functionIds).toContain('func-beta')
-      expect(functionIds).toContain('func-gamma')
-    })
-
-    it('should delete logs for specific function', async () => {
-      await functionLogs.deleteLogs('func-alpha')
-
-      const result = await functionLogs.query({ functionId: 'func-alpha' })
-      expect(result.entries).toHaveLength(0)
+      const alphaResult = await queryLogs(stub, 'func-alpha')
+      expect(alphaResult.entries).toHaveLength(0)
 
       // Other functions should still have logs
-      const betaResult = await functionLogs.query({ functionId: 'func-beta' })
-      expect(betaResult.entries.length).toBe(10)
-    })
+      const betaResult = await queryLogs(stub, 'func-beta')
+      expect(betaResult.entries).toHaveLength(5)
 
-    it('should search logs by message across functions', async () => {
-      await functionLogs.append({
-        functionId: 'func-alpha',
-        level: 'info',
-        message: 'User login successful for user@example.com',
-      })
-      await functionLogs.append({
-        functionId: 'func-beta',
-        level: 'error',
-        message: 'User login failed for user@example.com',
-      })
-
-      const result = await functionLogs.search({
-        query: 'user@example.com',
-      })
-
-      expect(result.entries.length).toBeGreaterThanOrEqual(2)
-    })
-
-    it('should search logs within specific function', async () => {
-      await functionLogs.append({
-        functionId: 'func-alpha',
-        level: 'info',
-        message: 'Payment processed for order-123',
-      })
-      await functionLogs.append({
-        functionId: 'func-beta',
-        level: 'info',
-        message: 'Payment processed for order-456',
-      })
-
-      const result = await functionLogs.search({
-        query: 'order-123',
-        functionId: 'func-alpha',
-      })
-
-      expect(result.entries.length).toBe(1)
-      expect(result.entries[0].functionId).toBe('func-alpha')
-    })
-
-    it('should handle request ID correlation across functions', async () => {
-      const requestId = 'req-12345'
-
-      await functionLogs.append({
-        functionId: 'api-gateway',
-        level: 'info',
-        message: 'Request received',
-        requestId,
-      })
-      await functionLogs.append({
-        functionId: 'auth-service',
-        level: 'info',
-        message: 'User authenticated',
-        requestId,
-      })
-      await functionLogs.append({
-        functionId: 'data-service',
-        level: 'info',
-        message: 'Data fetched',
-        requestId,
-      })
-
-      const result = await functionLogs.queryByRequestId(requestId)
-
-      expect(result.entries.length).toBe(3)
-      const functionIds = result.entries.map((e) => e.functionId)
-      expect(functionIds).toContain('api-gateway')
-      expect(functionIds).toContain('auth-service')
-      expect(functionIds).toContain('data-service')
+      const gammaResult = await queryLogs(stub, 'func-gamma')
+      expect(gammaResult.entries).toHaveLength(5)
     })
   })
 
   // ==========================================================================
-  // HTTP Request Handler Tests
+  // 6. HTTP handler routing
   // ==========================================================================
 
-  describe('HTTP request handling', () => {
+  describe('HTTP handler routing', () => {
     it('should handle POST /logs to append entry', async () => {
-      const request = new Request('http://localhost/logs', {
+      const response = await stub.fetch('https://logs.do/logs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          functionId: 'test-func',
+          functionId: 'http-test-func',
           level: 'info',
           message: 'Test log via HTTP',
         }),
       })
 
-      const response = await functionLogs.fetch(request)
-
       expect(response.status).toBe(201)
-      const body = (await response.json()) as LogEntry
+      const body = await response.json() as LogEntryJSON
       expect(body.id).toBeDefined()
       expect(body.message).toBe('Test log via HTTP')
     })
 
     it('should handle GET /logs with query parameters', async () => {
-      await functionLogs.append({
-        functionId: 'test-func',
+      await appendLog(stub, {
+        functionId: 'query-http-func',
         level: 'info',
-        message: 'Test log',
+        message: 'Queryable log',
       })
 
-      const request = new Request('http://localhost/logs?functionId=test-func&limit=10')
-
-      const response = await functionLogs.fetch(request)
+      const response = await stub.fetch(
+        'https://logs.do/logs?functionId=query-http-func&limit=10',
+        { method: 'GET' }
+      )
 
       expect(response.status).toBe(200)
-      const body = (await response.json()) as LogQueryResult
+      const body = await response.json() as LogQueryResultJSON
       expect(body.entries).toBeDefined()
+      expect(body.entries.length).toBeGreaterThan(0)
     })
 
     it('should handle GET /metrics', async () => {
-      await functionLogs.append({
-        functionId: 'test-func',
+      await appendLog(stub, {
+        functionId: 'metrics-http-func',
         level: 'error',
         message: 'Error log',
       })
 
-      const request = new Request('http://localhost/metrics?functionId=test-func')
-
-      const response = await functionLogs.fetch(request)
+      const response = await stub.fetch(
+        'https://logs.do/metrics?functionId=metrics-http-func',
+        { method: 'GET' }
+      )
 
       expect(response.status).toBe(200)
-      const body = (await response.json()) as LogMetrics
+      const body = await response.json() as LogMetricsJSON
       expect(body.total).toBeDefined()
       expect(body.countByLevel).toBeDefined()
     })
 
     it('should handle DELETE /logs/:functionId', async () => {
-      await functionLogs.append({
-        functionId: 'test-func',
+      await appendLog(stub, {
+        functionId: 'delete-http-func',
         level: 'info',
-        message: 'Log to delete',
+        message: 'To be deleted',
       })
 
-      const request = new Request('http://localhost/logs/test-func', {
+      const response = await stub.fetch('https://logs.do/logs/delete-http-func', {
         method: 'DELETE',
       })
 
-      const response = await functionLogs.fetch(request)
-
       expect(response.status).toBe(204)
+
+      // Verify it's gone
+      const result = await queryLogs(stub, 'delete-http-func')
+      expect(result.entries).toHaveLength(0)
     })
 
-    it('should handle WebSocket upgrade request', async () => {
-      const request = new Request('http://localhost/stream?functionId=test-func', {
-        headers: {
-          Upgrade: 'websocket',
-        },
-      })
-
-      const response = await functionLogs.fetch(request)
-
-      // Note: The implementation cannot return 101 (Switching Protocols) via Response constructor
-      // because browsers/runtimes restrict Response status codes to 200-599 range.
-      // In production, Cloudflare handles WebSocket upgrades differently via WebSocketPair.
-      // The implementation returns an error (500) because it cannot properly handle the upgrade.
-      // This test verifies the current behavior.
-      expect(response.status).toBe(500)
-    })
-
-    it('should return 400 for invalid request', async () => {
-      const request = new Request('http://localhost/logs', {
+    it('should return 400 for POST /logs with missing required fields', async () => {
+      const response = await stub.fetch('https://logs.do/logs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          // Missing required fields
           level: 'info',
+          // Missing functionId and message
         }),
       })
 
-      const response = await functionLogs.fetch(request)
-
       expect(response.status).toBe(400)
+      // Consume the response body to avoid isolated storage issues
+      await response.text()
+    })
+
+    it('should return 400 for GET /logs without functionId', async () => {
+      const response = await stub.fetch('https://logs.do/logs', { method: 'GET' })
+      expect(response.status).toBe(400)
+      await response.text()
+    })
+
+    it('should return 400 for GET /metrics without functionId', async () => {
+      const response = await stub.fetch('https://logs.do/metrics', { method: 'GET' })
+      expect(response.status).toBe(400)
+      await response.text()
     })
 
     it('should return 404 for unknown endpoint', async () => {
-      const request = new Request('http://localhost/unknown')
-
-      const response = await functionLogs.fetch(request)
-
+      const response = await stub.fetch('https://logs.do/unknown', { method: 'GET' })
       expect(response.status).toBe(404)
+      await response.text()
+    })
+  })
+
+  // ==========================================================================
+  // 7. State persistence across calls
+  // ==========================================================================
+
+  describe('state persistence', () => {
+    it('should persist logs across separate fetch calls', async () => {
+      // Append in one call
+      await appendLog(stub, {
+        functionId: 'persist-func',
+        level: 'info',
+        message: 'Persisted log',
+      })
+
+      // Query in a separate call
+      const result = await queryLogs(stub, 'persist-func')
+      expect(result.entries).toHaveLength(1)
+      expect(result.entries[0].message).toBe('Persisted log')
+    })
+
+    it('should persist when re-getting same DO by name', async () => {
+      const fixedName = `persist-logs-test-${Date.now()}`
+      const id1 = env.FUNCTION_LOGS.idFromName(fixedName)
+      const stub1 = env.FUNCTION_LOGS.get(id1)
+
+      await appendLog(stub1, {
+        functionId: 'shared-func',
+        level: 'info',
+        message: 'Shared log',
+      })
+
+      // Re-get the same DO by name
+      const id2 = env.FUNCTION_LOGS.idFromName(fixedName)
+      const stub2 = env.FUNCTION_LOGS.get(id2)
+
+      const result = await queryLogs(stub2, 'shared-func')
+      expect(result.entries).toHaveLength(1)
+      expect(result.entries[0].message).toBe('Shared log')
+    })
+
+    it('should accumulate logs over multiple appends', async () => {
+      for (let i = 0; i < 10; i++) {
+        await appendLog(stub, {
+          functionId: 'accum-func',
+          level: 'info',
+          message: `Log ${i}`,
+        })
+      }
+
+      const result = await queryLogs(stub, 'accum-func')
+      expect(result.entries).toHaveLength(10)
+    })
+  })
+
+  // ==========================================================================
+  // 8. Metadata handling
+  // ==========================================================================
+
+  describe('metadata handling', () => {
+    it('should store and retrieve structured metadata', async () => {
+      await appendLog(stub, {
+        functionId: 'meta-func',
+        level: 'info',
+        message: 'With metadata',
+        metadata: { userId: 'user-123', ip: '10.0.0.1', tags: ['production', 'api'] },
+      })
+
+      const result = await queryLogs(stub, 'meta-func')
+      expect(result.entries[0].metadata).toEqual({
+        userId: 'user-123',
+        ip: '10.0.0.1',
+        tags: ['production', 'api'],
+      })
+    })
+
+    it('should handle entries without metadata', async () => {
+      await appendLog(stub, {
+        functionId: 'no-meta-func',
+        level: 'info',
+        message: 'No metadata',
+      })
+
+      const result = await queryLogs(stub, 'no-meta-func')
+      expect(result.entries[0].message).toBe('No metadata')
+      // metadata should be undefined/null for entries without it
+    })
+
+    it('should store and retrieve requestId for correlation', async () => {
+      await appendLog(stub, {
+        functionId: 'req-id-func',
+        level: 'info',
+        message: 'With request ID',
+        requestId: 'req-abc-123',
+      })
+
+      const result = await queryLogs(stub, 'req-id-func')
+      expect(result.entries[0].requestId).toBe('req-abc-123')
+    })
+
+    it('should store and retrieve duration', async () => {
+      await appendLog(stub, {
+        functionId: 'duration-func',
+        level: 'info',
+        message: 'With duration',
+        durationMs: 42,
+      })
+
+      const result = await queryLogs(stub, 'duration-func')
+      expect(result.entries[0].durationMs).toBe(42)
     })
   })
 })

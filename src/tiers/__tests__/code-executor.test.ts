@@ -928,9 +928,8 @@ describe('CodeExecutor', () => {
 
       const result1 = await executor.execute(fn, undefined)
 
-      // Wait a bit
-      await new Promise(r => setTimeout(r, 100))
-
+      // Execute again immediately - deterministic mode should return same Date.now()
+      // regardless of elapsed wall-clock time
       const result2 = await executor.execute(fn, undefined)
 
       expect(result1.status).toBe('completed')

@@ -180,9 +180,10 @@ describe('ObservabilityExporter', () => {
       }
 
       // Buffer should be cleared after auto-flush (no endpoint, so cleared but not exported)
-      // Wait a tick for async flush to complete
-      await new Promise((resolve) => setTimeout(resolve, 10))
-      expect(exporter.getBufferSize()).toBe(0)
+      // Use vi.waitFor to poll until async flush completes instead of fixed delay
+      await vi.waitFor(() => {
+        expect(exporter.getBufferSize()).toBe(0)
+      })
     })
   })
 

@@ -555,8 +555,8 @@ describe('FunctionTarget request deduplication', () => {
     let callCount = 0
     const mockStub = createMockWorkerStub(async () => {
       callCount++
-      // Simulate network delay
-      await new Promise((resolve) => setTimeout(resolve, 50))
+      // Yield to event loop to allow concurrent requests to coalesce
+      await Promise.resolve()
       return new Response(JSON.stringify({ result: 'deduplicated' }), {
         headers: { 'Content-Type': 'application/json' },
       })
@@ -611,7 +611,8 @@ describe('FunctionTarget request deduplication', () => {
 
   it('should track deduplicated request count in metrics', async () => {
     const mockStub = createMockWorkerStub(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20))
+      // Yield to event loop to allow concurrent requests to coalesce
+      await Promise.resolve()
       return new Response(JSON.stringify({ result: 'ok' }), {
         headers: { 'Content-Type': 'application/json' },
       })
@@ -1096,7 +1097,8 @@ describe('FunctionTarget performance metrics', () => {
 
   it('should calculate average latency', async () => {
     const mockStub = createMockWorkerStub(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 5))
+      // Use minimal delay to ensure measurable latency (>0ms)
+      await new Promise((resolve) => setTimeout(resolve, 1))
       return new Response(JSON.stringify({ result: 'ok' }), {
         headers: { 'Content-Type': 'application/json' },
       })

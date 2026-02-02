@@ -148,7 +148,7 @@ describe('authenticateRequest', () => {
     it('should handle async validation delay', async () => {
       const config: AuthConfig = {
         validateApiKey: vi.fn().mockImplementation(
-          () => new Promise((resolve) => setTimeout(() => resolve(true), 10))
+          () => Promise.resolve().then(() => true)
         ),
       }
       const request = new Request('https://example.com/test', {

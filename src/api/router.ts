@@ -54,14 +54,72 @@ export type { AuthContext } from './middleware/auth'
 import type { AuthContext } from './middleware/auth'
 
 /**
+ * Sources for API version resolution, in priority order.
+ */
+export type ApiVersionSource = 'path' | 'query' | 'accept-version' | 'x-api-version' | 'default'
+
+/**
+ * Default API version when none is specified.
+ */
+export const DEFAULT_API_VERSION = 'v1'
+
+/**
  * Route context passed to handlers
  */
 export interface RouteContext {
   params: Record<string, string>
   functionId?: string
   version?: string
+  /** The resolved API version (e.g. "v1") */
+  apiVersion?: string
+  /** How the API version was determined */
+  apiVersionSource?: ApiVersionSource
   /** Authentication context when request is authenticated */
   authContext?: AuthContext
+}
+
+/**
+ * Resolve the API version from the request.
+ *
+ * Priority order (highest to lowest):
+ * 1. URL path prefix (e.g. /v1/api/functions)
+ * 2. Query parameter (?version=v1)
+ * 3. Accept-Version header
+ * 4. X-API-Version header
+ * 5. Default: "v1"
+ */
+export function resolveApiVersion(request: Request, path: string): { apiVersion: string; apiVersionSource: ApiVersionSource } {
+  // 1. URL path prefix: match /v followed by digits at the start of the path
+  const pathMatch = path.match(/^\/(v\d+)\//)
+  if (pathMatch) {
+    return { apiVersion: pathMatch[1]!, apiVersionSource: 'path' }
+  }
+
+  // 2. Query parameter
+  const url = new URL(request.url)
+  const queryVersion = url.searchParams.get('version')
+  if (queryVersion) {
+    // Normalize: ensure it starts with 'v' if it's just a number
+    const normalized = /^\d+$/.test(queryVersion) ? `v${queryVersion}` : queryVersion
+    return { apiVersion: normalized, apiVersionSource: 'query' }
+  }
+
+  // 3. Accept-Version header
+  const acceptVersion = request.headers.get('Accept-Version')
+  if (acceptVersion) {
+    const normalized = /^\d+$/.test(acceptVersion) ? `v${acceptVersion}` : acceptVersion
+    return { apiVersion: normalized, apiVersionSource: 'accept-version' }
+  }
+
+  // 4. X-API-Version header
+  const xApiVersion = request.headers.get('X-API-Version')
+  if (xApiVersion) {
+    const normalized = /^\d+$/.test(xApiVersion) ? `v${xApiVersion}` : xApiVersion
+    return { apiVersion: normalized, apiVersionSource: 'x-api-version' }
+  }
+
+  // 5. Default
+  return { apiVersion: DEFAULT_API_VERSION, apiVersionSource: 'default' }
 }
 
 /**
@@ -322,6 +380,11 @@ export function createRouter(): Router {
           context.version = version
         }
 
+        // Resolve API version from path, query, headers, or default
+        const { apiVersion, apiVersionSource } = resolveApiVersion(request, path)
+        context.apiVersion = apiVersion
+        context.apiVersionSource = apiVersionSource
+
         // Check if this is a protected endpoint and run auth
         const isPublicEndpoint = ['/health', '/', '/api/status'].includes(path)
 
@@ -465,22 +528,37 @@ export function createRouter(): Router {
 
         const runHandler = async () => matchedRoute!.handler(request, env, ctx, context)
 
+        let response: Response
         if (allMiddleware.length === 0) {
-          return await runHandler()
-        }
-
-        // Execute middleware chain
-        let index = 0
-        const next = async (): Promise<Response> => {
-          if (index < allMiddleware.length) {
-            const middleware = allMiddleware[index]!
-            index++
-            return middleware(request, env, ctx, next)
+          response = await runHandler()
+        } else {
+          // Execute middleware chain
+          let index = 0
+          const next = async (): Promise<Response> => {
+            if (index < allMiddleware.length) {
+              const middleware = allMiddleware[index]!
+              index++
+              return middleware(request, env, ctx, next)
+            }
+            return runHandler()
           }
-          return runHandler()
+
+          response = await next()
         }
 
-        return await next()
+        // Attach X-API-Version response header so clients know which version served the request
+        if (!response.headers.has('X-API-Version')) {
+          // Clone the response to add header (Response headers may be immutable)
+          const newHeaders = new Headers(response.headers)
+          newHeaders.set('X-API-Version', apiVersion)
+          response = new Response(response.body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: newHeaders,
+          })
+        }
+
+        return response
       } catch (error) {
         // Global error handler
         console.error('Router error:', error)

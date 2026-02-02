@@ -12,7 +12,7 @@
  * - Rollback functionality
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createMockKV } from '../test-utils/mock-kv'
 import {
   FunctionRegistry,
@@ -146,8 +146,9 @@ describe('Function Deployment via FunctionRegistry', () => {
       const initial = await registry.get('my-function')
       const initialCreatedAt = initial?.createdAt
 
-      // Small delay to ensure timestamps differ
-      await new Promise((resolve) => setTimeout(resolve, 10))
+      // Use fake timers to advance time deterministically, ensuring timestamps differ
+      vi.useFakeTimers({ now: Date.now() })
+      vi.advanceTimersByTime(100)
 
       const updatedMetadata = {
         ...initialMetadata,
@@ -155,6 +156,7 @@ describe('Function Deployment via FunctionRegistry', () => {
       }
 
       await registry.deploy(updatedMetadata)
+      vi.useRealTimers()
       const updated = await registry.get('my-function')
 
       // createdAt should be preserved

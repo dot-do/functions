@@ -886,19 +886,23 @@ describe('FunctionRegistry', () => {
         dependencies: {},
       }
 
+      // Use fake timers so we can advance time deterministically
+      vi.useFakeTimers({ now: Date.now() })
+
       await registry.deploy({ ...metadata, version: '1.0.0' })
 
-      // Small delay to ensure timestamps differ
-      await new Promise((resolve) => setTimeout(resolve, 10))
+      // Advance time to ensure timestamps differ
+      vi.advanceTimersByTime(100)
 
       await registry.deploy({ ...metadata, version: '2.0.0' })
       const v2 = await registry.get('my-func')
       const v2UpdatedAt = v2?.updatedAt
 
-      // Small delay to ensure timestamps differ
-      await new Promise((resolve) => setTimeout(resolve, 10))
+      // Advance time further to ensure rollback has a newer timestamp
+      vi.advanceTimersByTime(100)
 
       await registry.rollback('my-func', '1.0.0')
+      vi.useRealTimers()
 
       const restored = await registry.get('my-func')
       // Rollback should have a newer updatedAt than the version being rolled back to

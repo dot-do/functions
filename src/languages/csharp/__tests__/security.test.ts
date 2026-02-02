@@ -12,7 +12,7 @@
  * because the implementation does not exist yet.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   analyzeCodeSecurity,
   createExecutionMonitor,
@@ -397,12 +397,17 @@ describe('Execution Monitor', () => {
     })
 
     it('returns violation when timeout exceeded', async () => {
-      monitor.start()
-      await new Promise((r) => setTimeout(r, 1100)) // Wait longer than timeout
-      const violation = monitor.checkLimits()
-      expect(violation).not.toBeNull()
-      expect(violation?.type).toBe('timeout')
-      monitor.stop()
+      vi.useFakeTimers()
+      try {
+        monitor.start()
+        vi.advanceTimersByTime(1100) // Advance past 1000ms timeout
+        const violation = monitor.checkLimits()
+        expect(violation).not.toBeNull()
+        expect(violation?.type).toBe('timeout')
+        monitor.stop()
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 

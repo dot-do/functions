@@ -12,7 +12,7 @@
  * because the implementation does not exist yet.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   createAssemblyCache,
   createAssemblyLoadContextManager,
@@ -164,10 +164,12 @@ describe('Assembly Cache', () => {
       const first = cache.get(hash)
       const firstAccess = first?.lastAccessedAt
 
-      // Small delay
-      await new Promise((r) => setTimeout(r, 10))
+      // Use fake timers to advance time deterministically
+      vi.useFakeTimers({ now: Date.now() })
+      vi.advanceTimersByTime(100)
 
       const second = cache.get(hash)
+      vi.useRealTimers()
       expect(second?.lastAccessedAt.getTime()).toBeGreaterThan(firstAccess!.getTime())
     })
 
@@ -377,7 +379,8 @@ describe('Assembly Cache', () => {
 
   describe('evictLRU', () => {
     it('evicts least recently used entries', async () => {
-      // Add entries
+      // Add entries with incrementing timestamps to establish LRU ordering
+      vi.useFakeTimers({ now: Date.now() })
       for (let i = 0; i < 5; i++) {
         const data = new Uint8Array([i])
         const hash = await computeAssemblyHash(data)
@@ -390,8 +393,8 @@ describe('Assembly Cache', () => {
           contextId: `ctx-${i}`,
           delegatePtrs: new Map(),
         })
-        // Small delay between puts
-        await new Promise((r) => setTimeout(r, 5))
+        // Advance time between puts to establish ordering
+        vi.advanceTimersByTime(10)
       }
 
       // Access some entries to make them "recent"
@@ -408,6 +411,7 @@ describe('Assembly Cache', () => {
       // Recently accessed should still exist
       expect(cache.getByName('LRU3')).toBeDefined()
       expect(cache.getByName('LRU4')).toBeDefined()
+      vi.useRealTimers()
     })
   })
 

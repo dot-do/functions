@@ -199,9 +199,10 @@ describe('DistributedTracer', () => {
       const traceId = rootSpan.traceId
 
       const asyncOperation = async (): Promise<string> => {
-        await new Promise((resolve) => setTimeout(resolve, 10))
+        // Yield to event loop to simulate async boundary without fixed delay
+        await Promise.resolve()
         const childSpan = tracer.startSpan('async-child', { parent: rootSpan })
-        await new Promise((resolve) => setTimeout(resolve, 10))
+        await Promise.resolve()
         childSpan.end()
         return childSpan.traceId
       }
@@ -257,14 +258,19 @@ describe('DistributedTracer', () => {
     })
 
     it('should record span duration correctly', async () => {
-      const span = tracer.startSpan('timed-operation')
+      vi.useFakeTimers()
+      try {
+        const span = tracer.startSpan('timed-operation')
 
-      await new Promise((resolve) => setTimeout(resolve, 50))
-      span.end()
+        await vi.advanceTimersByTimeAsync(50)
+        span.end()
 
-      const duration = span.getDurationMs()
-      expect(duration).toBeGreaterThanOrEqual(50)
-      expect(duration).toBeLessThan(150) // Allow some variance
+        const duration = span.getDurationMs()
+        expect(duration).toBeGreaterThanOrEqual(50)
+        expect(duration).toBeLessThan(150) // Allow some variance
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('should support span kind', () => {
@@ -1061,8 +1067,8 @@ describe('DistributedTracer', () => {
           })
 
           try {
-            // Simulate function execution
-            await new Promise((resolve) => setTimeout(resolve, 10))
+            // Simulate function execution with event loop yield
+            await Promise.resolve()
             span?.setAttribute('function.result.success', true)
             return { result: 'success', functionId }
           } catch (error) {
@@ -1106,7 +1112,8 @@ describe('DistributedTracer', () => {
         parent: rootSpan,
         attributes: { 'function.id': 'step-1' },
       })
-      await new Promise((resolve) => setTimeout(resolve, 5))
+      // Yield to event loop to simulate async function execution
+      await Promise.resolve()
       func1Span.end()
 
       // Second function call
@@ -1114,7 +1121,7 @@ describe('DistributedTracer', () => {
         parent: rootSpan,
         attributes: { 'function.id': 'step-2' },
       })
-      await new Promise((resolve) => setTimeout(resolve, 5))
+      await Promise.resolve()
       func2Span.end()
 
       rootSpan.end()
