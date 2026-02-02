@@ -567,7 +567,122 @@ export function detectCapabilities(code: string): CapabilityDetectionResult {
  * Create a capability broker
  */
 export function createCapabilityBroker(): CapabilityBroker {
-  throw new Error('Not implemented: createCapabilityBroker')
+  const capabilities = new Map<string, Capability>()
+  const instances = new Map<string, CapabilityInstance>()
+  let requestCount = 0
+  let cacheHits = 0
+  let cacheMisses = 0
+
+  return {
+    register(capability: Capability): void {
+      capabilities.set(capability.id, capability)
+    },
+
+    get(id: string): Capability | undefined {
+      return capabilities.get(id)
+    },
+
+    list(): Capability[] {
+      return [...capabilities.values()]
+    },
+
+    listByCategory(category: CapabilityCategory): Capability[] {
+      return [...capabilities.values()].filter(c => c.category === category)
+    },
+
+    async request(id: string): Promise<CapabilityInstance> {
+      requestCount++
+      const cap = capabilities.get(id)
+      if (!cap) {
+        cacheMisses++
+        throw new Error(`Capability '${id}' is not registered`)
+      }
+
+      if (instances.has(id)) {
+        cacheHits++
+        return instances.get(id)!
+      }
+
+      cacheMisses++
+      const instance: CapabilityInstance = {
+        capability: cap,
+        loaded: false,
+        async load(): Promise<void> {
+          this.loaded = true
+        },
+        async unload(): Promise<void> {
+          this.loaded = false
+        },
+        getService<T>(): T | undefined {
+          return undefined
+        },
+      }
+
+      instances.set(id, instance)
+      return instance
+    },
+
+    async requestMultiple(ids: string[]): Promise<Map<string, CapabilityInstance>> {
+      const result = new Map<string, CapabilityInstance>()
+      for (const id of ids) {
+        result.set(id, await this.request(id))
+      }
+      return result
+    },
+
+    async release(id: string): Promise<void> {
+      const instance = instances.get(id)
+      if (instance) {
+        await instance.unload()
+        instances.delete(id)
+      }
+    },
+
+    isAvailable(id: string): boolean {
+      return capabilities.has(id)
+    },
+
+    resolveDependencies(id: string): string[] {
+      const deps: string[] = []
+      const visited = new Set<string>()
+
+      const resolve = (capId: string): void => {
+        if (visited.has(capId)) return
+        visited.add(capId)
+
+        const cap = capabilities.get(capId)
+        if (cap) {
+          for (const dep of cap.dependencies) {
+            resolve(dep)
+            if (!deps.includes(dep)) {
+              deps.push(dep)
+            }
+          }
+        }
+      }
+
+      resolve(id)
+      return deps
+    },
+
+    stats(): CapabilityBrokerStats {
+      let memoryUsage = 0
+      for (const instance of instances.values()) {
+        if (instance.loaded) {
+          memoryUsage += instance.capability.memoryFootprint
+        }
+      }
+
+      return {
+        registered: capabilities.size,
+        loaded: [...instances.values()].filter(i => i.loaded).length,
+        requests: requestCount,
+        cacheHits,
+        cacheMisses,
+        memoryUsage,
+      }
+    },
+  }
 }
 
 /**
@@ -634,7 +749,129 @@ export interface CapabilityComposer {
  * Create a capability composer
  */
 export function createCapabilityComposer(): CapabilityComposer {
-  throw new Error('Not implemented: createCapabilityComposer')
+  let capabilityIds = new Set<string>()
+
+  const self: CapabilityComposer = {
+    base(capabilities: string[]): CapabilityComposer {
+      capabilityIds = new Set(capabilities)
+      return self
+    },
+
+    add(capabilities: string[]): CapabilityComposer {
+      for (const id of capabilities) {
+        capabilityIds.add(id)
+      }
+      return self
+    },
+
+    remove(capabilities: string[]): CapabilityComposer {
+      for (const id of capabilities) {
+        capabilityIds.delete(id)
+      }
+      return self
+    },
+
+    filterByCategory(categories: CapabilityCategory[]): CapabilityComposer {
+      const filtered = new Set<string>()
+      for (const id of capabilityIds) {
+        const cap = BUILTIN_CAPABILITIES[id]
+        if (cap && categories.includes(cap.category)) {
+          filtered.add(id)
+        }
+      }
+      capabilityIds = filtered
+      return self
+    },
+
+    excludePrivileged(): CapabilityComposer {
+      const filtered = new Set<string>()
+      for (const id of capabilityIds) {
+        const cap = BUILTIN_CAPABILITIES[id]
+        if (cap && !cap.privileged) {
+          filtered.add(id)
+        }
+      }
+      capabilityIds = filtered
+      return self
+    },
+
+    onlyNonPrivileged(): CapabilityComposer {
+      return self.excludePrivileged()
+    },
+
+    resolveDependencies(): CapabilityComposer {
+      const resolved = new Set<string>(capabilityIds)
+      const visited = new Set<string>()
+
+      function resolve(capId: string): void {
+        if (visited.has(capId)) return
+        visited.add(capId)
+        const cap = BUILTIN_CAPABILITIES[capId]
+        if (cap) {
+          for (const dep of cap.dependencies) {
+            resolved.add(dep)
+            resolve(dep)
+          }
+        }
+      }
+
+      for (const id of [...capabilityIds]) {
+        resolve(id)
+      }
+      capabilityIds = resolved
+      return self
+    },
+
+    build(): Capability[] {
+      const result: Capability[] = []
+      for (const id of capabilityIds) {
+        const cap = BUILTIN_CAPABILITIES[id]
+        if (cap) {
+          result.push(cap)
+        }
+      }
+      return result
+    },
+
+    getAssemblies(): string[] {
+      const assemblies = new Set<string>()
+      for (const id of capabilityIds) {
+        const cap = BUILTIN_CAPABILITIES[id]
+        if (cap) {
+          for (const asm of cap.assemblies) {
+            assemblies.add(asm)
+          }
+        }
+      }
+      return [...assemblies]
+    },
+
+    getNamespaces(): string[] {
+      const namespaces = new Set<string>()
+      for (const id of capabilityIds) {
+        const cap = BUILTIN_CAPABILITIES[id]
+        if (cap) {
+          for (const ns of cap.namespaces) {
+            namespaces.add(ns)
+          }
+        }
+      }
+      return [...namespaces]
+    },
+
+    getMemoryFootprint(): number {
+      let total = 0
+      for (const id of capabilityIds) {
+        const cap = BUILTIN_CAPABILITIES[id]
+        if (cap) {
+          total += cap.memoryFootprint
+        }
+      }
+      return total
+    },
+  }
+
+  return self
 }
 
 /**

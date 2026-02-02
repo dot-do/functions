@@ -28,6 +28,20 @@ export { KVFunctionRegistry } from './kv-function-registry'
 export { KVApiKeyStore } from './kv-api-keys'
 export { AssetStorage, AssetUploader, type AssetsBinding, type StoreWasmResult } from './asset-storage'
 
+// User Storage (DO-based, replaces KV)
+export {
+  UserStorageClient,
+  UserStorageRegistry,
+  UserStorageCode,
+  UserStorageApiKeys,
+  createUserStorageClient,
+  hashApiKey,
+  type CompiledCodeResult,
+  type CreateApiKeyOptions,
+  type CreateApiKeyResult,
+  type ValidateApiKeyResult,
+} from './user-storage-client'
+
 // Auth & Rate Limiting
 export { authenticateRequest, isPublicEndpoint, DEFAULT_PUBLIC_ENDPOINTS, type AuthConfig, type AuthResult } from './auth'
 export { CompositeRateLimiter, InMemoryRateLimiter, createDefaultRateLimiter, getClientIP, createRateLimitResponse, type RateLimitConfig, type RateLimiter, type RateLimitInfo } from './rate-limiter'

@@ -54,8 +54,8 @@ pnpm dev
 # Run unit tests in watch mode
 pnpm test:watch
 
-# Run all tests (Workers pool + Node.js pool)
-pnpm test:all
+# Run all tests
+pnpm test
 
 # Type check without emitting
 pnpm typecheck
@@ -245,25 +245,22 @@ export async function compileRust(
 
 ### Test Framework
 
-We use [Vitest](https://vitest.dev/) with two configurations:
-
-1. **Workers Pool** (`vitest.config.ts`): Tests that run in Cloudflare Workers environment via `@cloudflare/vitest-pool-workers`
-2. **Node.js Pool** (`vitest.node.config.ts`): Tests that need Node.js APIs (child_process, file system, etc.)
+We use [Vitest](https://vitest.dev/) with the Cloudflare Workers pool via `@cloudflare/vitest-pool-workers`. All tests run in a Workers-like environment.
 
 ### Running Tests
 
 ```bash
-# Run Workers pool tests
+# Run all tests in watch mode
+pnpm test
+
+# Run tests once
 pnpm test:run
-
-# Run Node.js pool tests (CLI, language compilers)
-pnpm test:cli
-
-# Run all tests
-pnpm test:all
 
 # Run E2E tests
 pnpm test:e2e
+
+# Run Workers E2E tests
+pnpm test:e2e:workers
 
 # Run with coverage
 pnpm test:run -- --coverage

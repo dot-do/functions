@@ -37,8 +37,8 @@ describe('Hono API Router', () => {
     mockRegistry = createMockKV()
     mockCodeStorage = createMockKV()
     mockEnv = {
-      REGISTRY: mockRegistry,
-      CODE: mockCodeStorage,
+      FUNCTIONS_REGISTRY: mockRegistry,
+      FUNCTIONS_CODE: mockCodeStorage,
     }
     mockCtx = {
       waitUntil: vi.fn(),
@@ -53,7 +53,7 @@ describe('Hono API Router', () => {
       entryPoint: 'index.ts',
       dependencies: {},
     }
-    await mockRegistry.put('test-func', JSON.stringify(testFunctionMetadata))
+    await mockRegistry.put('registry:test-func', JSON.stringify(testFunctionMetadata))
 
     const testFunctionCode = `
       export default {
@@ -64,7 +64,7 @@ describe('Hono API Router', () => {
         }
       }
     `
-    await mockCodeStorage.put('test-func', testFunctionCode)
+    await mockCodeStorage.put('code:test-func', testFunctionCode)
   })
 
   afterEach(() => {
@@ -118,7 +118,7 @@ describe('Hono API Router', () => {
       const mockApiKeys = createMockKV()
       const envWithAuth: Env = {
         ...mockEnv,
-        API_KEYS: mockApiKeys,
+        FUNCTIONS_API_KEYS: mockApiKeys,
       }
 
       // Health endpoint should be accessible without API key
@@ -153,7 +153,7 @@ describe('Hono API Router', () => {
       const mockApiKeys = createMockKV()
       const envWithAuth: Env = {
         ...mockEnv,
-        API_KEYS: mockApiKeys,
+        FUNCTIONS_API_KEYS: mockApiKeys,
       }
 
       const request = new Request('https://functions.do/')
@@ -174,9 +174,9 @@ describe('Hono API Router', () => {
         expect(response.status).toBe(200)
         const body = (await response.json()) as JsonBody
         expect(body['id']).toBe('test-func')
-        expect(body['status']).toBe('loaded')
-        expect(body).toHaveProperty('fromCache')
-        expect(body).toHaveProperty('loadTimeMs')
+        expect(body['status']).toBe('available')
+        expect(body).toHaveProperty('version')
+        expect(body).toHaveProperty('language')
       })
 
       it('should return 404 for non-existent function', async () => {
@@ -201,7 +201,7 @@ describe('Hono API Router', () => {
         expect(response.status).toBe(200)
         const body = (await response.json()) as JsonBody
         expect(body['id']).toBe('test-func')
-        expect(body['status']).toBe('loaded')
+        expect(body['status']).toBe('available')
       })
     })
 
@@ -267,7 +267,7 @@ describe('Hono API Router', () => {
           entryPoint: 'index.ts',
           dependencies: {},
         }
-        await mockRegistry.put('error-func', JSON.stringify(errorFunctionMetadata))
+        await mockRegistry.put('registry:error-func', JSON.stringify(errorFunctionMetadata))
 
         const errorFunctionCode = `
           export default {
@@ -276,7 +276,7 @@ describe('Hono API Router', () => {
             }
           }
         `
-        await mockCodeStorage.put('error-func', errorFunctionCode)
+        await mockCodeStorage.put('code:error-func', errorFunctionCode)
 
         const request = new Request('https://functions.do/functions/error-func/invoke', {
           method: 'POST',
@@ -323,7 +323,7 @@ describe('Hono API Router', () => {
       mockApiKeys = createMockKV()
       envWithAuth = {
         ...mockEnv,
-        API_KEYS: mockApiKeys,
+        FUNCTIONS_API_KEYS: mockApiKeys,
       }
 
       // Set up a valid API key
@@ -710,7 +710,7 @@ describe('Hono API Router', () => {
       const mockApiKeys = createMockKV()
       const envWithAuth: Env = {
         ...mockEnv,
-        API_KEYS: mockApiKeys,
+        FUNCTIONS_API_KEYS: mockApiKeys,
       }
 
       configureRateLimiter({
@@ -737,7 +737,7 @@ describe('Hono API Router', () => {
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
       expect(body['id']).toBe('test-func')
-      expect(body['status']).toBe('loaded')
+      expect(body['status']).toBe('available')
     })
   })
 })
@@ -754,8 +754,8 @@ describe('Router Integration with Current Worker', () => {
     mockRegistry = createMockKV()
     mockCodeStorage = createMockKV()
     mockEnv = {
-      REGISTRY: mockRegistry,
-      CODE: mockCodeStorage,
+      FUNCTIONS_REGISTRY: mockRegistry,
+      FUNCTIONS_CODE: mockCodeStorage,
     }
     mockCtx = {
       waitUntil: vi.fn(),
@@ -770,7 +770,7 @@ describe('Router Integration with Current Worker', () => {
       entryPoint: 'index.ts',
       dependencies: {},
     }
-    await mockRegistry.put('test-func', JSON.stringify(testFunctionMetadata))
+    await mockRegistry.put('registry:test-func', JSON.stringify(testFunctionMetadata))
 
     const testFunctionCode = `
       export default {
@@ -781,7 +781,7 @@ describe('Router Integration with Current Worker', () => {
         }
       }
     `
-    await mockCodeStorage.put('test-func', testFunctionCode)
+    await mockCodeStorage.put('code:test-func', testFunctionCode)
   })
 
   afterEach(() => {
@@ -789,7 +789,7 @@ describe('Router Integration with Current Worker', () => {
   })
 
   it('should be compatible with existing Env interface', async () => {
-    // The Env interface includes REGISTRY, CODE, and optional API_KEYS
+    // The Env interface includes FUNCTIONS_REGISTRY, FUNCTIONS_CODE, and optional FUNCTIONS_API_KEYS
     const request = new Request('https://functions.do/functions/test-func', {
       method: 'GET',
     })
@@ -807,7 +807,7 @@ describe('Router Integration with Current Worker', () => {
 
     const envWithAuth: Env = {
       ...mockEnv,
-      API_KEYS: mockApiKeys,
+      FUNCTIONS_API_KEYS: mockApiKeys,
     }
 
     // Without key - should fail

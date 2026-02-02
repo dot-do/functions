@@ -71,9 +71,9 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:watch": "vitest --watch",
-    "test:cli": "vitest run --config vitest.node.config.ts",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "test:all": "vitest run && vitest run --config vitest.node.config.ts",
+    "test:e2e:workers": "vitest run --config vitest.e2e.workers.config.ts",
+    "test:e2e:all": "npm run test:e2e && npm run test:e2e:workers",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [

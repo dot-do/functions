@@ -118,9 +118,9 @@ describe('E2E: Agentic Functions API', () => {
     mockApiKeys = createMockKV()
 
     mockEnv = {
-      REGISTRY: mockRegistry,
-      CODE: mockCodeStorage,
-      API_KEYS: mockApiKeys,
+      FUNCTIONS_REGISTRY: mockRegistry,
+      FUNCTIONS_CODE: mockCodeStorage,
+      FUNCTIONS_API_KEYS: mockApiKeys,
       ANTHROPIC_API_KEY: 'test-anthropic-key',
       OPENAI_API_KEY: 'test-openai-key',
     } as Env

@@ -78,11 +78,23 @@ interface WindowState {
 /**
  * In-memory rate limiter implementation for single-worker deployments
  *
- * This implementation uses a sliding window counter approach and is suitable
- * for single-instance deployments. For multi-worker deployments, consider
- * using a distributed rate limiter backed by Durable Objects or KV.
+ * WARNING: This implementation uses an in-memory Map which does NOT persist
+ * across Worker requests in Cloudflare Workers. Each request may hit a different
+ * isolate, so the rate limit state is NOT shared across requests.
+ *
+ * USE CASES:
+ * - Local development and testing
+ * - Single-instance deployments (not typical for Workers)
+ * - Per-request rate limiting within a single isolate
+ *
+ * FOR PRODUCTION: Use the RateLimiterDO (Durable Object) in src/do/rate-limiter.ts
+ * which provides distributed rate limiting that persists across Worker isolates.
+ *
+ * @see src/do/rate-limiter.ts for the production-ready distributed implementation
  */
 export class InMemoryRateLimiter implements RateLimiter {
+  // WARNING: This Map does NOT persist across Worker requests
+  // Each isolate has its own independent rate limit state
   private windows = new Map<string, WindowState>()
   private config: RateLimitConfig
 
@@ -91,7 +103,9 @@ export class InMemoryRateLimiter implements RateLimiter {
   }
 
   /**
-   * Check if a request is allowed without incrementing the counter
+   * Check if a request is allowed without incrementing the counter.
+   * For a fresh key (no window), remaining reflects that one request
+   * is anticipated (remaining = maxRequests - 1).
    */
   async check(key: string): Promise<RateLimitResult> {
     const now = Date.now()
@@ -101,7 +115,7 @@ export class InMemoryRateLimiter implements RateLimiter {
     if (!window || window.resetAt <= now) {
       return {
         allowed: true,
-        remaining: this.config.maxRequests,
+        remaining: this.config.maxRequests - 1,
         resetAt: now + this.config.windowMs,
       }
     }
@@ -207,8 +221,18 @@ export class InMemoryRateLimiter implements RateLimiter {
 /**
  * Composite rate limiter that applies multiple rate limits
  * (e.g., per-IP and per-function limits)
+ *
+ * WARNING: If this composite limiter contains InMemoryRateLimiter instances,
+ * the rate limiting will NOT work correctly in Cloudflare Workers because
+ * in-memory Maps don't persist across requests (each request may hit a different isolate).
+ *
+ * FOR PRODUCTION: Use RateLimiterDO (Durable Object) for each rate limit category.
+ *
+ * @see src/do/rate-limiter.ts for the production-ready distributed implementation
  */
 export class CompositeRateLimiter {
+  // WARNING: This Map is fine (stores limiter instances, not cache data)
+  // but if the limiters themselves are InMemoryRateLimiter, they won't work across requests
   private limiters: Map<string, RateLimiter> = new Map()
 
   /**
@@ -311,8 +335,23 @@ export const DEFAULT_RATE_LIMITS = {
 
 /**
  * Create a pre-configured composite rate limiter with default settings
+ *
+ * WARNING: This function creates InMemoryRateLimiter instances which do NOT
+ * persist across Worker requests. This is only suitable for:
+ * - Local development and testing
+ * - Single-instance deployments
+ *
+ * FOR PRODUCTION: Create a rate limiting middleware that uses RateLimiterDO
+ * (Durable Object) instead of InMemoryRateLimiter.
+ *
+ * @see src/do/rate-limiter.ts for the production-ready distributed implementation
  */
 export function createDefaultRateLimiter(): CompositeRateLimiter {
+  // WARNING: These InMemoryRateLimiter instances do NOT work correctly in Workers
+  console.warn(
+    '[rate-limiter] createDefaultRateLimiter() creates in-memory rate limiters that do NOT persist across requests. ' +
+    'For production, use RateLimiterDO (Durable Object) instead.'
+  )
   const composite = new CompositeRateLimiter()
   composite.addLimiter('ip', new InMemoryRateLimiter(DEFAULT_RATE_LIMITS.ip))
   composite.addLimiter('function', new InMemoryRateLimiter(DEFAULT_RATE_LIMITS.function))

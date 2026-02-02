@@ -155,7 +155,153 @@ export interface CacheStats {
  * Create an assembly cache
  */
 export function createAssemblyCache(_config?: AssemblyCacheConfig): AssemblyCache {
-  throw new Error('Not implemented: createAssemblyCache')
+  const entries = new Map<string, CachedAssembly>()
+  let hits = 0
+  let misses = 0
+  let evictions = 0
+  let hotSwapCount = 0
+
+  return {
+    get(hash: string): CachedAssembly | undefined {
+      const entry = entries.get(hash)
+      if (entry) {
+        hits++
+        entry.lastAccessedAt = new Date()
+        entry.accessCount++
+        return entry
+      }
+      misses++
+      return undefined
+    },
+
+    getByName(name: string, version?: string): CachedAssembly | undefined {
+      for (const entry of entries.values()) {
+        if (entry.name === name && (version === undefined || entry.version === version)) {
+          entry.lastAccessedAt = new Date()
+          entry.accessCount++
+          return entry
+        }
+      }
+      return undefined
+    },
+
+    put(assembly: Omit<CachedAssembly, 'createdAt' | 'lastAccessedAt' | 'accessCount'>): void {
+      const now = new Date()
+      entries.set(assembly.hash, {
+        ...assembly,
+        createdAt: now,
+        lastAccessedAt: now,
+        accessCount: 0,
+      })
+    },
+
+    has(hash: string): boolean {
+      return entries.has(hash)
+    },
+
+    remove(hash: string): boolean {
+      return entries.delete(hash)
+    },
+
+    clear(): void {
+      entries.clear()
+    },
+
+    stats(): CacheStats {
+      let totalSize = 0
+      for (const entry of entries.values()) {
+        totalSize += entry.size
+      }
+      const total = hits + misses
+      return {
+        entries: entries.size,
+        totalSize,
+        hits,
+        misses,
+        hitRate: total === 0 ? 0 : hits / total,
+        evictions,
+        hotSwaps: hotSwapCount,
+      }
+    },
+
+    async hotSwap(name: string, newAssembly: Uint8Array, newVersion: string): Promise<HotSwapResult> {
+      const startTime = Date.now()
+      hotSwapCount++
+
+      // Find existing entry
+      let previousVersion: string | undefined
+      let delegatesInvalidated = 0
+      for (const [hash, entry] of entries) {
+        if (entry.name === name) {
+          previousVersion = entry.version
+          delegatesInvalidated = entry.delegatePtrs.size
+          entries.delete(hash)
+          break
+        }
+      }
+
+      // Add new entry
+      const hashBuffer = await crypto.subtle.digest('SHA-256', newAssembly)
+      const hashArray = Array.from(new Uint8Array(hashBuffer))
+      const newHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+
+      const now = new Date()
+      entries.set(newHash, {
+        hash: newHash,
+        name,
+        version: newVersion,
+        data: newAssembly,
+        size: newAssembly.length,
+        contextId: `ctx-${newHash.slice(0, 8)}`,
+        createdAt: now,
+        lastAccessedAt: now,
+        accessCount: 0,
+        delegatePtrs: new Map(),
+      })
+
+      return {
+        success: true,
+        previousVersion,
+        newVersion,
+        swapTimeMs: Date.now() - startTime,
+        delegatesInvalidated,
+      }
+    },
+
+    getVersions(name: string): CachedAssembly[] {
+      const result: CachedAssembly[] = []
+      for (const entry of entries.values()) {
+        if (entry.name === name) {
+          result.push(entry)
+        }
+      }
+      return result
+    },
+
+    evictLRU(count = 1): number {
+      const sorted = [...entries.entries()].sort(
+        (a, b) => a[1].lastAccessedAt.getTime() - b[1].lastAccessedAt.getTime()
+      )
+      const toEvict = Math.min(count, sorted.length)
+      for (let i = 0; i < toEvict; i++) {
+        entries.delete(sorted[i][0])
+        evictions++
+      }
+      return toEvict
+    },
+
+    async persist(): Promise<void> {
+      // No-op for in-memory cache without persistent storage configured
+    },
+
+    async restore(): Promise<void> {
+      // No-op for in-memory cache without persistent storage configured
+    },
+
+    dispose(): void {
+      entries.clear()
+    },
+  }
 }
 
 /**
@@ -323,7 +469,63 @@ export interface AssemblyLoadContextInfo {
  * Create an AssemblyLoadContext manager
  */
 export function createAssemblyLoadContextManager(): AssemblyLoadContextManager {
-  throw new Error('Not implemented: createAssemblyLoadContextManager')
+  const contexts = new Map<string, AssemblyLoadContextInfo>()
+  let nextId = 1
+
+  return {
+    create(name: string): string {
+      const id = `alc-${nextId++}`
+      contexts.set(id, {
+        id,
+        name,
+        isCollectible: true,
+        loadedAssemblies: [],
+        createdAt: new Date(),
+        memoryUsage: 0,
+      })
+      return id
+    },
+
+    async load(contextId: string, assemblyData: Uint8Array): Promise<AssemblyLoadResult> {
+      const startTime = Date.now()
+      const ctx = contexts.get(contextId)
+      if (!ctx) {
+        return { success: false, loadTimeMs: Date.now() - startTime, error: 'Context not found' }
+      }
+
+      // Validate PE header (MZ magic bytes)
+      if (assemblyData.length < 2 || assemblyData[0] !== 77 || assemblyData[1] !== 90) {
+        return { success: false, loadTimeMs: Date.now() - startTime, error: 'Invalid assembly: missing PE header' }
+      }
+
+      const assemblyName = `Assembly_${ctx.loadedAssemblies.length}`
+      ctx.loadedAssemblies.push(assemblyName)
+      ctx.memoryUsage += assemblyData.length
+
+      return {
+        success: true,
+        assemblyName,
+        exportedTypes: [],
+        loadTimeMs: Date.now() - startTime,
+      }
+    },
+
+    async unload(contextId: string): Promise<boolean> {
+      return contexts.delete(contextId)
+    },
+
+    getContext(contextId: string): AssemblyLoadContextInfo | undefined {
+      return contexts.get(contextId)
+    },
+
+    listContexts(): AssemblyLoadContextInfo[] {
+      return [...contexts.values()]
+    },
+
+    isCollectible(contextId: string): boolean {
+      return contexts.get(contextId)?.isCollectible ?? false
+    },
+  }
 }
 
 /**
@@ -397,7 +599,33 @@ export interface LRUPolicy {
  * Create an LRU eviction policy tracker
  */
 export function createLRUPolicy(): LRUPolicy {
-  throw new Error('Not implemented: createLRUPolicy')
+  // Use an array to maintain insertion/access order (most recent at the end)
+  const order: string[] = []
+
+  return {
+    access(key: string): void {
+      const idx = order.indexOf(key)
+      if (idx !== -1) {
+        order.splice(idx, 1)
+      }
+      order.push(key)
+    },
+
+    getLRU(count: number): string[] {
+      return order.slice(0, Math.min(count, order.length))
+    },
+
+    remove(key: string): void {
+      const idx = order.indexOf(key)
+      if (idx !== -1) {
+        order.splice(idx, 1)
+      }
+    },
+
+    clear(): void {
+      order.length = 0
+    },
+  }
 }
 
 /**
@@ -434,7 +662,43 @@ export interface DelegateCache {
  * Create a delegate cache
  */
 export function createDelegateCache(): DelegateCache {
-  throw new Error('Not implemented: createDelegateCache')
+  // Map of assemblyHash -> Map of methodSignature -> delegatePtr
+  const cache = new Map<string, Map<string, number>>()
+
+  return {
+    get(assemblyHash: string, methodSignature: string): number | undefined {
+      return cache.get(assemblyHash)?.get(methodSignature)
+    },
+
+    put(assemblyHash: string, methodSignature: string, delegatePtr: number): void {
+      let methods = cache.get(assemblyHash)
+      if (!methods) {
+        methods = new Map()
+        cache.set(assemblyHash, methods)
+      }
+      methods.set(methodSignature, delegatePtr)
+    },
+
+    invalidateAssembly(assemblyHash: string): number {
+      const methods = cache.get(assemblyHash)
+      if (!methods) return 0
+      const count = methods.size
+      cache.delete(assemblyHash)
+      return count
+    },
+
+    clear(): void {
+      cache.clear()
+    },
+
+    size(): number {
+      let total = 0
+      for (const methods of cache.values()) {
+        total += methods.size
+      }
+      return total
+    },
+  }
 }
 
 /**

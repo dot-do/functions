@@ -13,17 +13,6 @@
  * 3. Python timeout handling
  * 4. Data type conversion between Python and JavaScript
  * 5. Python standard library usage
- *
- * ENVIRONMENT: Node.js (vitest.node.config.ts)
- *
- * These tests require the Pyodide runtime to be available. They are excluded
- * from the vitest-pool-workers config (Miniflare) and run via the Node.js
- * config instead:
- *
- *   npm run test:cli  # or: npx vitest run --config vitest.node.config.ts
- *
- * Pyodide is not available in Miniflare because it requires Node.js-specific
- * APIs (file system access, native module loading) or a browser environment.
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
@@ -53,8 +42,6 @@ function createPythonFunction<TInput = unknown, TOutput = unknown>(
   })
 }
 
-// These tests run in vitest.node.config.ts (Node.js environment)
-// Pyodide is available as a devDependency
 describe('Python Execution via CodeExecutor', () => {
   let executor: CodeExecutor
   let mockEnv: CodeExecutorEnv

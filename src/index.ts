@@ -35,6 +35,12 @@ export interface Env extends RouterEnv {
   TEST?: unknown
   /** Dispatch namespace for user-deployed functions (Workers for Platforms fallback) */
   USER_FUNCTIONS?: DispatchNamespace
+  /**
+   * Per-user storage Durable Object namespace.
+   * Provides isolated storage for functions, code, and API keys.
+   * Replaces KV-based storage (FUNCTIONS_REGISTRY, FUNCTIONS_CODE, FUNCTIONS_API_KEYS).
+   */
+  USER_STORAGE?: DurableObjectNamespace
 }
 
 // Create the router instance (shared for rate limiting state)
@@ -120,6 +126,7 @@ export {
 export { FunctionExecutor } from './do/function-executor'
 export { FunctionLogs } from './do/function-logs'
 export { RateLimiterDO } from './do/rate-limiter'
+export { UserStorage } from './do/user-storage'
 
 // Export router types for consumers who want to extend routing
 export type { Handler, Middleware, Router, RouteContext } from './api/router'

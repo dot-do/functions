@@ -32,6 +32,59 @@ import { evaluate, type SandboxEnv, type EvaluateResult } from 'ai-evaluate'
 import { PyodideExecutor } from '../languages/python/pyodide-executor'
 import { TIER_TIMEOUTS, CODE_CACHE, DETERMINISTIC } from '../config'
 
+// =============================================================================
+// CACHE API HELPERS
+// =============================================================================
+
+/** Internal cache domain for creating cache keys */
+const CODE_CACHE_DOMAIN = 'https://code-cache.internal'
+
+/**
+ * Create a cache key Request for compiled code.
+ * Uses a synthetic URL that uniquely identifies the cached resource.
+ */
+function createCompiledCodeCacheKey(hash: string): Request {
+  return new Request(`${CODE_CACHE_DOMAIN}/compiled/${hash}`)
+}
+
+/**
+ * Get cached compiled code from Cloudflare Cache API.
+ */
+async function getCachedCompiledCode(hash: string): Promise<CompiledCodeCache | null> {
+  try {
+    const cache = caches.default
+    const cacheKey = createCompiledCodeCacheKey(hash)
+    const cached = await cache.match(cacheKey)
+    if (cached) {
+      return await cached.json() as CompiledCodeCache
+    }
+  } catch (error) {
+    // Cache miss or error - fall through
+    console.debug(`[code-cache] get error for ${hash}:`, error instanceof Error ? error.message : String(error))
+  }
+  return null
+}
+
+/**
+ * Cache compiled code using Cloudflare Cache API.
+ */
+async function cacheCompiledCode(hash: string, entry: CompiledCodeCache, ttlSeconds: number): Promise<void> {
+  try {
+    const cache = caches.default
+    const cacheKey = createCompiledCodeCacheKey(hash)
+    const response = new Response(JSON.stringify(entry), {
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': `max-age=${ttlSeconds}`,
+      },
+    })
+    await cache.put(cacheKey, response)
+  } catch (error) {
+    // Cache put failed - non-fatal
+    console.debug(`[code-cache] put error for ${hash}:`, error instanceof Error ? error.message : String(error))
+  }
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -302,20 +355,23 @@ const DEFAULT_CACHE_TTL_MS = CODE_CACHE.TTL_MS
 
 /**
  * CodeExecutor executes code functions in sandboxed environments
+ *
+ * NOTE: This executor uses Cloudflare's Cache API for caching compiled code.
+ * In-memory Maps don't persist across Worker requests (each request may hit
+ * a different isolate), so we use the edge cache for cross-request caching.
  */
 export class CodeExecutor {
   private readonly env: CodeExecutorEnv
-  private readonly compiledCache = new Map<string, CompiledCodeCache>()
-  private readonly maxCacheSize: number
+  // NOTE: Removed in-memory compiledCache Map - using Cache API instead
+  // The Cache API persists across Worker isolates at the edge
   private readonly cacheTTLMs: number
   private cacheHits = 0
   private cacheMisses = 0
-  private cacheEvictions = 0
   private pyodideExecutor: PyodideExecutor | null = null
 
   constructor(env: CodeExecutorEnv, config?: CodeExecutorConfig) {
     this.env = env
-    this.maxCacheSize = config?.maxCacheSize ?? DEFAULT_MAX_CACHE_SIZE
+    // maxCacheSize no longer applies - Cache API manages its own eviction
     this.cacheTTLMs = config?.cacheTTLMs ?? DEFAULT_CACHE_TTL_MS
   }
 
@@ -363,25 +419,20 @@ export class CodeExecutor {
     // Load source code (errors propagate to caller)
     const sourceCode = await this.loadSource(definition.source)
 
-    // Check for cached compiled code
+    // Check for cached compiled code using Cache API
     const codeHash = hashCode(sourceCode)
     let compiledCode: string
     let compilationTimeMs = 0
     let cacheHit = false
 
-    const cached = this.compiledCache.get(codeHash)
-    if (cached && !this.isExpired(cached)) {
-      // Move to end of Map for LRU ordering
-      this.touchCacheEntry(codeHash, cached)
+    // Try to get from Cache API (persists across Worker isolates)
+    const cached = await getCachedCompiledCode(codeHash)
+    if (cached) {
       compiledCode = cached.compiledCode
       compilationTimeMs = 0 // No compilation needed
       cacheHit = true
       this.cacheHits++
     } else {
-      // Remove expired entry if present
-      if (cached) {
-        this.compiledCache.delete(codeHash)
-      }
       // Compile the code
       const compileStart = Date.now()
       try {
@@ -422,19 +473,23 @@ export class CodeExecutor {
       }
       compilationTimeMs = Date.now() - compileStart
 
-      // Evict oldest entry if cache is full
-      if (this.compiledCache.size >= this.maxCacheSize) {
-        this.evictOldest()
-      }
-
-      // Cache the compiled code
-      this.compiledCache.set(codeHash, {
+      // Cache the compiled code using Cache API
+      const cacheEntry: CompiledCodeCache = {
         compiledCode,
         language: definition.language,
         compilationTimeMs,
         hash: codeHash,
         cachedAt: Date.now(),
-      })
+      }
+      // Convert TTL from ms to seconds for Cache-Control header
+      const ttlSeconds = Math.floor(this.cacheTTLMs / 1000)
+      // Await cache put to ensure proper cleanup in test environments
+      // In production, this adds minimal latency as cache.put is fast
+      try {
+        await cacheCompiledCode(codeHash, cacheEntry, ttlSeconds)
+      } catch {
+        // Ignore cache errors - they're non-fatal
+      }
       this.cacheMisses++
     }
 
@@ -542,27 +597,47 @@ export class CodeExecutor {
 
   /**
    * Invalidate cached compiled code for a function
+   *
+   * NOTE: With Cache API, we cannot directly invalidate by function ID since we cache by hash.
+   * The Cache API entries will expire based on their TTL (Cache-Control max-age).
+   * For immediate invalidation of a specific hash, use invalidateCacheByHash().
    */
-  async invalidateCache(functionId: string): Promise<void> {
-    // In a real implementation, we'd track which hashes belong to which function IDs
-    // For now, we can't directly invalidate by function ID since we cache by hash
-    // This would need a separate index in production
-    // For now, clear all cache (simple implementation)
-    this.compiledCache.clear()
+  async invalidateCache(_functionId: string): Promise<void> {
+    // With Cache API, we cannot clear all entries or invalidate by function ID
+    // since we cache by content hash, not function ID.
+    // Entries will expire naturally based on their TTL.
+    // For production, consider tracking function ID -> hash mappings in KV
+    // to enable targeted invalidation.
     this.cacheHits = 0
     this.cacheMisses = 0
-    this.cacheEvictions = 0
+  }
+
+  /**
+   * Invalidate a specific cached entry by its content hash
+   */
+  async invalidateCacheByHash(hash: string): Promise<boolean> {
+    try {
+      const cache = caches.default
+      const cacheKey = createCompiledCodeCacheKey(hash)
+      return await cache.delete(cacheKey)
+    } catch (error) {
+      console.debug(`[code-cache] delete error for ${hash}:`, error instanceof Error ? error.message : String(error))
+      return false
+    }
   }
 
   /**
    * Get cache statistics
+   *
+   * NOTE: With Cache API, we cannot get the cache size.
+   * Only hit/miss counters are available (reset per isolate).
    */
   getCacheStats(): CacheStats {
     return {
-      size: this.compiledCache.size,
+      size: 0, // Cannot determine Cache API size
       hits: this.cacheHits,
       misses: this.cacheMisses,
-      evictions: this.cacheEvictions,
+      evictions: 0, // Cache API manages its own eviction
     }
   }
 
@@ -570,33 +645,9 @@ export class CodeExecutor {
   // Private Methods
   // ==========================================================================
 
-  /**
-   * Check if a cache entry has expired based on TTL
-   */
-  private isExpired(entry: CompiledCodeCache): boolean {
-    return Date.now() - entry.cachedAt > this.cacheTTLMs
-  }
-
-  /**
-   * Evict the oldest (least recently used) entry from the cache.
-   * Uses Map's insertion order for O(1) eviction - the first entry is always the oldest.
-   */
-  private evictOldest(): void {
-    const firstKey = this.compiledCache.keys().next().value
-    if (firstKey !== undefined) {
-      this.compiledCache.delete(firstKey)
-      this.cacheEvictions++
-    }
-  }
-
-  /**
-   * Move a cache entry to the end of the Map to mark it as recently used.
-   * This is O(1) and maintains LRU ordering by deletion and re-insertion.
-   */
-  private touchCacheEntry(key: string, entry: CompiledCodeCache): void {
-    this.compiledCache.delete(key)
-    this.compiledCache.set(key, entry)
-  }
+  // NOTE: Removed isExpired(), evictOldest(), touchCacheEntry() methods
+  // These were for the in-memory LRU cache which has been replaced by Cache API.
+  // Cache API handles TTL expiration and eviction automatically.
 
   /**
    * Determine the isolate type based on language and sandbox config

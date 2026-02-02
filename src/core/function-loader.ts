@@ -5,6 +5,88 @@ import { evaluate, type SandboxEnv, type EvaluateResult } from 'ai-evaluate'
 import { createLogger, type Logger, type LoggerConfig } from './logger'
 import { LOADER, RETRY, CIRCUIT_BREAKER, CACHE } from '../config'
 
+// =============================================================================
+// CACHE API HELPERS
+// =============================================================================
+
+/** Internal cache domain for creating cache keys */
+const LOADER_CACHE_DOMAIN = 'https://loader-cache.internal'
+
+/**
+ * Serializable cache entry for Cache API storage
+ */
+interface SerializableCacheEntry {
+  stubId: string
+  loadedAt: number
+  lastAccessedAt: number
+  version: string
+  metadata: FunctionMetadata
+  code: string // Store the code so we can recreate the stub
+}
+
+/**
+ * Create a cache key Request for function stubs.
+ */
+function createLoaderCacheKey(functionId: string, version?: string): Request {
+  const path = version ? `/stubs/${functionId}/${version}` : `/stubs/${functionId}/latest`
+  return new Request(`${LOADER_CACHE_DOMAIN}${path}`)
+}
+
+/**
+ * Get cached function entry from Cloudflare Cache API.
+ */
+async function getCachedFunctionEntry(functionId: string, version?: string): Promise<SerializableCacheEntry | null> {
+  try {
+    const cache = caches.default
+    const cacheKey = createLoaderCacheKey(functionId, version)
+    const cached = await cache.match(cacheKey)
+    if (cached) {
+      return await cached.json() as SerializableCacheEntry
+    }
+  } catch (error) {
+    console.debug(`[loader-cache] get error for ${functionId}:`, error instanceof Error ? error.message : String(error))
+  }
+  return null
+}
+
+/**
+ * Cache function entry using Cloudflare Cache API.
+ */
+async function cacheFunctionEntry(
+  functionId: string,
+  entry: SerializableCacheEntry,
+  ttlSeconds: number,
+  version?: string
+): Promise<void> {
+  try {
+    const cache = caches.default
+    const cacheKey = createLoaderCacheKey(functionId, version)
+    const response = new Response(JSON.stringify(entry), {
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': `max-age=${ttlSeconds}`,
+      },
+    })
+    await cache.put(cacheKey, response)
+  } catch (error) {
+    console.debug(`[loader-cache] put error for ${functionId}:`, error instanceof Error ? error.message : String(error))
+  }
+}
+
+/**
+ * Invalidate cached function entry.
+ */
+async function invalidateCachedFunction(functionId: string, version?: string): Promise<boolean> {
+  try {
+    const cache = caches.default
+    const cacheKey = createLoaderCacheKey(functionId, version)
+    return await cache.delete(cacheKey)
+  } catch (error) {
+    console.debug(`[loader-cache] delete error for ${functionId}:`, error instanceof Error ? error.message : String(error))
+    return false
+  }
+}
+
 /**
  * Interface for the function registry dependency
  */
@@ -312,21 +394,27 @@ export interface IFunctionLoader {
  * a WorkerStub-like interface that can be used to invoke the function.
  *
  * Features:
- * - Caching of loaded functions for performance
- * - Request coalescing to prevent duplicate loads
- * - LRU-style cache eviction when maxCacheSize is exceeded
+ * - Caching of loaded functions using Cloudflare Cache API (persists across isolates)
+ * - Request coalescing to prevent duplicate loads within a single request
  * - Cache statistics tracking
  * - Retry logic with exponential backoff for transient failures
- * - Circuit breaker pattern for failing functions
+ * - Circuit breaker pattern for failing functions (per-isolate state)
  * - Graceful degradation for partial failures
  * - Comprehensive metrics
  * - Health check support
  * - Version rollback support
+ *
+ * NOTE: This loader uses Cloudflare's Cache API for caching function stubs.
+ * In-memory Maps don't persist across Worker requests (each request may hit
+ * a different isolate), so we use the edge cache for cross-request caching.
+ *
+ * IMPORTANT: Circuit breaker state is per-isolate and doesn't persist across
+ * requests. For distributed circuit breaking, use Durable Objects.
  */
 export class FunctionLoader implements IFunctionLoader {
   private registry: Registry
   private codeStorage: CodeStorage
-  private maxCacheSize: number
+  private cacheTtlSeconds: number
   private timeout: number
 
   // Retry configuration
@@ -345,17 +433,20 @@ export class FunctionLoader implements IFunctionLoader {
   // Structured logger
   private logger: Logger
 
-  // Cache for loaded function stubs
-  private cache: Map<string, CacheEntry> = new Map()
+  // NOTE: Removed cache Map - using Cache API instead for cross-isolate persistence
+  // Cache API entries store serializable data; stubs are recreated on cache hit
 
-  // In-flight requests for request coalescing
+  // In-flight requests for request coalescing (within a single request)
+  // This Map is legitimate - it tracks concurrent loads within the same isolate
   private inFlight: Map<string, Promise<WorkerStub>> = new Map()
 
-  // Cache statistics
+  // Cache statistics (reset per isolate, but useful for debugging)
   private hits: number = 0
   private misses: number = 0
 
-  // Circuit breaker states per function
+  // Circuit breaker states per function (per-isolate, doesn't persist)
+  // NOTE: This Map is per-isolate. For distributed circuit breaking, use Durable Objects.
+  // We keep this for defense-in-depth within a single isolate's request handling.
   private circuitBreakers: Map<string, CircuitBreakerState> = new Map()
 
   // Metrics tracking
@@ -370,7 +461,9 @@ export class FunctionLoader implements IFunctionLoader {
   constructor(config: FunctionLoaderConfig) {
     this.registry = config.registry
     this.codeStorage = config.codeStorage
-    this.maxCacheSize = config.maxCacheSize ?? CACHE.DEFAULT_MAX_SIZE
+    // Convert maxCacheSize config to TTL; Cache API manages its own eviction
+    // Default to 1 hour cache TTL (convert from ms to seconds)
+    this.cacheTtlSeconds = Math.floor((CACHE.DEFAULT_TTL_MS ?? 3600000) / 1000)
     this.timeout = config.timeout ?? LOADER.DEFAULT_TIMEOUT_MS
     this.gracefulDegradation = config.gracefulDegradation ?? true
     if (config.fallbackVersion !== undefined) {
@@ -494,16 +587,16 @@ export class FunctionLoader implements IFunctionLoader {
       }
     }
 
-    // Check cache first
-    const cached = this.cache.get(functionId)
-    if (cached) {
+    // Check Cache API first
+    const cachedEntry = await getCachedFunctionEntry(functionId)
+    if (cachedEntry) {
       this.hits++
-      // Move entry to end of Map to maintain LRU ordering (O(1) operation)
-      this.touchCacheEntry(functionId, cached)
+      // Recreate the stub from cached data
+      const stub = this.createStub(functionId, cachedEntry.code, cachedEntry.metadata)
       this.successfulLoads++
       this.recordSuccess(functionId)
       return {
-        stub: cached.stub,
+        stub,
         success: true,
         fromCache: true,
         loadTimeMs: Date.now() - startTime,
@@ -706,15 +799,12 @@ export class FunctionLoader implements IFunctionLoader {
     // Validate function ID format before attempting to load
     validateFunctionId(functionId)
 
-    const cacheKey = `${functionId}@${version}`
-
-    // Check cache first
-    const cached = this.cache.get(cacheKey)
-    if (cached) {
+    // Check Cache API first
+    const cachedEntry = await getCachedFunctionEntry(functionId, version)
+    if (cachedEntry) {
       this.hits++
-      // Move entry to end of Map to maintain LRU ordering (O(1) operation)
-      this.touchCacheEntry(cacheKey, cached)
-      return cached.stub
+      // Recreate the stub from cached data
+      return this.createStub(functionId, cachedEntry.code, cachedEntry.metadata)
     }
 
     this.misses++
@@ -744,20 +834,21 @@ export class FunctionLoader implements IFunctionLoader {
     // Create the worker stub
     const stub = this.createStub(functionId, code, metadata)
 
-    // Evict oldest entry if cache is full
-    if (this.cache.size >= this.maxCacheSize) {
-      this.evictOldest()
-    }
-
-    // Add to cache with version-specific key
+    // Cache to Cache API
     const now = Date.now()
-    this.cache.set(cacheKey, {
-      stub,
+    const cacheEntry: SerializableCacheEntry = {
+      stubId: functionId,
       loadedAt: now,
       lastAccessedAt: now,
       version,
       metadata,
-    })
+      code,
+    }
+    try {
+      await cacheFunctionEntry(functionId, cacheEntry, this.cacheTtlSeconds, version)
+    } catch {
+      // Ignore cache errors - they're non-fatal
+    }
 
     return stub
   }
@@ -767,7 +858,7 @@ export class FunctionLoader implements IFunctionLoader {
    */
   async rollback(functionId: string, version: string): Promise<WorkerStub> {
     // Invalidate the current cached version
-    this.invalidate(functionId)
+    await this.invalidate(functionId)
 
     // Reset circuit breaker on rollback
     this.resetCircuitBreaker(functionId)
@@ -775,10 +866,15 @@ export class FunctionLoader implements IFunctionLoader {
     // Load the specified version
     const stub = await this.loadVersion(functionId, version)
 
-    // Cache it as the primary version too
-    const cached = this.cache.get(`${functionId}@${version}`)
-    if (cached) {
-      this.cache.set(functionId, cached)
+    // The version is already cached by loadVersion
+    // Also cache it as the 'latest' version
+    const cachedEntry = await getCachedFunctionEntry(functionId, version)
+    if (cachedEntry) {
+      try {
+        await cacheFunctionEntry(functionId, cachedEntry, this.cacheTtlSeconds)
+      } catch {
+        // Ignore cache errors
+      }
     }
 
     this.rollbackCount++
@@ -807,20 +903,21 @@ export class FunctionLoader implements IFunctionLoader {
     // Create the worker stub
     const stub = this.createStub(functionId, code, metadata)
 
-    // Evict oldest entry if cache is full
-    if (this.cache.size >= this.maxCacheSize) {
-      this.evictOldest()
-    }
-
-    // Add to cache
+    // Cache to Cache API
     const now = Date.now()
-    this.cache.set(functionId, {
-      stub,
+    const cacheEntry: SerializableCacheEntry = {
+      stubId: functionId,
       loadedAt: now,
       lastAccessedAt: now,
       version: metadata.version,
       metadata,
-    })
+      code,
+    }
+    try {
+      await cacheFunctionEntry(functionId, cacheEntry, this.cacheTtlSeconds)
+    } catch {
+      // Ignore cache errors - they're non-fatal
+    }
 
     return stub
   }
@@ -1019,27 +1116,9 @@ export class FunctionLoader implements IFunctionLoader {
     } as Record<string, Function | string>
   }
 
-  /**
-   * Evict the oldest (least recently used) entry from the cache.
-   * Uses Map's insertion order for O(1) eviction - the first entry is always the oldest.
-   */
-  private evictOldest(): void {
-    // Map maintains insertion order, so the first entry is the oldest (LRU)
-    const firstKey = this.cache.keys().next().value
-    if (firstKey !== undefined) {
-      this.cache.delete(firstKey)
-    }
-  }
-
-  /**
-   * Move a cache entry to the end of the Map to mark it as recently used.
-   * This is O(1) and maintains LRU ordering by deletion and re-insertion.
-   */
-  private touchCacheEntry(key: string, entry: CacheEntry): void {
-    this.cache.delete(key)
-    entry.lastAccessedAt = Date.now()
-    this.cache.set(key, entry)
-  }
+  // NOTE: Removed evictOldest() and touchCacheEntry() methods
+  // These were for the in-memory LRU cache which has been replaced by Cache API.
+  // Cache API handles TTL expiration and eviction automatically.
 
   /**
    * Calculate retry delay with exponential backoff and optional jitter.
@@ -1178,31 +1257,36 @@ export class FunctionLoader implements IFunctionLoader {
    *
    * @param functionId - The function ID to invalidate
    */
-  invalidate(functionId: string): void {
-    this.cache.delete(functionId)
-    // Also invalidate any version-specific entries
-    for (const key of this.cache.keys()) {
-      if (key.startsWith(`${functionId}@`)) {
-        this.cache.delete(key)
-      }
-    }
+  async invalidate(functionId: string): Promise<void> {
+    // Invalidate the 'latest' version
+    await invalidateCachedFunction(functionId)
+    // Note: Cannot bulk-invalidate version-specific entries without tracking them
+    // Version-specific entries will expire based on their TTL
   }
 
   /**
    * Clear the entire cache.
+   *
+   * NOTE: With Cache API, we cannot clear all entries.
+   * Entries will expire based on their TTL (Cache-Control max-age).
+   * @deprecated Use invalidate() for specific entries instead
    */
   clearCache(): void {
-    this.cache.clear()
+    // Cannot clear Cache API entries - they expire based on TTL
+    console.debug('[loader-cache] clearCache() called but Cache API entries cannot be bulk-cleared')
   }
 
   /**
    * Get cache statistics.
    *
-   * @returns Cache statistics including size, hits, and misses
+   * NOTE: With Cache API, we cannot get the cache size.
+   * Only hit/miss counters are available (reset per isolate).
+   *
+   * @returns Cache statistics including hits and misses
    */
   getCacheStats(): CacheStats {
     return {
-      size: this.cache.size,
+      size: 0, // Cannot determine Cache API size
       hits: this.hits,
       misses: this.misses,
     }
@@ -1256,13 +1340,15 @@ export class FunctionLoader implements IFunctionLoader {
    * Perform a health check on the loader and its dependencies.
    */
   async healthCheck(): Promise<HealthCheckResult> {
+    const hitRate = this.hits + this.misses > 0 ? this.hits / (this.hits + this.misses) : 0
     const result: HealthCheckResult = {
       healthy: true,
       status: 'healthy',
       details: {
         registry: { available: false },
         codeStorage: { available: false },
-        cache: { size: this.cache.size, hitRate: this.hits + this.misses > 0 ? this.hits / (this.hits + this.misses) : 0 },
+        // Cache API size is not available; report hit rate instead
+        cache: { size: 0, hitRate },
         circuitBreakers: { openCount: 0, totalCount: this.circuitBreakers.size },
       },
       timestamp: new Date().toISOString(),

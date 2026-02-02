@@ -7,5 +7,23 @@
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
-  }
+  },
+
+  // Durable Objects needed for testing
+  "durable_objects": {
+    "bindings": [
+      { "name": "FUNCTION_EXECUTOR", "class_name": "FunctionExecutor" },
+      { "name": "FUNCTION_LOGS", "class_name": "FunctionLogs" },
+      { "name": "RATE_LIMITER", "class_name": "RateLimiterDO" },
+      { "name": "USER_STORAGE", "class_name": "UserStorage" }
+    ]
+  },
+
+  // Migrations with SQLite enabled for DOs that need it
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["FunctionExecutor", "FunctionLogs", "RateLimiterDO", "UserStorage"]
+    }
+  ]
 }

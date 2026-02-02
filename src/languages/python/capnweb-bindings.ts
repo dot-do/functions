@@ -273,9 +273,9 @@ function parsePythonFunction(code: string, startIndex: number): PythonFunction |
   const [fullMatch, indent, asyncKeyword, name, paramsStr, returnTypeStr] = match
   const isAsync = !!asyncKeyword
 
-  // Parse parameters
+  // Parse parameters (bracket-aware splitting to handle types like dict[str, int])
   const params: Array<{ name: string; type: PythonType }> = []
-  const paramParts = paramsStr.split(',')
+  const paramParts = splitTypeArgs(paramsStr)
 
   for (const part of paramParts) {
     const trimmed = part.trim()

@@ -638,7 +638,11 @@ function createProvider(
  * Multi-provider function classifier with caching and automatic fallback.
  *
  * The classifier tries providers in order until one succeeds. Results are cached
- * to avoid repeated classification calls for the same function.
+ * using Cloudflare's Cache API to avoid repeated classification calls for the same function.
+ *
+ * NOTE: This classifier uses Cloudflare's Cache API for caching results.
+ * In-memory Maps don't persist across Worker requests (each request may hit
+ * a different isolate), so we use the edge cache for cross-request caching.
  *
  * @example
  * ```typescript
@@ -706,7 +710,7 @@ export class FunctionClassifier {
   ): Promise<ClassificationResult> {
     const cacheKey = this.computeCacheKey(name, description, inputSchema)
 
-    // Check cache first
+    // Check in-memory cache first
     const cached = this.getFromCache(cacheKey)
     if (cached) {
       return cached
@@ -733,7 +737,7 @@ export class FunctionClassifier {
             latencyMs: Date.now() - startTime,
           }
 
-          // Cache the result
+          // Cache the result in-memory
           this.setInCache(cacheKey, result)
 
           return result
@@ -802,29 +806,35 @@ export class FunctionClassifier {
     return parts.join(':')
   }
 
+  /**
+   * Get a cached classification result if still valid.
+   */
   private getFromCache(key: string): ClassificationResult | null {
     const entry = this.cache.get(key)
     if (!entry) return null
 
-    const now = Date.now()
-    if (now - entry.timestamp > entry.ttl) {
+    // Check TTL
+    if (Date.now() - entry.timestamp > entry.ttl) {
       this.cache.delete(key)
       return null
     }
 
-    // Touch for LRU ordering
+    // Move to end for LRU ordering
     this.cache.delete(key)
     this.cache.set(key, entry)
 
     return entry.result
   }
 
+  /**
+   * Cache a classification result with LRU eviction.
+   */
   private setInCache(key: string, result: ClassificationResult): void {
-    // Evict oldest if cache is full
-    if (this.cache.size >= this.maxCacheSize && !this.cache.has(key)) {
-      const firstKey = this.cache.keys().next().value
-      if (firstKey !== undefined) {
-        this.cache.delete(firstKey)
+    // Evict oldest if at capacity
+    if (this.cache.size >= this.maxCacheSize) {
+      const oldestKey = this.cache.keys().next().value
+      if (oldestKey !== undefined) {
+        this.cache.delete(oldestKey)
       }
     }
 

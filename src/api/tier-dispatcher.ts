@@ -243,10 +243,22 @@ export interface ExtendedMetadata extends FunctionMetadata {
 
 /**
  * TierDispatcher routes function invocations to the appropriate tier executor
+ *
+ * NOTE: The agenticExecutors Map stores executor instances keyed by function ID.
+ * This is LEGITIMATE because:
+ * 1. AgenticExecutor instances are stateless (no persistent cache)
+ * 2. They're created on-demand and store tool handler registrations
+ * 3. The Map acts as a factory/pool, not a cache
+ *
+ * Each request in Cloudflare Workers may hit a different isolate, so the
+ * agenticExecutors Map will be empty on cold starts. This is fine because
+ * AgenticExecutor can be recreated - it doesn't cache execution results.
  */
 export class TierDispatcher {
   private codeExecutor: CodeExecutor | null = null
   private generativeExecutor: GenerativeExecutor | null = null
+  // NOTE: This Map stores executor instances, not cached data
+  // Executors are recreated on cold starts, which is fine
   private agenticExecutors: Map<string, AgenticExecutor> = new Map()
 
   constructor(private env: TierDispatcherEnv) {
@@ -902,7 +914,7 @@ export class TierDispatcher {
    * Maps each implementation type to a concrete handler:
    * - builtin: Built-in implementations for web_search, web_fetch, etc.
    * - api: HTTP fetch-based handler using the tool's endpoint config
-   * - inline: Executes inline handler code via Function constructor
+   * - inline: NOT SUPPORTED - returns error (use 'function' type instead)
    * - function: Dispatches to another registered function by ID
    */
   private createToolHandler(
@@ -1033,21 +1045,40 @@ export class TierDispatcher {
   }
 
   /**
-   * Create a handler for inline tools that executes handler code
+   * Create a handler for inline tools that executes handler code.
+   *
+   * IMPORTANT: Inline tool handlers are NOT supported in Cloudflare Workers runtime.
+   *
+   * The previous implementation used `new Function('input', handler)` which is:
+   * 1. BLOCKED in Cloudflare Workers - code cannot work in production
+   * 2. A security vulnerability - allows arbitrary code execution
+   *
+   * Inline handlers must be deployed as user functions and executed via:
+   * - The LOADER binding (worker_loaders) for sandboxed execution
+   * - The ai-evaluate service for sandboxed code evaluation
+   *
+   * To use inline code, deploy it as a function first using the deploy API,
+   * then reference it using the 'function' implementation type instead:
+   *
+   * ```json
+   * {
+   *   "implementation": {
+   *     "type": "function",
+   *     "functionId": "my-deployed-handler"
+   *   }
+   * }
+   * ```
    */
   private createInlineToolHandler(
-    handler: string
+    _handler: string
   ): (input: unknown, context: { toolDefinition: ToolDefinition; executionContext: FunctionExecutionContext }) => Promise<unknown> {
-    return async (input: unknown) => {
-      try {
-        // Create a function from the inline handler code
-        // The handler receives 'input' as a parameter
-        const fn = new Function('input', handler)
-        const result = fn(input)
-        // Support both sync and async handlers
-        return result instanceof Promise ? await result : result
-      } catch (err) {
-        return { error: err instanceof Error ? err.message : 'Inline handler execution failed' }
+    // Return a handler that always returns an error explaining the limitation
+    return async (_input: unknown) => {
+      return {
+        error: 'Inline tool handlers are not supported in Cloudflare Workers runtime. ' +
+          'Dynamic code execution via new Function() is blocked for security reasons. ' +
+          'Please deploy your handler code as a function using the deploy API, then reference it ' +
+          'using the "function" implementation type with a functionId instead of "inline".'
       }
     }
   }

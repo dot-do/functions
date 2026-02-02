@@ -152,14 +152,11 @@ npx dotdo deploy # Deploy globally
 ### Testing
 
 ```bash
-# Run all unit tests
-npm run test:run
-
-# Run CLI/Node tests
-npm run test:cli
-
 # Run all tests
-npm run test:all
+npm test
+
+# Run tests once
+npm run test:run
 
 # Run tests with coverage
 npm run coverage

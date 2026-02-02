@@ -23,6 +23,59 @@ import { parseDuration } from '@dotdo/functions'
 import { TIER_TIMEOUTS, GENERATIVE_CACHE, AI_MODELS } from '../config'
 
 // =============================================================================
+// CACHE API HELPERS
+// =============================================================================
+
+/** Internal cache domain for creating cache keys */
+const GENERATIVE_CACHE_DOMAIN = 'https://generative-cache.internal'
+
+/**
+ * Create a cache key Request for generative results.
+ * Uses a synthetic URL that uniquely identifies the cached resource.
+ */
+function createGenerativeCacheKey(hash: string): Request {
+  return new Request(`${GENERATIVE_CACHE_DOMAIN}/results/${hash}`)
+}
+
+/**
+ * Get cached generative result from Cloudflare Cache API.
+ */
+async function getCachedGenerativeResult(hash: string): Promise<GenerativeFunctionResult<unknown> | null> {
+  try {
+    const cache = caches.default
+    const cacheKey = createGenerativeCacheKey(hash)
+    const cached = await cache.match(cacheKey)
+    if (cached) {
+      return await cached.json() as GenerativeFunctionResult<unknown>
+    }
+  } catch (error) {
+    // Cache miss or error - fall through
+    console.debug(`[generative-cache] get error for ${hash}:`, error instanceof Error ? error.message : String(error))
+  }
+  return null
+}
+
+/**
+ * Cache generative result using Cloudflare Cache API.
+ */
+async function cacheGenerativeResult(hash: string, result: GenerativeFunctionResult<unknown>, ttlSeconds: number): Promise<void> {
+  try {
+    const cache = caches.default
+    const cacheKey = createGenerativeCacheKey(hash)
+    const response = new Response(JSON.stringify(result), {
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': `max-age=${ttlSeconds}`,
+      },
+    })
+    await cache.put(cacheKey, response)
+  } catch (error) {
+    // Cache put failed - non-fatal
+    console.debug(`[generative-cache] put error for ${hash}:`, error instanceof Error ? error.message : String(error))
+  }
+}
+
+// =============================================================================
 // CLOUDFLARE-COMPATIBLE CRYPTO UTILITIES
 // =============================================================================
 
@@ -176,84 +229,57 @@ const VALID_MODELS = new Set([
 
 /**
  * Executor for generative AI functions
+ *
+ * NOTE: This executor uses Cloudflare's Cache API for caching results.
+ * In-memory Maps don't persist across Worker requests (each request may hit
+ * a different isolate), so we use the edge cache for cross-request caching.
  */
 export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
   implements GenerativeFunctionExecutor<TInput, TOutput>
 {
   private aiClient: AIClient
-  private cache: Map<string, CacheEntry> = new Map()
-  private maxCacheSize: number
-  private staleCleanupIntervalMs: number
-  private cleanupTimer: ReturnType<typeof setInterval> | null = null
+  // NOTE: Removed in-memory cache Map - using Cache API instead
+  // The Cache API persists across Worker isolates at the edge
 
-  // Cache statistics
+  // Cache statistics (reset per isolate, but useful for debugging)
   private cacheHits: number = 0
   private cacheMisses: number = 0
-  private cacheEvictions: number = 0
-  private cacheStaleEvictions: number = 0
 
   constructor(options: GenerativeExecutorOptions) {
     this.aiClient = options.aiClient
-    this.maxCacheSize = options.maxCacheSize ?? GENERATIVE_CACHE.MAX_SIZE
-    // Default to 0 (no automatic cleanup) - users can explicitly set interval if needed
-    this.staleCleanupIntervalMs = options.staleCleanupIntervalMs ?? GENERATIVE_CACHE.STALE_CLEANUP_INTERVAL_MS
-
-    // Start proactive cleanup only if explicitly configured
-    if (this.staleCleanupIntervalMs > 0) {
-      this.startCleanupTimer()
-    }
+    // NOTE: maxCacheSize and staleCleanupIntervalMs no longer apply
+    // Cache API manages its own eviction and TTL is handled by Cache-Control headers
   }
 
   /**
    * Get cache statistics
+   *
+   * NOTE: With Cache API, we cannot get the cache size or track evictions.
+   * Only hit/miss counters are available (reset per isolate).
    */
   getCacheStats(): GenerativeCacheStats {
     return {
-      size: this.cache.size,
-      maxSize: this.maxCacheSize,
+      size: 0, // Cannot determine Cache API size
+      maxSize: 0, // Cache API manages its own limits
       hits: this.cacheHits,
       misses: this.cacheMisses,
-      evictions: this.cacheEvictions,
-      staleEvictions: this.cacheStaleEvictions,
+      evictions: 0, // Cache API manages its own eviction
+      staleEvictions: 0, // Cache API handles TTL automatically
     }
   }
 
   /**
-   * Proactively clean up stale (TTL-expired) cache entries
+   * @deprecated No longer needed - Cache API handles TTL automatically via Cache-Control headers
    */
   cleanupStaleEntries(): void {
-    const now = Date.now()
-    const keysToDelete: string[] = []
-
-    for (const [key, entry] of this.cache.entries()) {
-      if (now - entry.timestamp > entry.ttl * 1000) {
-        keysToDelete.push(key)
-      }
-    }
-
-    for (const key of keysToDelete) {
-      this.cache.delete(key)
-      this.cacheStaleEvictions++
-    }
+    // No-op: Cache API handles TTL expiration automatically
   }
 
   /**
-   * Stop the cleanup timer (useful for tests or shutdown)
+   * @deprecated No longer needed - no cleanup timer with Cache API
    */
   stopCleanup(): void {
-    if (this.cleanupTimer) {
-      clearInterval(this.cleanupTimer)
-      this.cleanupTimer = null
-    }
-  }
-
-  /**
-   * Start the periodic cleanup timer
-   */
-  private startCleanupTimer(): void {
-    this.cleanupTimer = setInterval(() => {
-      this.cleanupStaleEntries()
-    }, this.staleCleanupIntervalMs)
+    // No-op: No cleanup timer to stop with Cache API
   }
 
   /**
@@ -301,10 +327,19 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
     )
 
     if (cacheEnabled) {
-      const cachedResult = this.getFromCache(cacheKey)
+      const cachedResult = await getCachedGenerativeResult(cacheKey)
       if (cachedResult) {
-        return cachedResult as GenerativeFunctionResult<TOutput>
+        this.cacheHits++
+        // Mark as cached and return
+        return {
+          ...cachedResult,
+          generativeExecution: {
+            ...cachedResult.generativeExecution,
+            cached: true,
+          },
+        } as GenerativeFunctionResult<TOutput>
       }
+      this.cacheMisses++
     }
 
     // Determine timeout
@@ -413,9 +448,13 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
           false
         )
 
-        // Cache successful result
+        // Cache successful result using Cache API
         if (cacheEnabled) {
-          this.setInCache(cacheKey, successResult, cacheTtlSeconds)
+          try {
+            await cacheGenerativeResult(cacheKey, successResult, cacheTtlSeconds)
+          } catch {
+            // Ignore cache errors - they're non-fatal
+          }
         }
 
         return successResult
@@ -586,71 +625,9 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
     return sha256(content)
   }
 
-  private getFromCache(key: string): GenerativeFunctionResult<unknown> | null {
-    const entry = this.cache.get(key)
-    if (!entry) {
-      this.cacheMisses++
-      return null
-    }
-
-    const now = Date.now()
-    if (now - entry.timestamp > entry.ttl * 1000) {
-      this.cache.delete(key)
-      this.cacheMisses++
-      return null
-    }
-
-    // Touch the entry to mark it as recently used (LRU)
-    this.touchCacheEntry(key, entry)
-    this.cacheHits++
-
-    // Mark as cached
-    return {
-      ...entry.result,
-      generativeExecution: {
-        ...entry.result.generativeExecution,
-        cached: true,
-      },
-    }
-  }
-
-  private setInCache(
-    key: string,
-    result: GenerativeFunctionResult<unknown>,
-    ttlSeconds: number
-  ): void {
-    // Evict oldest (LRU) entry if cache is full
-    if (this.cache.size >= this.maxCacheSize && !this.cache.has(key)) {
-      this.evictOldest()
-    }
-
-    this.cache.set(key, {
-      result,
-      timestamp: Date.now(),
-      ttl: ttlSeconds,
-    })
-  }
-
-  /**
-   * Move a cache entry to the end of the Map to mark it as recently used.
-   * This is O(1) and maintains LRU ordering by deletion and re-insertion.
-   */
-  private touchCacheEntry(key: string, entry: CacheEntry): void {
-    this.cache.delete(key)
-    this.cache.set(key, entry)
-  }
-
-  /**
-   * Evict the oldest (least recently used) entry from the cache.
-   * Uses Map's insertion order for O(1) eviction - the first entry is always the oldest.
-   */
-  private evictOldest(): void {
-    const firstKey = this.cache.keys().next().value
-    if (firstKey !== undefined) {
-      this.cache.delete(firstKey)
-      this.cacheEvictions++
-    }
-  }
+  // NOTE: Removed getFromCache(), setInCache(), touchCacheEntry(), evictOldest() methods
+  // These were for the in-memory LRU cache which has been replaced by Cache API.
+  // Cache API handles TTL expiration and eviction automatically.
 
   private resolveTimeout(
     definition: GenerativeFunctionDefinition<TInput, TOutput>,

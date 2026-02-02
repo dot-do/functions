@@ -283,10 +283,15 @@ function createGoalsFromDefinition(
 export class AgenticExecutor<TInput = unknown, TOutput = unknown>
   implements AgenticFunctionExecutor<TInput, TOutput>
 {
+  // NOTE: toolHandlers Map is LEGITIMATE - stores runtime tool handler registrations
+  // This is not a cache but a configuration registry that's set up at initialization
   private toolHandlers: Map<string, ToolHandler> = new Map()
   private registeredTools: ToolDefinition[] = []
   private tokenBudget: number | undefined
   private pricing: PricingConfig | undefined
+  // NOTE: pendingApprovals Map is per-isolate and tracks approvals within a single execution
+  // For distributed approval workflows that persist across requests, use Durable Objects
+  // This Map is cleared after each execution completes
   private pendingApprovals: Map<string, PendingApproval[]> = new Map()
   private autonomousAgent: AutonomousAgent | undefined
 

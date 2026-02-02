@@ -204,12 +204,25 @@ interface ExtendedStreamOptions extends StreamOptions {
  * - Real-time streaming via WebSocket
  * - Retention policy enforcement
  * - Full-text search capabilities
+ *
+ * NOTE: This class is designed to be used within a Durable Object context
+ * (MockDurableObjectState is passed in). When used as a Durable Object,
+ * the in-memory Maps ARE appropriate because:
+ * 1. Durable Objects are single-threaded - only one request at a time
+ * 2. Durable Objects persist state across requests via ctx.storage
+ * 3. WebSocket subscribers are connection-scoped and need in-memory tracking
+ *
+ * WARNING: If this class is instantiated in a regular Worker (not a DO),
+ * the in-memory Maps will NOT persist across requests.
  */
 export class LogAggregator {
   private state: MockDurableObjectState
   private kv: KVNamespace
+  // NOTE: These Maps are appropriate for Durable Object context
+  // In a DO, state persists and only one request runs at a time
   private logs: Map<string, LogEntry[]> = new Map()
   private allLogs: LogEntry[] = []
+  // WebSocket subscriber tracking - these are connection-scoped
   private wsSubscribers: Map<WebSocket, ExtendedStreamOptions> = new Map()
   private tailSubscribers: Map<string, Set<(entry: LogEntry) => void>> = new Map()
   private heartbeatTimers: Map<WebSocket, ReturnType<typeof setInterval>> = new Map()

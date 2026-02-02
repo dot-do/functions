@@ -99,6 +99,12 @@ export interface Env {
   CODE_STORAGE?: R2Bucket
   /** OAuth.do service binding for user authentication */
   OAUTH?: OAuthServiceBinding
+  /**
+   * Per-user storage Durable Object namespace.
+   * Provides isolated storage for functions, code, and API keys.
+   * Replaces KV-based storage with strong consistency and per-user isolation.
+   */
+  USER_STORAGE?: DurableObjectNamespace
 }
 
 /**

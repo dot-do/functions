@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "functions-e2e-workers-client",
+  "main": "test/e2e-workers/worker-entry.ts",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Environment variables for E2E testing
+  "vars": {
+    "ENVIRONMENT": "test",
+    "E2E_BASE_URL": "https://functions-do.dotdo.workers.dev"
+  },
+
+  // NOTE: Service bindings are configured for production use.
+  // For local testing, use remote bindings via `wrangler dev --remote`.
+  // For CI, the service must be deployed or mocked.
+  //
+  // The tests are designed to gracefully handle missing service bindings
+  // by falling back to direct fetch when bindings aren't available.
+
+  // Observability for test debugging
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}
