@@ -20,6 +20,17 @@ import worker, { resetRateLimiter } from '../index'
 type JsonBody = Record<string, unknown>
 
 /**
+ * Hash an API key using SHA-256 (same algorithm as auth middleware)
+ */
+async function hashApiKey(apiKey: string): Promise<string> {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(apiKey)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
  * Helper to create test function metadata
  */
 function createTestFunction(overrides: Partial<FunctionMetadata> = {}): Omit<FunctionMetadata, 'createdAt' | 'updatedAt'> {
@@ -244,8 +255,8 @@ describe('Worker Fetch Handler - List Endpoint Behavior', () => {
     mockRegistry = createMockKV()
     mockCodeStorage = createMockKV()
     mockEnv = {
-      REGISTRY: mockRegistry,
-      CODE: mockCodeStorage,
+      FUNCTIONS_REGISTRY: mockRegistry,
+      FUNCTIONS_CODE: mockCodeStorage,
     }
     mockCtx = {
       waitUntil: vi.fn(),
@@ -258,16 +269,17 @@ describe('Worker Fetch Handler - List Endpoint Behavior', () => {
   })
 
   describe('GET /api/functions behavior', () => {
-    it('should return 400 when accessing /api/functions without function ID', async () => {
-      // Current implementation requires a function ID for all non-health endpoints
+    it('should return 200 with list of functions when accessing /api/functions', async () => {
+      // List endpoint returns a list of functions (empty if none deployed)
       const request = new Request('https://functions.do/api/functions', {
         method: 'GET',
       })
       const response = await worker.fetch(request, mockEnv, mockCtx)
 
-      expect(response.status).toBe(400)
+      expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toContain('Function ID required')
+      expect(body['functions']).toBeDefined()
+      expect(Array.isArray(body['functions'])).toBe(true)
     })
 
     it('should return JSON response with Content-Type header', async () => {
@@ -287,11 +299,13 @@ describe('Worker Fetch Handler - List Endpoint Behavior', () => {
       mockApiKeys = createMockKV()
       mockEnv = {
         ...mockEnv,
-        API_KEYS: mockApiKeys,
+        FUNCTIONS_API_KEYS: mockApiKeys,
       }
 
+      // Store API key with keys:{hash} prefix as expected by auth middleware
+      const validKeyHash = await hashApiKey('valid-api-key')
       await mockApiKeys.put(
-        'valid-api-key',
+        `keys:${validKeyHash}`,
         JSON.stringify({
           userId: 'user-123',
           active: true,
@@ -299,7 +313,7 @@ describe('Worker Fetch Handler - List Endpoint Behavior', () => {
       )
     })
 
-    it('should require authentication when API_KEYS is configured', async () => {
+    it('should require authentication when FUNCTIONS_API_KEYS is configured', async () => {
       const request = new Request('https://functions.do/api/functions', {
         method: 'GET',
       })
@@ -307,7 +321,7 @@ describe('Worker Fetch Handler - List Endpoint Behavior', () => {
 
       expect(response.status).toBe(401)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toBe('Missing API key')
+      expect(body['error']).toBe('Missing authentication')
     })
 
     it('should return 401 for invalid API key', async () => {
@@ -323,8 +337,9 @@ describe('Worker Fetch Handler - List Endpoint Behavior', () => {
     })
 
     it('should return 401 for expired API key', async () => {
+      const expiredKeyHash = await hashApiKey('expired-key')
       await mockApiKeys.put(
-        'expired-key',
+        `keys:${expiredKeyHash}`,
         JSON.stringify({
           userId: 'user-expired',
           active: true,
@@ -348,10 +363,10 @@ describe('Worker Fetch Handler - List Endpoint Behavior', () => {
       })
       const response = await worker.fetch(request, mockEnv, mockCtx)
 
-      // With valid API key, should get 400 (function ID required) not 401
-      expect(response.status).toBe(400)
+      // With valid API key, should get 200 with list of functions
+      expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toContain('Function ID required')
+      expect(body['functions']).toBeDefined()
     })
 
     it('should allow health endpoint without authentication', async () => {
@@ -364,19 +379,40 @@ describe('Worker Fetch Handler - List Endpoint Behavior', () => {
 
   describe('HTTP Method Handling', () => {
     it('should return appropriate response for different HTTP methods', async () => {
-      // Test various HTTP methods against non-existent list endpoint
-      const methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
+      // GET /api/functions -> listHandler (200 with list)
+      const getRequest = new Request('https://functions.do/api/functions', { method: 'GET' })
+      const getResponse = await worker.fetch(getRequest, mockEnv, mockCtx)
+      expect(getResponse.status).toBe(200)
 
-      for (const method of methods) {
-        const request = new Request('https://functions.do/api/functions', {
-          method,
-          body: method !== 'GET' ? JSON.stringify({}) : undefined,
-        })
-        const response = await worker.fetch(request, mockEnv, mockCtx)
+      // POST /api/functions -> deployHandler (400 without proper body)
+      const postRequest = new Request('https://functions.do/api/functions', {
+        method: 'POST',
+        body: JSON.stringify({}),
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const postResponse = await worker.fetch(postRequest, mockEnv, mockCtx)
+      expect(postResponse.status).toBe(400) // Missing required fields
 
-        // All should return 400 since no function ID is provided
-        expect(response.status).toBe(400)
-      }
+      // PUT /api/functions -> 404 (not a registered route)
+      const putRequest = new Request('https://functions.do/api/functions', {
+        method: 'PUT',
+        body: JSON.stringify({}),
+      })
+      const putResponse = await worker.fetch(putRequest, mockEnv, mockCtx)
+      expect(putResponse.status).toBe(405) // Method not allowed (route exists for GET/POST)
+
+      // DELETE /api/functions -> needs function ID
+      const deleteRequest = new Request('https://functions.do/api/functions', { method: 'DELETE' })
+      const deleteResponse = await worker.fetch(deleteRequest, mockEnv, mockCtx)
+      expect(deleteResponse.status).toBe(405) // Method not allowed
+
+      // PATCH /api/functions -> needs function ID
+      const patchRequest = new Request('https://functions.do/api/functions', {
+        method: 'PATCH',
+        body: JSON.stringify({}),
+      })
+      const patchResponse = await worker.fetch(patchRequest, mockEnv, mockCtx)
+      expect(patchResponse.status).toBe(405) // Method not allowed
     })
   })
 
@@ -387,8 +423,10 @@ describe('Worker Fetch Handler - List Endpoint Behavior', () => {
       })
       const response = await worker.fetch(request, mockEnv, mockCtx)
 
-      // Should still return 400 since endpoint is not implemented
-      expect(response.status).toBe(400)
+      // List endpoint accepts query parameters and returns 200
+      expect(response.status).toBe(200)
+      const body = (await response.json()) as JsonBody
+      expect(body['functions']).toBeDefined()
     })
 
     it('should handle URL-encoded query parameters', async () => {
@@ -397,7 +435,8 @@ describe('Worker Fetch Handler - List Endpoint Behavior', () => {
       })
       const response = await worker.fetch(request, mockEnv, mockCtx)
 
-      expect(response.status).toBe(400)
+      // List endpoint handles query parameters gracefully
+      expect(response.status).toBe(200)
     })
   })
 })

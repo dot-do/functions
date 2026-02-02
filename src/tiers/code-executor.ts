@@ -1416,9 +1416,10 @@ export class CodeExecutor {
     const startTime = Date.now()
 
     // Build the script that will call the handler with input
+    // In ai-evaluate, the module code is embedded at the top level of the worker,
+    // so 'export default function handler' makes 'handler' available in scope.
+    // We try multiple patterns to find the handler function.
     const script = `
-      const mod = typeof exports !== 'undefined' ? exports : {};
-      const handler = mod.default || mod;
       const input = ${JSON.stringify(input)};
 
       ${deterministic ? `
@@ -1427,10 +1428,16 @@ export class CodeExecutor {
         Date.now = () => ${DETERMINISTIC_DATE};
       ` : ''}
 
+      // Find the handler - it could be:
+      // 1. A named 'handler' function from 'export default function handler'
+      // 2. A 'default' export object with handler method
+      // 3. Available via exports object
       if (typeof handler === 'function') {
         return handler(input);
-      } else if (handler && typeof handler.default === 'function') {
-        return handler.default(input);
+      } else if (typeof exports !== 'undefined' && typeof exports.default === 'function') {
+        return exports.default(input);
+      } else if (typeof exports !== 'undefined' && typeof exports.handler === 'function') {
+        return exports.handler(input);
       } else {
         throw new Error('No handler function found in module');
       }
@@ -1471,6 +1478,13 @@ export class CodeExecutor {
 
       if (!result.success) {
         const errorMessage = result.error || 'Unknown error'
+        // Extended error fields may be passed through from ai-evaluate
+        const extendedResult = result as EvaluateResult & {
+          stack?: string
+          code?: string
+          partialResult?: unknown
+          retryable?: boolean
+        }
 
         // Check for timeout
         if (errorMessage.toLowerCase().includes('timeout')) {
@@ -1489,10 +1503,35 @@ export class CodeExecutor {
           return { status: 'failed', output: undefined, error: networkError, memoryUsedBytes: 0, cpuTimeMs }
         }
 
+        // Extract error name from error message (e.g., "TypeError: Cannot read..." -> "TypeError")
+        let errorName = 'Error'
+        const colonIndex = errorMessage.indexOf(':')
+        if (colonIndex > 0) {
+          const possibleName = errorMessage.slice(0, colonIndex).trim()
+          if (/^[A-Z][a-zA-Z]*Error$/.test(possibleName)) {
+            errorName = possibleName
+          }
+        }
+
+        // Build error object with extended fields
+        const errorObj: FunctionError = {
+          name: errorName,
+          message: errorMessage,
+        }
+        if (extendedResult.stack) {
+          errorObj.stack = extendedResult.stack
+        }
+        if (extendedResult.code) {
+          errorObj.code = extendedResult.code
+        }
+        if (extendedResult.retryable !== undefined) {
+          errorObj.retryable = extendedResult.retryable
+        }
+
         return {
           status: 'failed',
-          output: undefined,
-          error: { name: 'Error', message: errorMessage },
+          output: extendedResult.partialResult,
+          error: errorObj,
           memoryUsedBytes: 0,
           cpuTimeMs,
         }

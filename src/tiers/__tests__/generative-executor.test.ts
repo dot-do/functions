@@ -687,7 +687,7 @@ describe('GenerativeExecutor', () => {
   // ==========================================================================
 
   describe('Token Tracking', () => {
-    it('should return generativeExecution.tokens.input', async () => {
+    it('should return generativeExecution.tokens.inputTokens', async () => {
       const definition = createSimpleFunction()
       mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse({
         inputTokens: 150,
@@ -696,10 +696,10 @@ describe('GenerativeExecutor', () => {
 
       const result = await executor.execute(definition, {})
 
-      expect(result.generativeExecution.tokens.input).toBe(150)
+      expect(result.generativeExecution.tokens.inputTokens).toBe(150)
     })
 
-    it('should return generativeExecution.tokens.output', async () => {
+    it('should return generativeExecution.tokens.outputTokens', async () => {
       const definition = createSimpleFunction()
       mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse({
         inputTokens: 100,
@@ -708,10 +708,10 @@ describe('GenerativeExecutor', () => {
 
       const result = await executor.execute(definition, {})
 
-      expect(result.generativeExecution.tokens.output).toBe(200)
+      expect(result.generativeExecution.tokens.outputTokens).toBe(200)
     })
 
-    it('should return generativeExecution.tokens.total', async () => {
+    it('should return generativeExecution.tokens.totalTokens', async () => {
       const definition = createSimpleFunction()
       mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse({
         inputTokens: 100,
@@ -720,7 +720,7 @@ describe('GenerativeExecutor', () => {
 
       const result = await executor.execute(definition, {})
 
-      expect(result.generativeExecution.tokens.total).toBe(150)
+      expect(result.generativeExecution.tokens.totalTokens).toBe(150)
     })
 
     it('should respect maxTokens limit', async () => {
@@ -1319,7 +1319,7 @@ describe('GenerativeExecutor', () => {
 
       expect(result.status).toBe('completed')
       // Should handle gracefully with defaults
-      expect(result.generativeExecution.tokens.input).toBeDefined()
+      expect(result.generativeExecution.tokens.inputTokens).toBeDefined()
     })
 
     it('should handle network errors', async () => {

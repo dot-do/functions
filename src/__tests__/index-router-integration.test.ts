@@ -166,7 +166,8 @@ describe('Index Router Integration', () => {
 
       expect(response.status).toBe(503)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toContain('not configured')
+      // jsonErrorResponse returns { error: { code, message } } format
+      expect((body['error'] as { message: string })['message']).toContain('not configured')
     })
   })
 

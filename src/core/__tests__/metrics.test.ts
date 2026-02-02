@@ -654,10 +654,10 @@ describe('MetricsExporter', () => {
       const output = await exporter.export('json')
       const parsed = JSON.parse(output)
 
-      expect().toBeDefined()
-      expect().toBe(1)
-      expect().toBeDefined()
-      expect().toBeDefined()
+      expect(parsed.functions).toBeDefined()
+      expect(parsed.functions['func-1'].invocationCount).toBe(1)
+      expect(parsed.totalInvocations).toBeDefined()
+      expect(parsed.languageBreakdown).toBeDefined()
     })
 
     it('should throw for unsupported format', async () => {

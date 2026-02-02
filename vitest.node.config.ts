@@ -56,6 +56,8 @@ export default defineConfig({
       'src/ai/__tests__/*.test.ts',
       // Generative executor tests (require ai-functions package)
       'src/tiers/__tests__/generative-executor.test.ts',
+      // Iceberg analytics tests (pure utility functions, no Workers dependencies)
+      'src/core/__tests__/iceberg-analytics.test.ts',
       // Python execution tests (require Pyodide runtime in Node.js)
       'src/tiers/__tests__/python-execution.test.ts',
       // Template literals tests

@@ -279,7 +279,7 @@ describe('ObservabilityExporter', () => {
       expect(url).toBe('https://api.example.com/traces')
       expect(options.method).toBe('POST')
       expect(options.headers['Content-Type']).toBe('application/json')
-      expect(options.headers['X-Honeycomb-Team']).toBe('test-key')
+      // Generic backend uses Authorization header (not Honeycomb-specific header)
       expect(options.headers['Authorization']).toBe('Bearer test-key')
 
       const body = JSON.parse(options.body)

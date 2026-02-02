@@ -28,6 +28,17 @@ import { rateLimitMiddleware } from '../middleware/rate-limit'
 // Type for JSON response bodies
 type JsonBody = Record<string, unknown>
 
+/**
+ * Hash an API key using SHA-256 (same as auth middleware)
+ */
+async function hashApiKey(apiKey: string): Promise<string> {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(apiKey)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
 describe('API Router', () => {
   let router: Router
   let mockEnv: {
@@ -217,9 +228,11 @@ describe('API Router', () => {
   describe('middleware chain', () => {
     beforeEach(async () => {
       // Set up API keys for auth testing
+      // The auth middleware hashes the API key and looks it up with `keys:${keyHash}`
       mockEnv.FUNCTIONS_API_KEYS = createMockKV()
+      const keyHash = await hashApiKey('valid-key')
       await mockEnv.FUNCTIONS_API_KEYS.put(
-        'valid-key',
+        `keys:${keyHash}`,
         JSON.stringify({ active: true, userId: 'user-123' })
       )
 

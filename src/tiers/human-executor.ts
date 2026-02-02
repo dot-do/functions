@@ -369,6 +369,19 @@ export class HumanExecutor implements HumanFunctionExecutor {
       throw new Error('Task not found')
     }
 
+    // Check if task is in a valid state to accept responses
+    if (stored.status === 'cancelled') {
+      throw new Error('Cannot submit response to cancelled task')
+    }
+
+    if (stored.status === 'completed') {
+      throw new Error('Cannot submit response to completed task')
+    }
+
+    if (stored.status === 'expired') {
+      throw new Error('Cannot submit response to expired task')
+    }
+
     // Validate required fields from form
     if (stored.definition.ui.form) {
       this.validateFormResponse(stored.definition.ui.form, response)

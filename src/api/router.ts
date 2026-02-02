@@ -549,6 +549,10 @@ export function createRouter(): Router {
   // Also keep the old /api/ path for backwards compat
   router.get('/api/functions/:id/logs', logsHandler)
 
+  // Function info (legacy - GET /functions/:id for backward compatibility)
+  router.get('/functions/:id', infoHandler)
+  router.get('/functions/:id/info', infoHandler)
+
   // Invoke function (legacy)
   router.post('/functions/:id', invokeHandler)
   router.post('/functions/:id/invoke', invokeHandler)

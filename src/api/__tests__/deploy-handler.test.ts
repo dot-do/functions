@@ -99,7 +99,8 @@ describe('Deploy Handler', () => {
 
         expect(response.status).toBe(400)
         const body = (await response.json()) as JsonBody
-        expect(body['error']).toContain('language')
+        const error = body['error'] as { code: string; message: string }
+        expect(error.message.toLowerCase()).toContain('language')
       }
     })
 
@@ -166,7 +167,8 @@ describe('Deploy Handler', () => {
 
         expect(response.status).toBe(400)
         const body = (await response.json()) as JsonBody
-        expect(body['error']).toContain('version')
+        const error = body['error'] as { code: string; message: string }
+        expect(error.message.toLowerCase()).toContain('version')
       }
     })
 
@@ -223,7 +225,8 @@ describe('Deploy Handler', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toContain('code')
+      const error = body['error'] as { code: string; message: string }
+      expect(error.message.toLowerCase()).toContain('code')
     })
 
     it('validates code is not empty', async () => {
@@ -244,7 +247,8 @@ describe('Deploy Handler', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toContain('code')
+      const error = body['error'] as { code: string; message: string }
+      expect(error.message.toLowerCase()).toContain('code')
     })
 
     it('returns 400 with validation errors', async () => {
@@ -714,7 +718,8 @@ describe('Deploy Handler', () => {
 
       expect(response.status).toBe(413)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toContain('too large')
+      const error = body['error'] as { code: string; message: string }
+      expect(error.message.toLowerCase()).toContain('too large')
     })
 
     it('returns 413 for invalid Content-Length', async () => {

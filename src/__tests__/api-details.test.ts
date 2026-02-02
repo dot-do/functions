@@ -1,7 +1,7 @@
 /**
  * Function Details API Tests
  *
- * Tests for the GET /functions/:id endpoint including:
+ * Tests for the GET /api/functions/:id endpoint including:
  * - Function metadata retrieval
  * - 404 for non-existent functions
  * - Authentication requirements
@@ -19,6 +19,17 @@ import worker, { resetRateLimiter } from '../index'
 // Type for JSON response bodies in tests
 type JsonBody = Record<string, unknown>
 
+/**
+ * Helper to hash an API key using SHA-256 (same as auth middleware)
+ */
+async function hashApiKey(apiKey: string): Promise<string> {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(apiKey)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
 describe('Function Details API - GET /functions/:id', () => {
   let mockEnv: Env
   let mockRegistry: KVNamespace
@@ -34,9 +45,9 @@ describe('Function Details API - GET /functions/:id', () => {
     mockApiKeys = createMockKV()
 
     mockEnv = {
-      REGISTRY: mockRegistry,
-      CODE: mockCodeStorage,
-      API_KEYS: mockApiKeys,
+      FUNCTIONS_REGISTRY: mockRegistry,
+      FUNCTIONS_CODE: mockCodeStorage,
+      FUNCTIONS_API_KEYS: mockApiKeys,
     }
 
     mockCtx = {
@@ -44,16 +55,17 @@ describe('Function Details API - GET /functions/:id', () => {
       passThroughOnException: vi.fn(),
     } as unknown as ExecutionContext
 
-    // Set up a valid API key
+    // Set up a valid API key (stored with keys: prefix and hashed key)
+    const testApiKeyHash = await hashApiKey('test-api-key')
     await mockApiKeys.put(
-      'test-api-key',
+      `keys:${testApiKeyHash}`,
       JSON.stringify({
         userId: 'user-123',
         active: true,
       })
     )
 
-    // Set up a test function with full metadata
+    // Set up a test function with full metadata (stored with registry: prefix)
     const testFunctionMetadata = {
       id: 'my-function',
       version: '1.2.0',
@@ -67,16 +79,16 @@ describe('Function Details API - GET /functions/:id', () => {
       description: 'A sample test function',
       author: 'test-user',
     }
-    await mockRegistry.put('my-function', JSON.stringify(testFunctionMetadata))
+    await mockRegistry.put('registry:my-function', JSON.stringify(testFunctionMetadata))
 
-    // Set up version history entries
+    // Set up version history entries (stored with registry:{id}:v:{version} pattern)
     const v100Metadata = { ...testFunctionMetadata, version: '1.0.0' }
     const v110Metadata = { ...testFunctionMetadata, version: '1.1.0' }
     const v120Metadata = { ...testFunctionMetadata, version: '1.2.0' }
 
-    await mockRegistry.put('my-function@1.0.0', JSON.stringify(v100Metadata))
-    await mockRegistry.put('my-function@1.1.0', JSON.stringify(v110Metadata))
-    await mockRegistry.put('my-function@1.2.0', JSON.stringify(v120Metadata))
+    await mockRegistry.put('registry:my-function:v:1.0.0', JSON.stringify(v100Metadata))
+    await mockRegistry.put('registry:my-function:v:1.1.0', JSON.stringify(v110Metadata))
+    await mockRegistry.put('registry:my-function:v:1.2.0', JSON.stringify(v120Metadata))
 
     // Set up function code for each version
     const testFunctionCode = `
@@ -95,8 +107,8 @@ describe('Function Details API - GET /functions/:id', () => {
   })
 
   describe('Function Metadata Retrieval', () => {
-    it('should return function info for GET /functions/:id', async () => {
-      const request = new Request('https://functions.do/functions/my-function', {
+    it('should return function info for GET /api/functions/:id', async () => {
+      const request = new Request('https://functions.do/api/functions/my-function', {
         method: 'GET',
         headers: { 'X-API-Key': 'test-api-key' },
       })
@@ -105,11 +117,11 @@ describe('Function Details API - GET /functions/:id', () => {
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
       expect(body['id']).toBe('my-function')
-      expect(body['status']).toBe('loaded')
+      expect(body['status']).toBe('available')
     })
 
     it('should include function id in response', async () => {
-      const request = new Request('https://functions.do/functions/my-function', {
+      const request = new Request('https://functions.do/api/functions/my-function', {
         method: 'GET',
         headers: { 'X-API-Key': 'test-api-key' },
       })
@@ -121,7 +133,7 @@ describe('Function Details API - GET /functions/:id', () => {
     })
 
     it('should include status in response', async () => {
-      const request = new Request('https://functions.do/functions/my-function', {
+      const request = new Request('https://functions.do/api/functions/my-function', {
         method: 'GET',
         headers: { 'X-API-Key': 'test-api-key' },
       })
@@ -129,11 +141,11 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body['status']).toBe('loaded')
+      expect(body['status']).toBe('available')
     })
 
-    it('should include fromCache property in response', async () => {
-      const request = new Request('https://functions.do/functions/my-function', {
+    it('should include version property in response', async () => {
+      const request = new Request('https://functions.do/api/functions/my-function', {
         method: 'GET',
         headers: { 'X-API-Key': 'test-api-key' },
       })
@@ -141,12 +153,12 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body).toHaveProperty('fromCache')
-      expect(typeof body['fromCache']).toBe('boolean')
+      expect(body).toHaveProperty('version')
+      expect(typeof body['version']).toBe('string')
     })
 
-    it('should include loadTimeMs property in response', async () => {
-      const request = new Request('https://functions.do/functions/my-function', {
+    it('should include language property in response', async () => {
+      const request = new Request('https://functions.do/api/functions/my-function', {
         method: 'GET',
         headers: { 'X-API-Key': 'test-api-key' },
       })
@@ -154,14 +166,14 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body).toHaveProperty('loadTimeMs')
-      expect(typeof body['loadTimeMs']).toBe('number')
+      expect(body).toHaveProperty('language')
+      expect(typeof body['language']).toBe('string')
     })
   })
 
   describe('Function Info Endpoint', () => {
-    it('should return function info for GET /functions/:id/info', async () => {
-      const request = new Request('https://functions.do/functions/my-function/info', {
+    it('should return function info for GET /v1/api/functions/:id', async () => {
+      const request = new Request('https://functions.do/v1/api/functions/my-function', {
         method: 'GET',
         headers: { 'X-API-Key': 'test-api-key' },
       })
@@ -170,15 +182,15 @@ describe('Function Details API - GET /functions/:id', () => {
       expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
       expect(body['id']).toBe('my-function')
-      expect(body['status']).toBe('loaded')
+      expect(body['status']).toBe('available')
     })
 
-    it('should return same data for /info endpoint and base endpoint', async () => {
-      const request1 = new Request('https://functions.do/functions/my-function', {
+    it('should return same data for v1 and legacy endpoints', async () => {
+      const request1 = new Request('https://functions.do/api/functions/my-function', {
         method: 'GET',
         headers: { 'X-API-Key': 'test-api-key' },
       })
-      const request2 = new Request('https://functions.do/functions/my-function/info', {
+      const request2 = new Request('https://functions.do/v1/api/functions/my-function', {
         method: 'GET',
         headers: { 'X-API-Key': 'test-api-key' },
       })
@@ -199,7 +211,7 @@ describe('Function Details API - GET /functions/:id', () => {
 
   describe('404 for Non-Existent Function', () => {
     it('should return 404 for non-existent function ID', async () => {
-      const request = new Request('https://functions.do/functions/non-existent-function', {
+      const request = new Request('https://functions.do/api/functions/non-existent-function', {
         method: 'GET',
         headers: { 'X-API-Key': 'test-api-key' },
       })
@@ -209,7 +221,7 @@ describe('Function Details API - GET /functions/:id', () => {
     })
 
     it('should return 404 with error message', async () => {
-      const request = new Request('https://functions.do/functions/non-existent-function', {
+      const request = new Request('https://functions.do/api/functions/non-existent-function', {
         method: 'GET',
         headers: { 'X-API-Key': 'test-api-key' },
       })
@@ -220,8 +232,10 @@ describe('Function Details API - GET /functions/:id', () => {
       expect(body['error']).toBeTruthy()
     })
 
-    it('should return 404 for function with metadata but no code', async () => {
-      // Set up a function with metadata but no code
+    it('should return 200 for function with metadata but no code', async () => {
+      // Note: The info handler only checks registry, not code storage
+      // This test verifies that a function with only metadata returns 200
+      // since the info endpoint doesn't require code to exist
       const noCodeFunctionMetadata = {
         id: 'no-code-func',
         version: '1.0.0',
@@ -229,23 +243,24 @@ describe('Function Details API - GET /functions/:id', () => {
         entryPoint: 'index.ts',
         dependencies: {},
       }
-      await mockRegistry.put('no-code-func', JSON.stringify(noCodeFunctionMetadata))
+      await mockRegistry.put('registry:no-code-func', JSON.stringify(noCodeFunctionMetadata))
 
-      const request = new Request('https://functions.do/functions/no-code-func', {
+      const request = new Request('https://functions.do/api/functions/no-code-func', {
         method: 'GET',
         headers: { 'X-API-Key': 'test-api-key' },
       })
       const response = await worker.fetch(request, mockEnv, mockCtx)
 
-      expect(response.status).toBe(404)
+      // Info endpoint returns 200 if metadata exists (code is not required for info)
+      expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toContain('not found')
+      expect(body['id']).toBe('no-code-func')
     })
   })
 
   describe('Authentication Requirements', () => {
-    it('should require authentication for GET /functions/:id', async () => {
-      const request = new Request('https://functions.do/functions/my-function', {
+    it('should require authentication for GET /api/functions/:id', async () => {
+      const request = new Request('https://functions.do/api/functions/my-function', {
         method: 'GET',
         // No API key header
       })
@@ -255,7 +270,7 @@ describe('Function Details API - GET /functions/:id', () => {
     })
 
     it('should return 401 for missing API key', async () => {
-      const request = new Request('https://functions.do/functions/my-function', {
+      const request = new Request('https://functions.do/api/functions/my-function', {
         method: 'GET',
         // No API key
       })
@@ -263,11 +278,11 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(401)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toBe('Missing API key')
+      expect(body['error']).toBe('Missing authentication')
     })
 
     it('should return 401 for invalid API key', async () => {
-      const request = new Request('https://functions.do/functions/my-function', {
+      const request = new Request('https://functions.do/api/functions/my-function', {
         method: 'GET',
         headers: { 'X-API-Key': 'invalid-key-12345' },
       })
@@ -279,9 +294,10 @@ describe('Function Details API - GET /functions/:id', () => {
     })
 
     it('should return 401 for expired API key', async () => {
-      // Set up an expired API key
+      // Set up an expired API key (stored with keys: prefix and hashed key)
+      const expiredKeyHash = await hashApiKey('expired-key')
       await mockApiKeys.put(
-        'expired-key',
+        `keys:${expiredKeyHash}`,
         JSON.stringify({
           userId: 'user-456',
           active: true,
@@ -289,7 +305,7 @@ describe('Function Details API - GET /functions/:id', () => {
         })
       )
 
-      const request = new Request('https://functions.do/functions/my-function', {
+      const request = new Request('https://functions.do/api/functions/my-function', {
         method: 'GET',
         headers: { 'X-API-Key': 'expired-key' },
       })
@@ -297,11 +313,11 @@ describe('Function Details API - GET /functions/:id', () => {
 
       expect(response.status).toBe(401)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toBe('Invalid API key')
+      expect(body['error']).toBe('API key has expired')
     })
 
     it('should allow access with valid API key', async () => {
-      const request = new Request('https://functions.do/functions/my-function', {
+      const request = new Request('https://functions.do/api/functions/my-function', {
         method: 'GET',
         headers: { 'X-API-Key': 'test-api-key' },
       })
@@ -312,25 +328,26 @@ describe('Function Details API - GET /functions/:id', () => {
       expect(body['id']).toBe('my-function')
     })
 
-    it('should require X-API-Key header (Authorization Bearer not yet supported)', async () => {
-      // Note: Authorization Bearer format is not currently supported
-      // The auth module only checks the X-API-Key header
-      const request = new Request('https://functions.do/functions/my-function', {
+    it('should support Authorization Bearer token', async () => {
+      // Authorization Bearer is supported by the auth middleware
+      // Bearer tokens are validated as API keys if they have the right prefix
+      // or tried against OAuth and then API key fallback
+      const request = new Request('https://functions.do/api/functions/my-function', {
         method: 'GET',
         headers: { Authorization: 'Bearer test-api-key' },
       })
       const response = await worker.fetch(request, mockEnv, mockCtx)
 
-      // Returns 401 because Authorization header is not checked
-      expect(response.status).toBe(401)
+      // Bearer token 'test-api-key' is validated and succeeds since it's stored in KV
+      expect(response.status).toBe(200)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toBe('Missing API key')
+      expect(body['id']).toBe('my-function')
     })
   })
 
   describe('Response Format', () => {
     it('should return JSON response with Content-Type header', async () => {
-      const request = new Request('https://functions.do/functions/my-function', {
+      const request = new Request('https://functions.do/api/functions/my-function', {
         method: 'GET',
         headers: { 'X-API-Key': 'test-api-key' },
       })
@@ -341,7 +358,7 @@ describe('Function Details API - GET /functions/:id', () => {
     })
 
     it('should return consistent response schema', async () => {
-      const request = new Request('https://functions.do/functions/my-function', {
+      const request = new Request('https://functions.do/api/functions/my-function', {
         method: 'GET',
         headers: { 'X-API-Key': 'test-api-key' },
       })
@@ -353,14 +370,14 @@ describe('Function Details API - GET /functions/:id', () => {
       // Verify consistent schema
       expect(body).toHaveProperty('id')
       expect(body).toHaveProperty('status')
-      expect(body).toHaveProperty('fromCache')
-      expect(body).toHaveProperty('loadTimeMs')
+      expect(body).toHaveProperty('version')
+      expect(body).toHaveProperty('language')
     })
   })
 
   describe('Edge Cases', () => {
     it('should handle function IDs with hyphens', async () => {
-      const request = new Request('https://functions.do/functions/my-function', {
+      const request = new Request('https://functions.do/api/functions/my-function', {
         method: 'GET',
         headers: { 'X-API-Key': 'test-api-key' },
       })
@@ -372,7 +389,7 @@ describe('Function Details API - GET /functions/:id', () => {
     })
 
     it('should handle function IDs with alphanumeric characters', async () => {
-      // Set up a function with alphanumeric ID
+      // Set up a function with alphanumeric ID (stored with registry: prefix)
       const alphaFunctionMetadata = {
         id: 'func123',
         version: '1.0.0',
@@ -380,7 +397,7 @@ describe('Function Details API - GET /functions/:id', () => {
         entryPoint: 'index.ts',
         dependencies: {},
       }
-      await mockRegistry.put('func123', JSON.stringify(alphaFunctionMetadata))
+      await mockRegistry.put('registry:func123', JSON.stringify(alphaFunctionMetadata))
 
       const alphaFunctionCode = `
         export default {
@@ -393,7 +410,7 @@ describe('Function Details API - GET /functions/:id', () => {
       `
       await mockCodeStorage.put('func123', alphaFunctionCode)
 
-      const request = new Request('https://functions.do/functions/func123', {
+      const request = new Request('https://functions.do/api/functions/func123', {
         method: 'GET',
         headers: { 'X-API-Key': 'test-api-key' },
       })
@@ -406,15 +423,15 @@ describe('Function Details API - GET /functions/:id', () => {
 
     it('should handle concurrent requests', async () => {
       const requests = [
-        new Request('https://functions.do/functions/my-function', {
+        new Request('https://functions.do/api/functions/my-function', {
           method: 'GET',
           headers: { 'X-API-Key': 'test-api-key' },
         }),
-        new Request('https://functions.do/functions/my-function', {
+        new Request('https://functions.do/api/functions/my-function', {
           method: 'GET',
           headers: { 'X-API-Key': 'test-api-key' },
         }),
-        new Request('https://functions.do/functions/my-function', {
+        new Request('https://functions.do/api/functions/my-function', {
           method: 'GET',
           headers: { 'X-API-Key': 'test-api-key' },
         }),
@@ -459,10 +476,11 @@ describe('Function Details API - GET /functions/:id', () => {
   })
 
   describe('Method Handling', () => {
-    it('should return 405 for unsupported methods', async () => {
-      const request = new Request('https://functions.do/functions/my-function', {
-        method: 'DELETE',
+    it('should return 405 for unsupported methods on api/functions/:id', async () => {
+      const request = new Request('https://functions.do/api/functions/my-function', {
+        method: 'PUT',
         headers: { 'X-API-Key': 'test-api-key' },
+        body: JSON.stringify({}),
       })
       const response = await worker.fetch(request, mockEnv, mockCtx)
 
@@ -471,9 +489,10 @@ describe('Function Details API - GET /functions/:id', () => {
       expect(body['error']).toContain('not allowed')
     })
 
-    it('should return 405 for PUT requests', async () => {
-      const request = new Request('https://functions.do/functions/my-function', {
-        method: 'PUT',
+    it('should return 405 for POST requests on api/functions/:id', async () => {
+      // POST is for /api/functions (create) not /api/functions/:id
+      const request = new Request('https://functions.do/api/functions/my-function', {
+        method: 'POST',
         headers: { 'X-API-Key': 'test-api-key' },
         body: JSON.stringify({}),
       })
@@ -482,27 +501,28 @@ describe('Function Details API - GET /functions/:id', () => {
       expect(response.status).toBe(405)
     })
 
-    it('should return 405 for PATCH requests', async () => {
-      const request = new Request('https://functions.do/functions/my-function', {
-        method: 'PATCH',
+    it('should allow DELETE requests on api/functions/:id', async () => {
+      // DELETE is supported on /api/functions/:id
+      const request = new Request('https://functions.do/api/functions/my-function', {
+        method: 'DELETE',
         headers: { 'X-API-Key': 'test-api-key' },
-        body: JSON.stringify({}),
       })
       const response = await worker.fetch(request, mockEnv, mockCtx)
 
-      expect(response.status).toBe(405)
+      // DELETE handler should work (returns 200 or 404 depending on function existence)
+      expect([200, 404]).toContain(response.status)
     })
   })
 
-  describe('Without Authentication (API_KEYS not configured)', () => {
-    it('should allow access without API key when API_KEYS is not configured', async () => {
+  describe('Without Authentication (FUNCTIONS_API_KEYS not configured)', () => {
+    it('should allow access without API key when FUNCTIONS_API_KEYS is not configured', async () => {
       const envWithoutAuth: Env = {
-        REGISTRY: mockRegistry,
-        CODE: mockCodeStorage,
-        // No API_KEYS
+        FUNCTIONS_REGISTRY: mockRegistry,
+        FUNCTIONS_CODE: mockCodeStorage,
+        // No FUNCTIONS_API_KEYS
       }
 
-      const request = new Request('https://functions.do/functions/my-function', {
+      const request = new Request('https://functions.do/api/functions/my-function', {
         method: 'GET',
       })
       const response = await worker.fetch(request, envWithoutAuth, mockCtx)

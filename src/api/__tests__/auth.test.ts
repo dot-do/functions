@@ -235,7 +235,7 @@ describe('Auth Middleware', () => {
       expect(result.response?.status).toBe(401)
 
       const body = (await result.response?.json()) as JsonBody
-      expect(body['error']).toBe('Missing API key')
+      expect(body['error']).toBe('Missing authentication')
     })
 
     it('returns 401 for invalid API key', async () => {
