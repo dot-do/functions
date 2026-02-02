@@ -556,6 +556,122 @@ describe('Rate Limit Middleware', () => {
   })
 })
 
+describe('memory leak prevention', () => {
+  let mockEnv: Record<string, unknown>
+  let mockCtx: ExecutionContext
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+
+    mockEnv = {}
+    mockCtx = {
+      waitUntil: vi.fn(),
+      passThroughOnException: vi.fn(),
+    } as unknown as ExecutionContext
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('does not grow limiters unboundedly with many unique endpoint paths', async () => {
+    const config: RateLimitMiddlewareConfig = {
+      limits: {
+        ip: { windowMs: 60_000, maxRequests: 1000 },
+      },
+      endpointLimits: {
+        'GET /api/functions/*': { windowMs: 60_000, maxRequests: 100 },
+      },
+    }
+
+    const middleware = createRateLimitMiddleware(config)
+
+    // Simulate many unique paths that each create a custom limiter
+    for (let i = 0; i < 200; i++) {
+      const request = new Request(`https://functions.do/api/functions/func-${i}`, {
+        method: 'GET',
+        headers: { 'CF-Connecting-IP': '10.0.0.1' },
+      })
+      const result = await middleware(request, mockEnv, mockCtx)
+      expect(result.allowed).toBe(true)
+    }
+
+    // The middleware should still function correctly
+    const finalRequest = new Request('https://functions.do/api/functions/final-func', {
+      method: 'GET',
+      headers: { 'CF-Connecting-IP': '10.0.0.1' },
+    })
+    const result = await middleware(finalRequest, mockEnv, mockCtx)
+    expect(result.allowed).toBe(true)
+  })
+
+  it('cleans up expired windows after cleanup interval', async () => {
+    const config: RateLimitMiddlewareConfig = {
+      limits: {
+        ip: { windowMs: 60_000, maxRequests: 5 },
+      },
+    }
+
+    const middleware = createRateLimitMiddleware(config)
+
+    // Make some requests to create windows
+    for (let i = 0; i < 3; i++) {
+      const request = new Request('https://functions.do/api/functions', {
+        headers: { 'CF-Connecting-IP': `10.0.0.${i + 1}` },
+      })
+      await middleware(request, mockEnv, mockCtx)
+    }
+
+    // Advance time past the window expiration AND cleanup interval (5 min)
+    vi.advanceTimersByTime(5 * 60 * 1000 + 1)
+
+    // The next request triggers cleanup of expired windows
+    const request = new Request('https://functions.do/api/functions', {
+      headers: { 'CF-Connecting-IP': '10.0.0.1' },
+    })
+    const result = await middleware(request, mockEnv, mockCtx)
+
+    // Should still work correctly after cleanup
+    expect(result.allowed).toBe(true)
+    expect(result.headers?.['X-RateLimit-Remaining']).toBe('4')
+  })
+
+  it('continues rate limiting correctly after eviction of old limiters', async () => {
+    const config: RateLimitMiddlewareConfig = {
+      limits: {
+        ip: { windowMs: 60_000, maxRequests: 2 },
+      },
+    }
+
+    const middleware = createRateLimitMiddleware(config)
+
+    // Exhaust limit for an IP
+    for (let i = 0; i < 2; i++) {
+      const request = new Request('https://functions.do/api/functions', {
+        headers: { 'CF-Connecting-IP': '10.0.0.1' },
+      })
+      await middleware(request, mockEnv, mockCtx)
+    }
+
+    // Should be blocked
+    const blockedRequest = new Request('https://functions.do/api/functions', {
+      headers: { 'CF-Connecting-IP': '10.0.0.1' },
+    })
+    const blockedResult = await middleware(blockedRequest, mockEnv, mockCtx)
+    expect(blockedResult.allowed).toBe(false)
+
+    // Advance past window and cleanup interval
+    vi.advanceTimersByTime(5 * 60 * 1000 + 1)
+
+    // Should be allowed again after cleanup
+    const allowedRequest = new Request('https://functions.do/api/functions', {
+      headers: { 'CF-Connecting-IP': '10.0.0.1' },
+    })
+    const allowedResult = await middleware(allowedRequest, mockEnv, mockCtx)
+    expect(allowedResult.allowed).toBe(true)
+  })
+})
+
 describe('rateLimitMiddleware default export', () => {
   let mockEnv: Record<string, unknown>
   let mockCtx: ExecutionContext

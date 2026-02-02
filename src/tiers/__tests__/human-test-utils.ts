@@ -15,8 +15,8 @@ import type {
   HumanUI,
   FormField,
   ResponderInfo,
-} from '../../../core/src/human/index.js'
-import { defineHumanFunction } from '../../../core/src/human/index.js'
+} from '@dotdo/functions/human'
+import { defineHumanFunction } from '@dotdo/functions/human'
 import type { HumanExecutor } from '../human-executor.js'
 
 // =============================================================================

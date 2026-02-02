@@ -25,9 +25,9 @@ import type {
   GenerativeFunctionDefinition,
   GenerativeFunctionConfig,
   GenerativeFunctionResult,
-} from '../../../core/src/generative/index.js'
-import { defineGenerativeFunction } from '../../../core/src/generative/index.js'
-import type { JsonSchema } from '../../../core/src/types.js'
+} from '@dotdo/functions/generative'
+import { defineGenerativeFunction } from '@dotdo/functions/generative'
+import type { JsonSchema } from '@dotdo/functions'
 import { createMockKV } from '../../test-utils/mock-kv.js'
 
 // E2E imports - these test the full flow

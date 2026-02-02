@@ -368,14 +368,14 @@ function detectGitInfo(): { commitSha?: string; branch?: string; prNumber?: numb
   const info: { commitSha?: string; branch?: string; prNumber?: number } = {}
 
   // Check GitHub Actions environment variables
-  if (process.env.GITHUB_SHA) {
-    info.commitSha = process.env.GITHUB_SHA
+  if (process.env['GITHUB_SHA']) {
+    info.commitSha = process.env['GITHUB_SHA']
   }
-  if (process.env.GITHUB_REF_NAME) {
-    info.branch = process.env.GITHUB_REF_NAME
+  if (process.env['GITHUB_REF_NAME']) {
+    info.branch = process.env['GITHUB_REF_NAME']
   }
-  if (process.env.GITHUB_EVENT_NAME === 'pull_request' && process.env.GITHUB_REF) {
-    const match = process.env.GITHUB_REF.match(/refs\/pull\/(\d+)\/merge/)
+  if (process.env['GITHUB_EVENT_NAME'] === 'pull_request' && process.env['GITHUB_REF']) {
+    const match = process.env['GITHUB_REF'].match(/refs\/pull\/(\d+)\/merge/)
     if (match) {
       info.prNumber = parseInt(match[1], 10)
     }
@@ -663,10 +663,10 @@ async function compileTypeScript(
     }
 
     return { success: true }
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       success: false,
-      error: err.message || String(err),
+      error: err instanceof Error ? err.message : String(err),
     }
   }
 }
@@ -750,8 +750,8 @@ async function uploadToCloudflare(
   env: string,
   options: DeployCommandOptions
 ): Promise<{ success: boolean; workerId?: string; error?: string }> {
-  const apiToken = process.env.CLOUDFLARE_API_TOKEN
-  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID
+  const apiToken = process.env['CLOUDFLARE_API_TOKEN']
+  const accountId = process.env['CLOUDFLARE_ACCOUNT_ID']
 
   if (!apiToken) {
     return {
@@ -796,7 +796,7 @@ async function registerInRegistry(
   deploymentUrl: string,
   options: DeployCommandOptions
 ): Promise<{ success: boolean; error?: string }> {
-  const registryUrl = process.env.FUNCTIONS_DO_REGISTRY_URL || 'https://registry.functions.do'
+  const registryUrl = process.env['FUNCTIONS_DO_REGISTRY_URL'] || 'https://registry.functions.do'
 
   log('Registering function in catalog...', options)
   logVerbose(`Registry URL: ${registryUrl}`, options)
@@ -818,10 +818,10 @@ async function registerInRegistry(
     logVerbose(`Metadata: language=${funcConfig.language}, env=${env}`, options)
 
     return { success: true }
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       success: false,
-      error: `Registry error: ${err.message || 'Failed to register function'}`
+      error: `Registry error: ${err instanceof Error ? err.message : 'Failed to register function'}`
     }
   }
 }
@@ -924,7 +924,7 @@ async function executeRollback(
   }
 
   // Register the rollback in registry
-  const apiToken = process.env.CLOUDFLARE_API_TOKEN || ''
+  const apiToken = process.env['CLOUDFLARE_API_TOKEN'] || ''
   const isMockMode = apiToken.includes('mock') || apiToken === ''
   const deploymentUrl = generateDeploymentUrl(funcConfig, wranglerConfig, env, options, isMockMode)
 
@@ -1228,7 +1228,7 @@ export async function runDeployCommand(options: DeployCommandOptions): Promise<v
   log('Upload complete', options)
 
   // Step 3: Generate deployment URL
-  const apiToken = process.env.CLOUDFLARE_API_TOKEN || ''
+  const apiToken = process.env['CLOUDFLARE_API_TOKEN'] || ''
   const isMockMode = apiToken.includes('mock') || apiToken === ''
 
   let deploymentUrl: string

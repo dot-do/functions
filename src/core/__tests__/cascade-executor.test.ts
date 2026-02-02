@@ -18,8 +18,6 @@
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 
-// Types imported from core package (relative to core/src)
-// Note: These types are defined in core/src/cascade.ts
 import type {
   CascadeDefinition,
   CascadeTiers,
@@ -30,7 +28,7 @@ import type {
   CascadeMetrics,
   TierSkipCondition,
   FunctionType,
-} from '../../../core/src/cascade.js'
+} from '@dotdo/functions'
 
 import {
   DEFAULT_TIER_TIMEOUTS,
@@ -38,7 +36,7 @@ import {
   CascadeExhaustedError,
   TierTimeoutError,
   TierSkippedError,
-} from '../../../core/src/cascade.js'
+} from '@dotdo/functions'
 
 // This import will fail until the executor is implemented
 import { CascadeExecutor } from '../cascade-executor'

@@ -27,9 +27,9 @@ import type {
   GenerativeExample,
   GenerativeExecutionInfo,
   AIModel,
-} from '../../../core/src/generative/index.js'
-import { defineGenerativeFunction, generativeFunction } from '../../../core/src/generative/index.js'
-import type { JsonSchema, ExecutionContext } from '../../../core/src/types.js'
+} from '@dotdo/functions/generative'
+import { defineGenerativeFunction, generativeFunction } from '@dotdo/functions/generative'
+import type { JsonSchema, ExecutionContext } from '@dotdo/functions'
 
 // The executor doesn't exist yet - this import will fail (RED phase)
 import { GenerativeExecutor } from '../generative-executor.js'

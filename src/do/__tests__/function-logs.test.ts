@@ -94,6 +94,19 @@ class MockSqlStorage {
       return this.emptyResult<T>()
     }
 
+    // Handle SELECT DISTINCT function_id
+    if (normalizedSql.includes('select distinct function_id from logs')) {
+      const functionIds = new Set<string>()
+      for (const log of this.logs.values()) {
+        functionIds.add(log.function_id)
+      }
+      const results = Array.from(functionIds).map((fid) => ({ function_id: fid }))
+      return {
+        one: () => (results[0] as T) || null,
+        toArray: () => results as T[],
+      }
+    }
+
     // Handle SELECT with various filters
     if (normalizedSql.includes('select') && normalizedSql.includes('from logs')) {
       let results = Array.from(this.logs.values())
@@ -102,6 +115,12 @@ class MockSqlStorage {
       if (normalizedSql.includes('where function_id')) {
         const functionId = params[0] as string
         results = results.filter((log) => log.function_id === functionId)
+      }
+
+      // Filter by request_id
+      if (normalizedSql.includes('where request_id')) {
+        const requestId = params[0] as string
+        results = results.filter((log) => log.request_id === requestId)
       }
 
       // Filter by level
@@ -168,7 +187,7 @@ class MockSqlStorage {
       }
     }
 
-    // Handle DELETE for retention
+    // Handle DELETE
     if (normalizedSql.includes('delete from logs')) {
       if (normalizedSql.includes('timestamp <')) {
         const cutoffTime = params[0] as number
@@ -177,6 +196,16 @@ class MockSqlStorage {
             this.logs.delete(id)
           }
         }
+      } else if (normalizedSql.includes('where function_id')) {
+        const functionId = params[0] as string
+        for (const [id, log] of this.logs.entries()) {
+          if (log.function_id === functionId) {
+            this.logs.delete(id)
+          }
+        }
+      } else if (normalizedSql.includes('where id')) {
+        const logId = params[0] as string
+        this.logs.delete(logId)
       }
       return this.emptyResult<T>()
     }

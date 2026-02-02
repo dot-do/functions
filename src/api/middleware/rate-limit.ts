@@ -137,6 +137,17 @@ function getEndpointLimit(
 }
 
 /**
+ * Maximum number of limiter instances to prevent unbounded memory growth.
+ * When this limit is reached, the oldest entries are evicted.
+ */
+const MAX_LIMITERS = 10_000
+
+/**
+ * Interval for cleaning up expired windows within each limiter (5 minutes)
+ */
+const CLEANUP_INTERVAL_MS = 5 * 60 * 1000
+
+/**
  * Create rate limit middleware with custom configuration
  */
 export function createRateLimitMiddleware(config: RateLimitMiddlewareConfig) {
@@ -150,6 +161,41 @@ export function createRateLimitMiddleware(config: RateLimitMiddlewareConfig) {
 
   // Create limiter storage for this middleware instance
   const limiters = new Map<string, InMemoryRateLimiter>()
+  let lastCleanup = Date.now()
+
+  /**
+   * Evict oldest entries when the limiters Map exceeds MAX_LIMITERS.
+   * Map iteration order is insertion order, so we delete the first entries.
+   */
+  const evictIfNeeded = (): void => {
+    if (limiters.size <= MAX_LIMITERS) return
+    const toEvict = limiters.size - MAX_LIMITERS
+    const iterator = limiters.keys()
+    for (let i = 0; i < toEvict; i++) {
+      const { value } = iterator.next()
+      if (value !== undefined) {
+        limiters.delete(value)
+      }
+    }
+  }
+
+  /**
+   * Periodically clean up expired windows inside each InMemoryRateLimiter
+   * to reclaim memory from stale entries. Also removes empty limiters.
+   */
+  const cleanupExpiredWindows = (): void => {
+    const now = Date.now()
+    if (now - lastCleanup < CLEANUP_INTERVAL_MS) return
+    lastCleanup = now
+
+    for (const [key, limiter] of limiters.entries()) {
+      limiter.cleanup()
+      // Remove limiter instances that have no active windows
+      if (limiter.getTrackedKeyCount() === 0) {
+        limiters.delete(key)
+      }
+    }
+  }
 
   const getLimiter = (category: string, limitConfig: RateLimitConfig): InMemoryRateLimiter => {
     const key = `${category}:${limitConfig.windowMs}:${limitConfig.maxRequests}`
@@ -157,6 +203,7 @@ export function createRateLimitMiddleware(config: RateLimitMiddlewareConfig) {
     if (!limiter) {
       limiter = new InMemoryRateLimiter(limitConfig)
       limiters.set(key, limiter)
+      evictIfNeeded()
     }
     return limiter
   }
@@ -167,6 +214,7 @@ export function createRateLimitMiddleware(config: RateLimitMiddlewareConfig) {
     if (!limiter) {
       limiter = new InMemoryRateLimiter(limitConfig)
       limiters.set(fullKey, limiter)
+      evictIfNeeded()
     }
     return limiter
   }
@@ -181,6 +229,9 @@ export function createRateLimitMiddleware(config: RateLimitMiddlewareConfig) {
     const path = url.pathname
     const method = request.method.toUpperCase()
     const ip = getClientIP(request)
+
+    // Periodically clean up expired windows to prevent memory leaks
+    cleanupExpiredWindows()
 
     // Check bypass
     if (shouldBypass(path, bypass)) {

@@ -34,11 +34,11 @@ export {
   type RateLimitConfig,
 } from './middleware/rate-limit'
 
-// Executors
-export { CodeExecutor, type CodeExecutionResult } from './executors/code'
-export { GenerativeExecutor, type GenerativeExecutionResult, type GenerativeFunctionMetadata } from './executors/generative'
-export { AgenticExecutor, type AgenticExecutionResult, type AgenticFunctionMetadata } from './executors/agentic'
-export { HumanExecutor, type HumanExecutionResult, type HumanFunctionMetadata } from './executors/human'
+// Executors (real implementations in src/tiers/)
+export { CodeExecutor } from '../tiers/code-executor'
+export { GenerativeExecutor } from '../tiers/generative-executor'
+export { AgenticExecutor } from '../tiers/agentic-executor'
+export { HumanExecutor } from '../tiers/human-executor'
 export { CascadeExecutor, type CascadeExecutionResult, type CascadeFunctionMetadata, type CascadeStep } from './executors/cascade'
 
 // Validation

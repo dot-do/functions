@@ -58,6 +58,16 @@ export {
 // Analytics (Iceberg)
 export * from './iceberg-analytics'
 
+// Function Classification
+export {
+  classifyFunction,
+  classifyByHeuristic,
+  FunctionClassifier,
+  type ClassificationResult,
+  type FunctionType as ClassifiedFunctionType,
+  type ClassifierOptions,
+} from './function-classifier'
+
 // Utilities
 export { encodeULEB128, encodeSLEB128, encodeName, createSection } from './wasm-encoding'
 export { stripTypeScript } from './ts-strip'

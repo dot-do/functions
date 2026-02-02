@@ -188,6 +188,19 @@ interface Env {
 // ============================================================================
 
 /**
+ * Validate that a table name is safe for SQL interpolation.
+ * Only allows alphanumeric characters and underscores, starting with a letter or underscore.
+ *
+ * @throws Error if the table name contains invalid characters
+ */
+function validateTableName(table: string): string {
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(table)) {
+    throw new Error(`Invalid table name: ${table}`)
+  }
+  return table
+}
+
+/**
  * SQL parameter value types supported by the query builders.
  * These map to SQLite's native types.
  */
@@ -233,7 +246,7 @@ export function buildInsertQuery(table: string, params: SqlParams): BuiltQuery {
   const keys = Object.keys(params)
   const placeholders = keys.map(() => '?').join(', ')
   return {
-    sql: `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`,
+    sql: `INSERT INTO ${validateTableName(table)} (${keys.join(', ')}) VALUES (${placeholders})`,
     values: keys.map(k => params[k])
   }
 }
@@ -266,7 +279,7 @@ export function buildUpdateQuery(
   const whereClause = whereKeys.map(k => `${k} = ?`).join(' AND ')
 
   return {
-    sql: `UPDATE ${table} SET ${setClause} WHERE ${whereClause}`,
+    sql: `UPDATE ${validateTableName(table)} SET ${setClause} WHERE ${whereClause}`,
     values: [
       ...setKeys.map(k => setParams[k]),
       ...whereKeys.map(k => whereParams[k])
@@ -288,7 +301,7 @@ export function buildDeleteQuery(table: string, whereParams: SqlParams): BuiltQu
   const keys = Object.keys(whereParams)
   const whereClause = keys.map(k => `${k} = ?`).join(' AND ')
   return {
-    sql: `DELETE FROM ${table} WHERE ${whereClause}`,
+    sql: `DELETE FROM ${validateTableName(table)} WHERE ${whereClause}`,
     values: keys.map(k => whereParams[k])
   }
 }
@@ -310,7 +323,7 @@ export function buildDeleteQueryWithOperator(
   value: SqlValue
 ): BuiltQuery {
   return {
-    sql: `DELETE FROM ${table} WHERE ${column} ${operator} ?`,
+    sql: `DELETE FROM ${validateTableName(table)} WHERE ${column} ${operator} ?`,
     values: [value]
   }
 }

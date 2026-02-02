@@ -44,12 +44,24 @@
 import * as esbuild from 'esbuild-wasm'
 
 /**
+ * Cloudflare Workers supports WebAssembly.compile() for dynamic WASM compilation,
+ * but @cloudflare/workers-types does not include it in the WebAssembly namespace.
+ * This augmentation adds the compile method to the global WebAssembly type.
+ *
+ * @see https://developers.cloudflare.com/workers/runtime-apis/webassembly/
+ */
+declare global {
+  namespace WebAssembly {
+    function compile(bytes: ArrayBuffer): Promise<WebAssembly.Module>
+  }
+}
+
+/**
  * WebAssembly.compile is available in Workers but not fully typed in @cloudflare/workers-types.
  * Use this wrapper for type safety.
  */
 const compileWasm = (bytes: ArrayBuffer): Promise<WebAssembly.Module> =>
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (WebAssembly as any).compile(bytes)
+  WebAssembly.compile(bytes)
 
 // Re-export types for consumers
 export type {

@@ -33,6 +33,8 @@ import { validateFunctionId } from '../../core/function-registry'
 import type { FunctionMetadata } from '../../core/types'
 import { jsonResponse } from '../http-utils'
 import { stripTypeScriptSync } from '../../core/ts-compiler'
+import { TierDispatcher, type ExtendedMetadata, type TierDispatcherEnv } from '../tier-dispatcher'
+import { FunctionClassifier, type ClassificationResult } from '../../core/function-classifier'
 
 /**
  * Extended route context for invoke handler with required function ID.
@@ -42,11 +44,31 @@ export interface InvokeHandlerContext extends RouteContext {
   functionId: string
 }
 
+// Module-level classifier instance with caching for auto-classification
+let _classifierInstance: FunctionClassifier | undefined
+
+/**
+ * Get or create the shared FunctionClassifier instance.
+ * Uses a module-level singleton so classification results are cached across requests.
+ */
+function getClassifier(aiClient?: unknown): FunctionClassifier {
+  if (!_classifierInstance) {
+    _classifierInstance = new FunctionClassifier(
+      aiClient as Parameters<typeof FunctionClassifier.prototype.classify>[0] extends never ? undefined : any,
+      { maxCacheSize: 1000, defaultCacheTtlMs: 3600000 },
+    )
+  }
+  return _classifierInstance
+}
+
 /**
  * Determine function type from metadata.
  *
- * Defaults to 'code' for backward compatibility with functions
- * that don't have an explicit type set.
+ * If the metadata has an explicit type field, that is used directly.
+ * Otherwise, defaults to 'code' for backward compatibility.
+ *
+ * For async auto-classification (when AI client is available), use
+ * classifyFunctionType() instead.
  *
  * @param metadata - Function metadata with optional type field
  * @returns The function type ('code', 'generative', 'agentic', 'human', or 'cascade')
@@ -56,15 +78,58 @@ function getFunctionType(metadata: FunctionMetadata & { type?: string }): string
 }
 
 /**
+ * Auto-classify a function's type using AI when no explicit type is set.
+ *
+ * This function uses the FunctionClassifier to analyze the function name
+ * and metadata to determine the appropriate execution tier. Results are
+ * cached for subsequent invocations.
+ *
+ * @param metadata - Extended function metadata
+ * @param aiClient - Optional AI client for AI-powered classification
+ * @returns The classified function type and optional classification metadata
+ */
+async function classifyFunctionType(
+  metadata: ExtendedMetadata,
+  aiClient?: unknown,
+): Promise<{ type: string; classification?: ClassificationResult }> {
+  // If type is explicitly set, use it directly
+  if (metadata.type) {
+    return { type: metadata.type }
+  }
+
+  // Try AI-based auto-classification if AI client is available
+  const classifier = getClassifier(aiClient)
+  const description = metadata.userPrompt || metadata.goal || metadata.systemPrompt
+  const result = await classifier.classify(
+    metadata.id,
+    description,
+    metadata.inputSchema,
+  )
+
+  // Only use AI classification if confidence is sufficient
+  if (result.confidence >= 0.6) {
+    return { type: result.type, classification: result }
+  }
+
+  // Low confidence: default to 'code' for safety
+  return { type: 'code', classification: result }
+}
+
+/**
  * Invoke handler - executes deployed functions.
  *
- * Supports multiple execution tiers:
+ * Supports all execution tiers via TierDispatcher:
  * - Tier 1: Code (5s timeout) - Direct code execution via worker_loaders or dispatch namespace
- * - Tier 2-4: Currently return 501 Not Implemented
+ * - Tier 2: Generative (30s timeout) - AI-powered generation via AI_CLIENT
+ * - Tier 3: Agentic (5m timeout) - Multi-step AI agent execution via AI_CLIENT
+ * - Tier 4: Human (24h timeout) - Human-in-the-loop tasks via HUMAN_TASKS DO
  *
  * For code execution, the handler tries multiple backends in order:
  * 1. worker_loaders (ai-evaluate) - Isolated worker execution
  * 2. dispatch_namespace (Workers for Platforms) - Pre-deployed workers
+ *
+ * For non-code tiers, invocations are dispatched to the TierDispatcher which
+ * handles generative, agentic, human, and cascade function types.
  *
  * @param request - The incoming HTTP request with optional JSON body
  * @param env - Environment bindings (KV, Durable Objects, etc.)
@@ -77,12 +142,27 @@ function getFunctionType(metadata: FunctionMetadata & { type?: string }): string
  * // Body: { "name": "World" }
  * // Response: { "greeting": "Hello, World!", "_meta": { "duration": 5, "executorType": "code" } }
  */
+/** Maximum allowed request body size for invoke requests (10MB) */
+const INVOKE_MAX_BODY_SIZE = 10 * 1024 * 1024
+
 export const invokeHandler: Handler = async (
   request: Request,
   env: Env,
   ctx: ExecutionContext,
   context?: RouteContext
 ): Promise<Response> => {
+  // Validate request body size before parsing
+  const contentLength = request.headers.get('Content-Length')
+  if (contentLength !== null) {
+    const size = parseInt(contentLength, 10)
+    if (isNaN(size) || size > INVOKE_MAX_BODY_SIZE) {
+      return jsonResponse(
+        { error: `Request body too large. Maximum size is ${INVOKE_MAX_BODY_SIZE} bytes (10MB).` },
+        413
+      )
+    }
+  }
+
   const functionId = context?.functionId || context?.params?.['id']
   const version = context?.version
 
@@ -132,20 +212,68 @@ export const invokeHandler: Handler = async (
     requestData = { text: await request.text() }
   }
 
-  // Determine function type and dispatch to executor
-  const functionType = getFunctionType(metadata as FunctionMetadata & { type?: string })
+  // Determine function type - use auto-classification if no type is explicitly set
+  const extendedMetadata = metadata as ExtendedMetadata
+  let functionType: string
+  let classificationMeta: ClassificationResult | undefined
+
+  if (extendedMetadata.type) {
+    // Explicit type set - use directly
+    functionType = extendedMetadata.type
+  } else if (env.AI_CLIENT) {
+    // No type set and AI client available - try auto-classification
+    const classified = await classifyFunctionType(extendedMetadata, env.AI_CLIENT)
+    functionType = classified.type
+    classificationMeta = classified.classification
+  } else {
+    // No type set and no AI client - default to code
+    functionType = 'code'
+  }
+
   const start = Date.now()
 
-  // For non-code types, check if executor is available
+  // For non-code types, dispatch through TierDispatcher
   if (['generative', 'agentic', 'human', 'cascade'].includes(functionType)) {
-    // These executors are not implemented yet
-    return jsonResponse(
-      {
-        error: `Executor not available for function type: ${functionType}`,
-        _meta: { executorType: functionType, duration: Date.now() - start },
-      },
-      501
+    // Build TierDispatcher environment from the handler's env
+    const dispatcherEnv: TierDispatcherEnv = {
+      FUNCTIONS_REGISTRY: env.FUNCTIONS_REGISTRY,
+      FUNCTIONS_CODE: env.FUNCTIONS_CODE,
+      LOADER: env.LOADER,
+      USER_FUNCTIONS: env.USER_FUNCTIONS,
+      AI_CLIENT: env.AI_CLIENT,
+      HUMAN_TASKS: env.HUMAN_TASKS,
+      CODE_STORAGE: env.CODE_STORAGE,
+    }
+
+    const dispatcher = new TierDispatcher(dispatcherEnv)
+    const dispatchMetadata = classificationMeta
+      ? { ...extendedMetadata, type: functionType }
+      : extendedMetadata
+    const result = await dispatcher.dispatch(
+      dispatchMetadata as ExtendedMetadata,
+      requestData
     )
+
+    // Add classification info to response meta if auto-classified
+    if (classificationMeta) {
+      result.body._meta = {
+        ...result.body._meta,
+        autoClassified: true,
+        classification: {
+          type: classificationMeta.type,
+          confidence: classificationMeta.confidence,
+          reasoning: classificationMeta.reasoning,
+        },
+      } as typeof result.body._meta
+    }
+
+    // Add execution time header
+    const headers: Record<string, string> = {
+      'X-Execution-Time': String(result.body._meta.duration),
+    }
+
+    // Return the dispatcher result directly
+    return jsonResponse(result.body, result.status, headers)
   }
 
   // Code execution path

@@ -355,7 +355,8 @@ async function validateApiKey(
   request: Request,
   scopeRequirements?: Record<string, string[]>
 ): Promise<AuthMiddlewareResult> {
-  const record = await kv.get<ApiKeyRecord>(apiKey, 'json')
+  const keyHash = await hashApiKey(apiKey)
+  const record = await kv.get<ApiKeyRecord>(`keys:${keyHash}`, 'json')
   if (!record) {
     return {
       shouldContinue: false,
@@ -397,7 +398,7 @@ async function validateApiKey(
   // Build auth context with hashed/hinted key (never store full key)
   const authContext: AuthContext = {
     userId: record.userId || 'anonymous',
-    keyHash: await hashApiKey(apiKey),
+    keyHash,
     keyHint: createKeyHint(apiKey),
     scopes: record.scopes || [],
     authenticatedAt: Date.now(),

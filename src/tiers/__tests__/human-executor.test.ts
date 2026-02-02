@@ -15,8 +15,6 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-// Import types from core human module
-// Note: In production this would be '@dotdo/functions/human'
 import type {
   HumanFunctionDefinition,
   HumanFunctionConfig,
@@ -33,13 +31,13 @@ import type {
   ResponderInfo,
   ReminderConfig,
   UIContext,
-} from '../../../core/src/human/index.js'
+} from '@dotdo/functions/human'
 
 import {
   defineHumanFunction,
   approvalFunction,
   inputFunction,
-} from '../../../core/src/human/index.js'
+} from '@dotdo/functions/human'
 
 // The executor doesn't exist yet - this import will fail (RED phase)
 import { HumanExecutor } from '../human-executor.js'

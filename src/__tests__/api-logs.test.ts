@@ -25,16 +25,106 @@ import {
 // ============================================================================
 
 /**
+ * Internal log entry for mock storage
+ */
+interface MockLogEntry {
+  id: string
+  function_id: string
+  timestamp: number
+  level: string
+  message: string
+  metadata: string | null
+  request_id: string | null
+  duration_ms: number | null
+  created_at: number
+}
+
+/**
  * Mock SQLite storage for testing
  */
 class MockSqlStorage {
-  private logs: Map<string, Record<string, unknown>> = new Map()
+  private logs: Map<string, MockLogEntry> = new Map()
 
-  exec<T = unknown>(): { one: () => T | null; toArray: () => T[] } {
-    return {
-      one: () => null,
-      toArray: () => [],
+  exec<T = unknown>(sql: string, ...params: unknown[]): { one: () => T | null; toArray: () => T[] } {
+    const normalizedSql = sql.trim().toLowerCase()
+
+    // Handle CREATE TABLE / CREATE INDEX
+    if (normalizedSql.includes('create table') || normalizedSql.includes('create index')) {
+      return { one: () => null, toArray: () => [] }
     }
+
+    // Handle INSERT into logs
+    if (normalizedSql.includes('insert into logs')) {
+      const entry: MockLogEntry = {
+        id: params[0] as string,
+        function_id: params[1] as string,
+        timestamp: params[2] as number,
+        level: params[3] as string,
+        message: params[4] as string,
+        metadata: params[5] as string | null,
+        request_id: params[6] as string | null,
+        duration_ms: params[7] as number | null,
+        created_at: params[8] as number,
+      }
+      this.logs.set(entry.id, entry)
+      return { one: () => null, toArray: () => [] }
+    }
+
+    // Handle SELECT DISTINCT function_id
+    if (normalizedSql.includes('select distinct function_id from logs')) {
+      const functionIds = new Set<string>()
+      for (const log of this.logs.values()) {
+        functionIds.add(log.function_id)
+      }
+      const results = Array.from(functionIds).map((fid) => ({ function_id: fid }))
+      return {
+        one: () => (results[0] as T) || null,
+        toArray: () => results as T[],
+      }
+    }
+
+    // Handle SELECT with various filters
+    if (normalizedSql.includes('select') && normalizedSql.includes('from logs')) {
+      let results = Array.from(this.logs.values())
+
+      // Filter by function_id
+      if (normalizedSql.includes('where function_id')) {
+        const functionId = params[0] as string
+        results = results.filter((log) => log.function_id === functionId)
+      }
+
+      // Filter by request_id
+      if (normalizedSql.includes('where request_id')) {
+        const requestId = params[0] as string
+        results = results.filter((log) => log.request_id === requestId)
+      }
+
+      // Sort by timestamp descending (default)
+      results.sort((a, b) => b.timestamp - a.timestamp)
+
+      return {
+        one: () => (results[0] as T) || null,
+        toArray: () => results as T[],
+      }
+    }
+
+    // Handle DELETE
+    if (normalizedSql.includes('delete from logs')) {
+      if (normalizedSql.includes('where function_id')) {
+        const functionId = params[0] as string
+        for (const [id, log] of this.logs.entries()) {
+          if (log.function_id === functionId) {
+            this.logs.delete(id)
+          }
+        }
+      } else if (normalizedSql.includes('where id')) {
+        const logId = params[0] as string
+        this.logs.delete(logId)
+      }
+      return { one: () => null, toArray: () => [] }
+    }
+
+    return { one: () => null, toArray: () => [] }
   }
 
   clear(): void {

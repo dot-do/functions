@@ -26,6 +26,8 @@ import type {
   AgenticFunctionDefinition,
   AgenticFunctionConfig,
   AgenticFunctionResult,
+  BuiltinTool,
+  ToolDefinition,
 } from '@dotdo/functions/agentic'
 import type {
   HumanFunctionDefinition,
@@ -97,6 +99,14 @@ export interface AIClient {
     tokens: { inputTokens: number; outputTokens: number; totalTokens: number }
   }>
 }
+
+/**
+ * Extract the AI client type that AgenticExecutor expects as its second constructor parameter.
+ * AgenticExecutor defines its own internal AIClient interface that is not exported.
+ * Using ConstructorParameters lets us reference the exact expected type without
+ * duplicating the internal interface definition.
+ */
+type AgenticExecutorAIClient = ConstructorParameters<typeof AgenticExecutor>[1]
 
 /**
  * Dispatch result with execution info
@@ -176,6 +186,8 @@ export interface DispatchResult<TOutput = unknown> {
  */
 export interface ExtendedMetadata extends FunctionMetadata {
   type?: string
+  // Schema fields
+  inputSchema?: Record<string, unknown>
   // Generative fields
   model?: string
   userPrompt?: string
@@ -189,6 +201,7 @@ export interface ExtendedMetadata extends FunctionMetadata {
     name: string
     description: string
     inputSchema: Record<string, unknown>
+    implementation?: ToolDefinition['implementation']
   }>
   maxIterations?: number
   enableReasoning?: boolean
@@ -535,7 +548,8 @@ export class TierDispatcher {
       }
     }
 
-    // Build AgenticFunctionDefinition from metadata
+    // Build AgenticFunctionDefinition from metadata, preserving tool implementations
+    const metadataTools = metadata.tools || []
     const definition: AgenticFunctionDefinition = {
       id: metadata.id,
       name: metadata.id,
@@ -544,9 +558,9 @@ export class TierDispatcher {
       model: metadata.model || 'claude-3-opus',
       systemPrompt: metadata.systemPrompt || 'You are a helpful assistant.',
       goal: metadata.goal || 'Complete the requested task',
-      tools: (metadata.tools || []).map(t => ({
+      tools: metadataTools.map(t => ({
         ...t,
-        implementation: { type: 'inline', handler: '' } as const,
+        implementation: t.implementation || { type: 'builtin' as const, name: t.name as BuiltinTool },
       })),
       maxIterations: metadata.maxIterations || 10,
       enableReasoning: metadata.enableReasoning !== false,
@@ -557,9 +571,18 @@ export class TierDispatcher {
     // Get or create agentic executor for this function
     let executor = this.agenticExecutors.get(metadata.id)
     if (!executor) {
-      // Cast AI_CLIENT - the dispatcher's AIClient provides the chat method that AgenticExecutor needs
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      executor = new AgenticExecutor(definition, this.env.AI_CLIENT as any)
+      // Cast AI_CLIENT to the shape AgenticExecutor expects - the dispatcher has already
+      // verified AI_CLIENT.chat exists, so this structural cast is safe.
+      executor = new AgenticExecutor(definition, this.env.AI_CLIENT as unknown as AgenticExecutorAIClient)
+
+      // Register tool handlers based on each tool's implementation type
+      for (const tool of definition.tools) {
+        const handler = this.createToolHandler(tool)
+        if (handler) {
+          executor.registerToolHandler(tool.name, handler)
+        }
+      }
+
       this.agenticExecutors.set(metadata.id, executor)
     }
 
@@ -854,6 +877,201 @@ export class TierDispatcher {
           stepsExecuted,
         },
       },
+    }
+  }
+
+  // ===========================================================================
+  // TOOL HANDLER FACTORY
+  // ===========================================================================
+
+  /**
+   * Create a tool handler function based on the tool's implementation type.
+   *
+   * Maps each implementation type to a concrete handler:
+   * - builtin: Built-in implementations for web_search, web_fetch, etc.
+   * - api: HTTP fetch-based handler using the tool's endpoint config
+   * - inline: Executes inline handler code via Function constructor
+   * - function: Dispatches to another registered function by ID
+   */
+  private createToolHandler(
+    tool: ToolDefinition
+  ): ((input: unknown, context: { toolDefinition: ToolDefinition; executionContext: FunctionExecutionContext }) => Promise<unknown>) | null {
+    const impl = tool.implementation
+
+    switch (impl.type) {
+      case 'builtin':
+        return this.createBuiltinToolHandler(impl.name)
+
+      case 'api':
+        return this.createApiToolHandler(impl.endpoint)
+
+      case 'inline':
+        return this.createInlineToolHandler(impl.handler)
+
+      case 'function':
+        return this.createFunctionToolHandler(impl.functionId)
+
+      default:
+        return null
+    }
+  }
+
+  /**
+   * Create a handler for builtin tools (web_search, web_fetch, file_read, etc.)
+   */
+  private createBuiltinToolHandler(
+    name: BuiltinTool
+  ): (input: unknown, context: { toolDefinition: ToolDefinition; executionContext: FunctionExecutionContext }) => Promise<unknown> {
+    switch (name) {
+      case 'web_search':
+        return async (input: unknown) => {
+          const { query } = input as { query: string }
+          const searchUrl = `https://api.search.do/search?q=${encodeURIComponent(query)}`
+          try {
+            const response = await fetch(searchUrl)
+            if (!response.ok) {
+              return { error: `Search request failed with status ${response.status}`, results: [] }
+            }
+            return await response.json()
+          } catch (err) {
+            return { error: err instanceof Error ? err.message : 'Search failed', results: [] }
+          }
+        }
+
+      case 'web_fetch':
+        return async (input: unknown) => {
+          const { url, method = 'GET' } = input as { url: string; method?: string }
+          try {
+            const response = await fetch(url, { method })
+            const contentType = response.headers.get('content-type') || ''
+            if (contentType.includes('application/json')) {
+              return { status: response.status, data: await response.json() }
+            }
+            return { status: response.status, data: await response.text() }
+          } catch (err) {
+            return { error: err instanceof Error ? err.message : 'Fetch failed' }
+          }
+        }
+
+      case 'file_read':
+        return async (input: unknown) => {
+          const { path } = input as { path: string }
+          return { error: `file_read not available in this environment`, path }
+        }
+
+      case 'file_write':
+        return async (input: unknown) => {
+          const { path } = input as { path: string; content: string }
+          return { error: `file_write not available in this environment`, path }
+        }
+
+      case 'shell_exec':
+        return async (input: unknown) => {
+          const { command } = input as { command: string }
+          return { error: `shell_exec not available in this environment`, command }
+        }
+
+      case 'database_query':
+        return async (input: unknown) => {
+          const { query } = input as { query: string }
+          return { error: `database_query not available in this environment`, query }
+        }
+
+      case 'email_send':
+        return async (input: unknown) => {
+          const { to, subject, body } = input as { to: string; subject?: string; body: string }
+          return { error: `email_send not available in this environment`, to, subject, body }
+        }
+
+      case 'slack_send':
+        return async (input: unknown) => {
+          const { channel, message } = input as { channel: string; message: string }
+          return { error: `slack_send not available in this environment`, channel, message }
+        }
+
+      default:
+        return async () => {
+          return { error: `Unknown builtin tool: ${name}` }
+        }
+    }
+  }
+
+  /**
+   * Create a handler for API tools that calls an HTTP endpoint
+   */
+  private createApiToolHandler(
+    endpoint: string
+  ): (input: unknown, context: { toolDefinition: ToolDefinition; executionContext: FunctionExecutionContext }) => Promise<unknown> {
+    return async (input: unknown) => {
+      try {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(input),
+        })
+        const contentType = response.headers.get('content-type') || ''
+        if (contentType.includes('application/json')) {
+          return await response.json()
+        }
+        return { status: response.status, data: await response.text() }
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : 'API call failed' }
+      }
+    }
+  }
+
+  /**
+   * Create a handler for inline tools that executes handler code
+   */
+  private createInlineToolHandler(
+    handler: string
+  ): (input: unknown, context: { toolDefinition: ToolDefinition; executionContext: FunctionExecutionContext }) => Promise<unknown> {
+    return async (input: unknown) => {
+      try {
+        // Create a function from the inline handler code
+        // The handler receives 'input' as a parameter
+        const fn = new Function('input', handler)
+        const result = fn(input)
+        // Support both sync and async handlers
+        return result instanceof Promise ? await result : result
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : 'Inline handler execution failed' }
+      }
+    }
+  }
+
+  /**
+   * Create a handler for function tools that dispatches to another registered function
+   */
+  private createFunctionToolHandler(
+    functionId: string
+  ): (input: unknown, context: { toolDefinition: ToolDefinition; executionContext: FunctionExecutionContext }) => Promise<unknown> {
+    return async (input: unknown) => {
+      try {
+        // Look up the target function metadata
+        const targetMetadata = await this.getStepMetadata(functionId)
+        if (!targetMetadata) {
+          return { error: `Function '${functionId}' not found` }
+        }
+
+        // Get code if needed
+        let code: string | undefined
+        if ((targetMetadata.type || 'code') === 'code') {
+          code = await this.getStepCode(functionId)
+        }
+
+        // Dispatch to the target function
+        const result = await this.dispatch(targetMetadata, input, code)
+        if (result.status >= 400) {
+          return { error: result.body.error || `Function '${functionId}' failed` }
+        }
+
+        // Return output without _meta
+        const { _meta, ...output } = result.body
+        return output
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : `Function '${functionId}' execution failed` }
+      }
     }
   }
 

@@ -18,6 +18,8 @@ export default defineWorkersProject({
       'src/cli/**/*.test.ts',
       // Language tests import modules that use node:child_process
       'src/languages/**/*.test.ts',
+      // Python execution tests require Pyodide (Node.js only)
+      'src/tiers/__tests__/python-execution.test.ts',
       // These tests are explicitly run in Node.js environment
       'src/__tests__/wrangler-config.test.ts',
       'src/__tests__/api-router.test.ts',
@@ -41,6 +43,8 @@ export default defineWorkersProject({
       'src/core/__tests__/routing-utils.test.ts',
       'src/core/__tests__/ts-strip.test.ts',
       'src/core/cascade-constants.test.ts',
+      // Function classifier tests run in Node.js environment
+      'src/core/__tests__/function-classifier.test.ts',
       // AI tests run in Node.js environment
       'src/ai/__tests__/*.test.ts',
       // SDK template tests use node:child_process
@@ -97,7 +101,12 @@ export default defineWorkersProject({
   },
   resolve: {
     alias: {
-      'capnweb': resolve(__dirname, 'src/lib/capnweb.ts')
+      'capnweb': resolve(__dirname, 'src/lib/capnweb.ts'),
+      '@dotdo/functions/code': resolve(__dirname, 'core/src/code/index.ts'),
+      '@dotdo/functions/generative': resolve(__dirname, 'core/src/generative/index.ts'),
+      '@dotdo/functions/agentic': resolve(__dirname, 'core/src/agentic/index.ts'),
+      '@dotdo/functions/human': resolve(__dirname, 'core/src/human/index.ts'),
+      '@dotdo/functions': resolve(__dirname, 'core/src/index.ts'),
     }
   }
 })

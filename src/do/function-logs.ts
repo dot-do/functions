@@ -9,6 +9,8 @@
  * - Aggregate metrics (count by level, error rates)
  * - Multi-function support
  *
+ * Storage: SQLite via Durable Object ctx.storage.sql (persisted across evictions)
+ *
  * @module durable-object/function-logs
  */
 
@@ -201,6 +203,25 @@ const LOG_LEVEL_SEVERITY: Record<LogLevel, number> = {
 }
 
 // ============================================================================
+// SQL ROW TYPE
+// ============================================================================
+
+/**
+ * Row shape returned from the logs SQLite table
+ */
+interface LogRow {
+  id: string
+  function_id: string
+  timestamp: number
+  level: LogLevel
+  message: string
+  metadata: string | null
+  request_id: string | null
+  duration_ms: number | null
+  created_at: number
+}
+
+// ============================================================================
 // FUNCTION LOGS DURABLE OBJECT
 // ============================================================================
 
@@ -208,17 +229,13 @@ const LOG_LEVEL_SEVERITY: Record<LogLevel, number> = {
  * FunctionLogs Durable Object
  *
  * Provides centralized logging infrastructure for serverless functions.
- * Uses in-memory storage for fast access with WebSocket streaming support.
+ * Uses SQLite storage for persistence across DO evictions with WebSocket streaming support.
  */
 export class FunctionLogs {
   private state: DurableObjectState
   private env: unknown
-  private initialized = false
+  private schemaInitialized = false
   private subscribers: Map<string, Set<WebSocket>> = new Map()
-
-  // In-memory log storage
-  private logs: Map<string, LogEntry[]> = new Map()
-  private allLogs: LogEntry[] = []
   private retentionTimer: ReturnType<typeof setInterval> | null = null
   private heartbeatTimers: Map<WebSocket, ReturnType<typeof setInterval>> = new Map()
 
@@ -228,15 +245,51 @@ export class FunctionLogs {
   }
 
   // ===========================================================================
-  // INITIALIZATION
+  // SCHEMA INITIALIZATION
   // ===========================================================================
 
   /**
-   * Initialize (lazy initialization)
+   * Initialize the SQLite schema for log storage.
+   * Modeled after FunctionExecutor's initializeSchema pattern.
    */
-  private async ensureInitialized(): Promise<void> {
-    if (this.initialized) return
-    this.initialized = true
+  private initializeSchema(): void {
+    if (this.schemaInitialized) return
+
+    this.state.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS logs (
+        id TEXT PRIMARY KEY,
+        function_id TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        level TEXT NOT NULL,
+        message TEXT NOT NULL,
+        metadata TEXT,
+        request_id TEXT,
+        duration_ms INTEGER,
+        created_at INTEGER NOT NULL
+      )
+    `)
+
+    this.state.storage.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_logs_function_id
+      ON logs (function_id)
+    `)
+
+    this.state.storage.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_logs_timestamp
+      ON logs (timestamp)
+    `)
+
+    this.state.storage.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_logs_function_id_timestamp
+      ON logs (function_id, timestamp)
+    `)
+
+    this.state.storage.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_logs_request_id
+      ON logs (request_id)
+    `)
+
+    this.schemaInitialized = true
   }
 
   // ===========================================================================
@@ -247,7 +300,7 @@ export class FunctionLogs {
    * Append a log entry
    */
   async append(input: LogEntryInput): Promise<LogEntry> {
-    await this.ensureInitialized()
+    this.initializeSchema()
 
     const entry: LogEntry = {
       id: this.generateId(),
@@ -260,8 +313,19 @@ export class FunctionLogs {
       durationMs: input.durationMs,
     }
 
-    // Store the log
-    this.storeLog(entry)
+    // Persist to SQLite
+    this.state.storage.sql.exec(
+      `INSERT INTO logs (id, function_id, timestamp, level, message, metadata, request_id, duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      entry.id,
+      entry.functionId,
+      entry.timestamp,
+      entry.level,
+      entry.message,
+      entry.metadata ? JSON.stringify(entry.metadata) : null,
+      entry.requestId ?? null,
+      entry.durationMs ?? null,
+      Date.now(),
+    )
 
     // Notify WebSocket subscribers
     this.notifySubscribers(entry)
@@ -273,8 +337,6 @@ export class FunctionLogs {
    * Append multiple log entries in batch
    */
   async appendBatch(inputs: LogEntryInput[]): Promise<LogEntry[]> {
-    await this.ensureInitialized()
-
     const entries: LogEntry[] = []
     for (const input of inputs) {
       const entry = await this.append(input)
@@ -291,19 +353,19 @@ export class FunctionLogs {
    * Query logs for a specific function
    */
   async query(query: LogQuery): Promise<LogQueryResult> {
-    await this.ensureInitialized()
+    this.initializeSchema()
 
-    let entries = this.logs.get(query.functionId) || []
-
-    // Apply filters
-    entries = this.applyFilters(entries, query)
+    const rows = this.queryRows(query)
 
     // Apply sorting
     const order = query.order || 'desc'
-    entries = [...entries].sort((a, b) => {
+    rows.sort((a, b) => {
       const diff = a.timestamp - b.timestamp
       return order === 'asc' ? diff : -diff
     })
+
+    // Convert rows to LogEntry objects
+    const entries = rows.map((row) => this.rowToEntry(row))
 
     // Apply pagination
     return this.applyPagination(entries, query.limit, query.cursor)
@@ -313,34 +375,39 @@ export class FunctionLogs {
    * Query logs across all functions
    */
   async queryAll(options: Omit<LogQuery, 'functionId'>): Promise<LogQueryResult> {
-    await this.ensureInitialized()
+    this.initializeSchema()
 
-    let entries = [...this.allLogs]
+    // Get all logs from SQLite
+    let rows = this.state.storage.sql.exec<LogRow>(
+      `SELECT * FROM logs`
+    ).toArray()
 
-    // Apply filters (without functionId)
+    // Apply filters
     if (options.startTime !== undefined) {
-      entries = entries.filter((e) => e.timestamp >= options.startTime!)
+      rows = rows.filter((r) => r.timestamp >= options.startTime!)
     }
     if (options.endTime !== undefined) {
-      entries = entries.filter((e) => e.timestamp <= options.endTime!)
+      rows = rows.filter((r) => r.timestamp <= options.endTime!)
     }
     if (options.level) {
-      entries = entries.filter((e) => e.level === options.level)
+      rows = rows.filter((r) => r.level === options.level)
     }
     if (options.levels) {
-      entries = entries.filter((e) => options.levels!.includes(e.level))
+      rows = rows.filter((r) => options.levels!.includes(r.level))
     }
     if (options.minLevel) {
       const minSeverity = LOG_LEVEL_SEVERITY[options.minLevel]
-      entries = entries.filter((e) => LOG_LEVEL_SEVERITY[e.level] >= minSeverity)
+      rows = rows.filter((r) => LOG_LEVEL_SEVERITY[r.level] >= minSeverity)
     }
 
     // Apply sorting
     const order = options.order || 'desc'
-    entries = entries.sort((a, b) => {
+    rows.sort((a, b) => {
       const diff = a.timestamp - b.timestamp
       return order === 'asc' ? diff : -diff
     })
+
+    const entries = rows.map((row) => this.rowToEntry(row))
 
     // Apply pagination
     return this.applyPagination(entries, options.limit, options.cursor)
@@ -350,9 +417,15 @@ export class FunctionLogs {
    * Query logs by request ID
    */
   async queryByRequestId(requestId: string): Promise<LogQueryResult> {
-    await this.ensureInitialized()
+    this.initializeSchema()
 
-    const entries = this.allLogs.filter((e) => e.requestId === requestId)
+    const rows = this.state.storage.sql.exec<LogRow>(
+      `SELECT * FROM logs WHERE request_id = ?`,
+      requestId
+    ).toArray()
+
+    const entries = rows.map((row) => this.rowToEntry(row))
+
     return {
       entries,
       cursor: null,
@@ -364,21 +437,29 @@ export class FunctionLogs {
    * Search logs by message content
    */
   async search(query: SearchQuery): Promise<LogQueryResult> {
-    await this.ensureInitialized()
+    this.initializeSchema()
 
-    let entries = query.functionId
-      ? this.logs.get(query.functionId) || []
-      : [...this.allLogs]
+    let rows: LogRow[]
+    if (query.functionId) {
+      rows = this.state.storage.sql.exec<LogRow>(
+        `SELECT * FROM logs WHERE function_id = ?`,
+        query.functionId
+      ).toArray()
+    } else {
+      rows = this.state.storage.sql.exec<LogRow>(
+        `SELECT * FROM logs`
+      ).toArray()
+    }
 
     const searchQuery = query.query.toLowerCase()
-    entries = entries.filter((e) => e.message.toLowerCase().includes(searchQuery))
+    const filtered = rows.filter((r) => r.message.toLowerCase().includes(searchQuery))
 
     const limit = query.limit || DEFAULT_LIMIT
-    const hasMore = entries.length > limit
-    entries = entries.slice(0, limit)
+    const hasMore = filtered.length > limit
+    const sliced = filtered.slice(0, limit)
 
     return {
-      entries,
+      entries: sliced.map((row) => this.rowToEntry(row)),
       cursor: null,
       hasMore,
     }
@@ -392,15 +473,18 @@ export class FunctionLogs {
    * Get metrics for a specific function
    */
   async getMetrics(options: { functionId: string; startTime?: number; endTime?: number }): Promise<LogMetrics> {
-    await this.ensureInitialized()
+    this.initializeSchema()
 
-    let entries = this.logs.get(options.functionId) || []
+    let rows = this.state.storage.sql.exec<LogRow>(
+      `SELECT * FROM logs WHERE function_id = ?`,
+      options.functionId
+    ).toArray()
 
     if (options.startTime !== undefined) {
-      entries = entries.filter((e) => e.timestamp >= options.startTime!)
+      rows = rows.filter((r) => r.timestamp >= options.startTime!)
     }
     if (options.endTime !== undefined) {
-      entries = entries.filter((e) => e.timestamp <= options.endTime!)
+      rows = rows.filter((r) => r.timestamp <= options.endTime!)
     }
 
     const countByLevel: Record<LogLevel, number> = {
@@ -414,22 +498,22 @@ export class FunctionLogs {
     const durations: number[] = []
     let lastTimestamp: number | undefined
 
-    for (const entry of entries) {
-      countByLevel[entry.level]++
-      if (entry.durationMs !== undefined) {
-        durations.push(entry.durationMs)
+    for (const row of rows) {
+      countByLevel[row.level]++
+      if (row.duration_ms !== null && row.duration_ms !== undefined) {
+        durations.push(row.duration_ms)
       }
-      if (lastTimestamp === undefined || entry.timestamp > lastTimestamp) {
-        lastTimestamp = entry.timestamp
+      if (lastTimestamp === undefined || row.timestamp > lastTimestamp) {
+        lastTimestamp = row.timestamp
       }
     }
 
-    const total = entries.length
+    const total = rows.length
     const errorCount = countByLevel.error + countByLevel.fatal
     const errorRate = total > 0 ? errorCount / total : 0
 
     // Calculate time range for logs per minute
-    const timestamps = entries.map((e) => e.timestamp)
+    const timestamps = rows.map((r) => r.timestamp)
     const minTime = timestamps.length > 0 ? Math.min(...timestamps) : Date.now()
     const maxTime = timestamps.length > 0 ? Math.max(...timestamps) : Date.now()
     const timeRangeMinutes = Math.max(1, (maxTime - minTime) / 60000)
@@ -467,11 +551,12 @@ export class FunctionLogs {
    * Get aggregated metrics across all functions
    */
   async getAggregatedMetrics(): Promise<AggregatedMetrics> {
-    await this.ensureInitialized()
+    this.initializeSchema()
 
+    const functionIds = await this.listFunctions()
     const byFunction: Record<string, LogMetrics> = {}
 
-    for (const functionId of this.logs.keys()) {
+    for (const functionId of functionIds) {
       byFunction[functionId] = await this.getMetrics({ functionId })
     }
 
@@ -521,33 +606,22 @@ export class FunctionLogs {
    * @returns Number of logs deleted
    */
   async applyRetention(policy: RetentionPolicy): Promise<number> {
-    await this.ensureInitialized()
+    this.initializeSchema()
 
     let deleted = 0
     const now = Date.now()
 
     if (policy.perFunction) {
-      for (const [functionId, entries] of this.logs.entries()) {
-        const { kept, deletedCount } = this.applyRetentionToEntries(entries, policy, now)
-        this.logs.set(functionId, kept)
-        deleted += deletedCount
+      const functionIds = await this.listFunctions()
+      for (const functionId of functionIds) {
+        deleted += this.applyRetentionForFunction(functionId, policy, now)
       }
     } else {
-      for (const [functionId, entries] of this.logs.entries()) {
-        const { kept, deletedCount } = this.applyRetentionToEntries(entries, policy, now)
-        this.logs.set(functionId, kept)
-        deleted += deletedCount
+      const functionIds = await this.listFunctions()
+      for (const functionId of functionIds) {
+        deleted += this.applyRetentionForFunction(functionId, policy, now)
       }
     }
-
-    // Update allLogs
-    const allKept = new Set<string>()
-    for (const entries of this.logs.values()) {
-      for (const entry of entries) {
-        allKept.add(entry.id)
-      }
-    }
-    this.allLogs = this.allLogs.filter((e) => allKept.has(e.id))
 
     return deleted
   }
@@ -556,15 +630,19 @@ export class FunctionLogs {
    * Get retention statistics
    */
   async getRetentionStats(): Promise<RetentionStats> {
-    await this.ensureInitialized()
+    this.initializeSchema()
 
-    const totalLogs = this.allLogs.length
+    const rows = this.state.storage.sql.exec<LogRow>(
+      `SELECT * FROM logs`
+    ).toArray()
+
+    const totalLogs = rows.length
 
     if (totalLogs === 0) {
       return { totalLogs: 0 }
     }
 
-    const timestamps = this.allLogs.map((e) => e.timestamp)
+    const timestamps = rows.map((r) => r.timestamp)
     return {
       totalLogs,
       oldestTimestamp: Math.min(...timestamps),
@@ -595,6 +673,8 @@ export class FunctionLogs {
    * Handle WebSocket connection for real-time streaming
    */
   async handleWebSocket(ws: WebSocket, options: StreamOptions): Promise<void> {
+    this.initializeSchema()
+
     // Store subscription
     if (!this.subscribers.has(options.functionId)) {
       this.subscribers.set(options.functionId, new Set())
@@ -603,8 +683,16 @@ export class FunctionLogs {
 
     // Send initial history if tail is requested
     if (options.tail && options.tail > 0) {
-      const functionLogs = this.logs.get(options.functionId) || []
-      const historyEntries = functionLogs.slice(-options.tail)
+      const rows = this.state.storage.sql.exec<LogRow>(
+        `SELECT * FROM logs WHERE function_id = ?`,
+        options.functionId
+      ).toArray()
+
+      // Sort by timestamp ascending to get chronological order, then take the last N
+      rows.sort((a, b) => a.timestamp - b.timestamp)
+      const historyRows = rows.slice(-options.tail)
+      const historyEntries = historyRows.map((row) => this.rowToEntry(row))
+
       this.sendToWebSocket(ws, {
         type: 'history',
         entries: historyEntries,
@@ -628,17 +716,25 @@ export class FunctionLogs {
    * List all function IDs with logs
    */
   async listFunctions(): Promise<string[]> {
-    await this.ensureInitialized()
-    return Array.from(this.logs.keys())
+    this.initializeSchema()
+
+    const rows = this.state.storage.sql.exec<{ function_id: string }>(
+      `SELECT DISTINCT function_id FROM logs`
+    ).toArray()
+
+    return rows.map((r) => r.function_id)
   }
 
   /**
    * Delete all logs for a function
    */
   async deleteLogs(functionId: string): Promise<void> {
-    await this.ensureInitialized()
-    this.logs.delete(functionId)
-    this.allLogs = this.allLogs.filter((e) => e.functionId !== functionId)
+    this.initializeSchema()
+
+    this.state.storage.sql.exec(
+      `DELETE FROM logs WHERE function_id = ?`,
+      functionId
+    )
   }
 
   // ===========================================================================
@@ -732,12 +828,65 @@ export class FunctionLogs {
     return `log_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`
   }
 
-  private storeLog(entry: LogEntry): void {
-    if (!this.logs.has(entry.functionId)) {
-      this.logs.set(entry.functionId, [])
+  /**
+   * Convert a SQLite row to a LogEntry object
+   */
+  private rowToEntry(row: LogRow): LogEntry {
+    const entry: LogEntry = {
+      id: row.id,
+      functionId: row.function_id,
+      timestamp: row.timestamp,
+      level: row.level,
+      message: row.message,
     }
-    this.logs.get(entry.functionId)!.push(entry)
-    this.allLogs.push(entry)
+
+    if (row.metadata) {
+      try {
+        entry.metadata = JSON.parse(row.metadata)
+      } catch {
+        // Ignore invalid JSON metadata
+      }
+    }
+
+    if (row.request_id) {
+      entry.requestId = row.request_id
+    }
+
+    if (row.duration_ms !== null && row.duration_ms !== undefined) {
+      entry.durationMs = row.duration_ms
+    }
+
+    return entry
+  }
+
+  /**
+   * Query rows from SQLite for a specific function with filters
+   */
+  private queryRows(query: LogQuery): LogRow[] {
+    let rows = this.state.storage.sql.exec<LogRow>(
+      `SELECT * FROM logs WHERE function_id = ?`,
+      query.functionId
+    ).toArray()
+
+    // Apply filters in-memory (like the original implementation)
+    if (query.startTime !== undefined) {
+      rows = rows.filter((r) => r.timestamp >= query.startTime!)
+    }
+    if (query.endTime !== undefined) {
+      rows = rows.filter((r) => r.timestamp <= query.endTime!)
+    }
+    if (query.level) {
+      rows = rows.filter((r) => r.level === query.level)
+    }
+    if (query.levels) {
+      rows = rows.filter((r) => query.levels!.includes(r.level))
+    }
+    if (query.minLevel) {
+      const minSeverity = LOG_LEVEL_SEVERITY[query.minLevel]
+      rows = rows.filter((r) => LOG_LEVEL_SEVERITY[r.level] >= minSeverity)
+    }
+
+    return rows
   }
 
   private notifySubscribers(entry: LogEntry): void {
@@ -755,29 +904,6 @@ export class FunctionLogs {
     } catch {
       // Ignore send errors for closed connections
     }
-  }
-
-  private applyFilters(entries: LogEntry[], query: LogQuery): LogEntry[] {
-    let filtered = [...entries]
-
-    if (query.startTime !== undefined) {
-      filtered = filtered.filter((e) => e.timestamp >= query.startTime!)
-    }
-    if (query.endTime !== undefined) {
-      filtered = filtered.filter((e) => e.timestamp <= query.endTime!)
-    }
-    if (query.level) {
-      filtered = filtered.filter((e) => e.level === query.level)
-    }
-    if (query.levels) {
-      filtered = filtered.filter((e) => query.levels!.includes(e.level))
-    }
-    if (query.minLevel) {
-      const minSeverity = LOG_LEVEL_SEVERITY[query.minLevel]
-      filtered = filtered.filter((e) => LOG_LEVEL_SEVERITY[e.level] >= minSeverity)
-    }
-
-    return filtered
   }
 
   private applyPagination(
@@ -812,29 +938,53 @@ export class FunctionLogs {
     }
   }
 
-  private applyRetentionToEntries(
-    entries: LogEntry[],
+  /**
+   * Apply retention policy for a specific function
+   * @returns Number of logs deleted
+   */
+  private applyRetentionForFunction(
+    functionId: string,
     policy: RetentionPolicy,
     now: number
-  ): { kept: LogEntry[]; deletedCount: number } {
-    let kept = [...entries]
-    const originalCount = kept.length
+  ): number {
+    let rows = this.state.storage.sql.exec<LogRow>(
+      `SELECT * FROM logs WHERE function_id = ?`,
+      functionId
+    ).toArray()
 
-    // Apply maxAge
+    const originalCount = rows.length
+    let idsToDelete: Set<string> = new Set()
+
+    // Apply maxAge - mark old entries for deletion
     if (policy.maxAge) {
-      kept = kept.filter((e) => now - e.timestamp < policy.maxAge!)
+      for (const row of rows) {
+        if (now - row.timestamp >= policy.maxAge) {
+          idsToDelete.add(row.id)
+        }
+      }
     }
 
-    // Apply maxCount
-    if (policy.maxCount && kept.length > policy.maxCount) {
-      // Sort by timestamp descending and keep only the most recent
-      kept.sort((a, b) => b.timestamp - a.timestamp)
-      kept = kept.slice(0, policy.maxCount)
+    // Filter out the age-deleted entries
+    let remaining = rows.filter((r) => !idsToDelete.has(r.id))
+
+    // Apply maxCount - keep only the most recent entries
+    if (policy.maxCount && remaining.length > policy.maxCount) {
+      // Sort by timestamp descending to keep most recent
+      remaining.sort((a, b) => b.timestamp - a.timestamp)
+      const toRemove = remaining.slice(policy.maxCount)
+      for (const row of toRemove) {
+        idsToDelete.add(row.id)
+      }
     }
 
-    return {
-      kept,
-      deletedCount: originalCount - kept.length,
+    // Delete marked entries from SQLite
+    for (const id of idsToDelete) {
+      this.state.storage.sql.exec(
+        `DELETE FROM logs WHERE id = ?`,
+        id
+      )
     }
+
+    return idsToDelete.size
   }
 }

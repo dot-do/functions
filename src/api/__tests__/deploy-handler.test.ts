@@ -692,6 +692,99 @@ describe('Deploy Handler', () => {
     })
   })
 
+  describe('body size validation', () => {
+    it('returns 413 when Content-Length exceeds 50MB limit', async () => {
+      const request = new Request('https://functions.do/api/functions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': String(51 * 1024 * 1024), // 51MB
+        },
+        body: JSON.stringify({
+          id: 'too-large',
+          version: '1.0.0',
+          language: 'typescript',
+          code: 'export default {}',
+        }),
+      })
+
+      const context: DeployHandlerContext = {}
+
+      const response = await deployHandler(request, mockEnv, mockCtx, context)
+
+      expect(response.status).toBe(413)
+      const body = (await response.json()) as JsonBody
+      expect(body['error']).toContain('too large')
+    })
+
+    it('returns 413 for invalid Content-Length', async () => {
+      const request = new Request('https://functions.do/api/functions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': 'not-a-number',
+        },
+        body: JSON.stringify({
+          id: 'bad-length',
+          version: '1.0.0',
+          language: 'typescript',
+          code: 'export default {}',
+        }),
+      })
+
+      const context: DeployHandlerContext = {}
+
+      const response = await deployHandler(request, mockEnv, mockCtx, context)
+
+      expect(response.status).toBe(413)
+    })
+
+    it('allows requests at exactly 50MB', async () => {
+      const request = new Request('https://functions.do/api/functions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': String(50 * 1024 * 1024), // exactly 50MB
+        },
+        body: JSON.stringify({
+          id: 'exact-limit',
+          version: '1.0.0',
+          language: 'typescript',
+          code: 'export default {}',
+        }),
+      })
+
+      const context: DeployHandlerContext = {}
+
+      const response = await deployHandler(request, mockEnv, mockCtx, context)
+
+      // Should NOT be 413 - the body is within limits
+      expect(response.status).not.toBe(413)
+    })
+
+    it('allows requests without Content-Length header', async () => {
+      const request = new Request('https://functions.do/api/functions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: 'no-content-length',
+          version: '1.0.0',
+          language: 'typescript',
+          code: 'export default { fetch() { return new Response("ok"); } }',
+        }),
+      })
+
+      const context: DeployHandlerContext = {}
+
+      const response = await deployHandler(request, mockEnv, mockCtx, context)
+
+      // Should proceed normally (not 413)
+      expect(response.status).not.toBe(413)
+    })
+  })
+
   describe('idempotency', () => {
     it('supports idempotency key', async () => {
       const idempotencyKey = 'unique-deploy-key-123'

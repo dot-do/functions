@@ -20,7 +20,6 @@
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 
-// Import types from core
 import type {
   CodeFunctionDefinition,
   CodeFunctionConfig,
@@ -28,10 +27,10 @@ import type {
   CodeLanguage,
   SandboxConfig,
   CodeSource,
-} from '../../../core/src/code/index.js'
-import { defineCodeFunction } from '../../../core/src/code/index.js'
-import { functionId as toFunctionId, type FunctionId } from '../../../core/src/branded-types.js'
-import type { Duration } from '../../../core/src/types.js'
+} from '@dotdo/functions/code'
+import { defineCodeFunction } from '@dotdo/functions/code'
+import type { FunctionId, Duration } from '@dotdo/functions'
+import { functionId as toFunctionId } from '@dotdo/functions'
 
 // Import the CodeExecutor implementation
 import { CodeExecutor } from '../code-executor.js'

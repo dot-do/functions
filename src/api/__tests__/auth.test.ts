@@ -23,6 +23,27 @@ import {
   createAuthMiddleware,
 } from '../middleware/auth'
 
+/**
+ * Hash an API key using SHA-256 (mirrors the implementation in auth middleware)
+ * Used to store test keys under the correct hashed KV key format.
+ */
+async function hashApiKey(apiKey: string): Promise<string> {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(apiKey)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * Helper to store an API key record in mock KV under its hashed key,
+ * matching the `keys:{hash}` format used by the auth middleware.
+ */
+async function putApiKeyRecord(kv: KVNamespace, rawKey: string, record: object): Promise<void> {
+  const hash = await hashApiKey(rawKey)
+  await kv.put(`keys:${hash}`, JSON.stringify(record))
+}
+
 // Type for JSON response bodies
 type JsonBody = Record<string, unknown>
 
@@ -41,41 +62,29 @@ describe('Auth Middleware', () => {
       passThroughOnException: vi.fn(),
     } as unknown as ExecutionContext
 
-    // Set up test API keys
-    await mockEnv.FUNCTIONS_API_KEYS.put(
-      'valid-api-key-123',
-      JSON.stringify({
-        userId: 'user-456',
-        active: true,
-        scopes: ['read', 'write', 'deploy'],
-      })
-    )
+    // Set up test API keys (stored under hashed keys, matching production format)
+    await putApiKeyRecord(mockEnv.FUNCTIONS_API_KEYS, 'valid-api-key-123', {
+      userId: 'user-456',
+      active: true,
+      scopes: ['read', 'write', 'deploy'],
+    })
 
-    await mockEnv.FUNCTIONS_API_KEYS.put(
-      'read-only-key',
-      JSON.stringify({
-        userId: 'user-readonly',
-        active: true,
-        scopes: ['read'],
-      })
-    )
+    await putApiKeyRecord(mockEnv.FUNCTIONS_API_KEYS, 'read-only-key', {
+      userId: 'user-readonly',
+      active: true,
+      scopes: ['read'],
+    })
 
-    await mockEnv.FUNCTIONS_API_KEYS.put(
-      'inactive-key',
-      JSON.stringify({
-        userId: 'user-inactive',
-        active: false,
-      })
-    )
+    await putApiKeyRecord(mockEnv.FUNCTIONS_API_KEYS, 'inactive-key', {
+      userId: 'user-inactive',
+      active: false,
+    })
 
-    await mockEnv.FUNCTIONS_API_KEYS.put(
-      'expired-key',
-      JSON.stringify({
-        userId: 'user-expired',
-        active: true,
-        expiresAt: '2020-01-01T00:00:00Z', // Expired in the past
-      })
-    )
+    await putApiKeyRecord(mockEnv.FUNCTIONS_API_KEYS, 'expired-key', {
+      userId: 'user-expired',
+      active: true,
+      expiresAt: '2020-01-01T00:00:00Z', // Expired in the past
+    })
   })
 
   describe('public endpoints', () => {
@@ -511,15 +520,12 @@ describe('API key security in AuthContext', () => {
       passThroughOnException: vi.fn(),
     } as unknown as ExecutionContext
 
-    // Set up test API key with a realistic format
-    await mockEnv.FUNCTIONS_API_KEYS.put(
-      'fnkey_live_abcdefghijklmnopqrstuvwxyz1234',
-      JSON.stringify({
-        userId: 'user-secure-test',
-        active: true,
-        scopes: ['read', 'write'],
-      })
-    )
+    // Set up test API key with a realistic format (stored under hashed key)
+    await putApiKeyRecord(mockEnv.FUNCTIONS_API_KEYS, 'fnkey_live_abcdefghijklmnopqrstuvwxyz1234', {
+      userId: 'user-secure-test',
+      active: true,
+      scopes: ['read', 'write'],
+    })
   })
 
   describe('AuthContext should NOT contain full API key', () => {
@@ -679,15 +685,12 @@ describe('API key security in AuthContext', () => {
     })
 
     it('different API keys should produce different keyHash', async () => {
-      // Add another API key
-      await mockEnv.FUNCTIONS_API_KEYS.put(
-        'fnkey_live_zyxwvutsrqponmlkjihgfedcba9876',
-        JSON.stringify({
-          userId: 'user-different',
-          active: true,
-          scopes: ['read'],
-        })
-      )
+      // Add another API key (stored under hashed key)
+      await putApiKeyRecord(mockEnv.FUNCTIONS_API_KEYS, 'fnkey_live_zyxwvutsrqponmlkjihgfedcba9876', {
+        userId: 'user-different',
+        active: true,
+        scopes: ['read'],
+      })
 
       const config: AuthMiddlewareConfig = {
         publicEndpoints: ['/health'],
@@ -715,11 +718,11 @@ describe('API key security in AuthContext', () => {
     })
 
     it('keyHint should show last 4 characters for identification', async () => {
-      // Add keys with different endings
-      await mockEnv.FUNCTIONS_API_KEYS.put(
-        'fnkey_test_endingXYZW',
-        JSON.stringify({ userId: 'user-xyzw', active: true })
-      )
+      // Add keys with different endings (stored under hashed key)
+      await putApiKeyRecord(mockEnv.FUNCTIONS_API_KEYS, 'fnkey_test_endingXYZW', {
+        userId: 'user-xyzw',
+        active: true,
+      })
 
       const config: AuthMiddlewareConfig = {
         publicEndpoints: ['/health'],
@@ -789,10 +792,10 @@ describe('authMiddleware default export', () => {
       passThroughOnException: vi.fn(),
     } as unknown as ExecutionContext
 
-    await mockEnv.FUNCTIONS_API_KEYS.put(
-      'test-key',
-      JSON.stringify({ userId: 'user-1', active: true })
-    )
+    await putApiKeyRecord(mockEnv.FUNCTIONS_API_KEYS, 'test-key', {
+      userId: 'user-1',
+      active: true,
+    })
   })
 
   it('works with default configuration', async () => {

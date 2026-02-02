@@ -14,22 +14,23 @@
  * 4. Data type conversion between Python and JavaScript
  * 5. Python standard library usage
  *
- * NOTE: These tests require the Pyodide runtime to be available.
- * In the vitest-pool-workers environment (Miniflare), Pyodide is not available
- * because it requires Node.js-specific APIs or a browser environment.
+ * ENVIRONMENT: Node.js (vitest.node.config.ts)
  *
- * These tests are currently skipped with `describe.skip()` but can be enabled
- * when running in an environment with Pyodide support:
- * - Node.js with the 'pyodide' npm package installed
- * - Browser environment with Pyodide loaded from CDN
- * - Cloudflare Workers with Python support enabled
+ * These tests require the Pyodide runtime to be available. They are excluded
+ * from the vitest-pool-workers config (Miniflare) and run via the Node.js
+ * config instead:
+ *
+ *   npm run test:cli  # or: npx vitest run --config vitest.node.config.ts
+ *
+ * Pyodide is not available in Miniflare because it requires Node.js-specific
+ * APIs (file system access, native module loading) or a browser environment.
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import type { CodeFunctionDefinition, CodeLanguage } from '../../../core/src/code/index.js'
-import { defineCodeFunction } from '../../../core/src/code/index.js'
-import { functionId } from '../../../core/src/branded-types.js'
-import type { Duration } from '../../../core/src/types.js'
+import type { CodeFunctionDefinition, CodeLanguage } from '@dotdo/functions/code'
+import { defineCodeFunction } from '@dotdo/functions/code'
+import type { Duration } from '@dotdo/functions'
+import { functionId } from '@dotdo/functions'
 import { CodeExecutor, type CodeExecutorEnv } from '../code-executor'
 
 /**
@@ -52,10 +53,9 @@ function createPythonFunction<TInput = unknown, TOutput = unknown>(
   })
 }
 
-// Skip these tests in vitest-pool-workers - Pyodide is not available in Miniflare
-// To run these tests, use a Node.js environment with pyodide installed:
-// npm install pyodide && npx vitest run src/tiers/__tests__/python-execution.test.ts
-describe.skip('Python Execution via CodeExecutor', () => {
+// These tests run in vitest.node.config.ts (Node.js environment)
+// Pyodide is available as a devDependency
+describe('Python Execution via CodeExecutor', () => {
   let executor: CodeExecutor
   let mockEnv: CodeExecutorEnv
 

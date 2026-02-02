@@ -29,8 +29,8 @@ import type {
   HumanTask,
   HumanUI,
   ResponderInfo,
-} from '../../../core/src/human/index.js'
-import { defineHumanFunction, approvalFunction } from '../../../core/src/human/index.js'
+} from '@dotdo/functions/human'
+import { defineHumanFunction, approvalFunction } from '@dotdo/functions/human'
 import { HumanExecutor } from '../human-executor.js'
 
 // =============================================================================

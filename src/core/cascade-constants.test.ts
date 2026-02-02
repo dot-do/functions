@@ -11,8 +11,8 @@ import { describe, it, expect } from 'vitest'
 import {
   TIER_ORDER,
   DEFAULT_TIER_TIMEOUTS,
-} from '../../core/src/cascade.js'
-import type { FunctionType } from '../../core/src/types.js'
+} from '@dotdo/functions'
+import type { FunctionType } from '@dotdo/functions'
 
 describe('Cascade Constants - Type Inference', () => {
   // ===========================================================================

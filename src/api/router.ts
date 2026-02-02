@@ -254,6 +254,28 @@ function matchPath(
 }
 
 /**
+ * Parse route registration args into a validated handler and middleware list.
+ * The last argument must be the handler; all preceding arguments are middleware.
+ * Throws a descriptive error when the arguments are invalid.
+ */
+function parseRouteArgs(method: string, pattern: string, args: (Middleware | Handler)[]): { handler: Handler; middleware: Middleware[] } {
+  if (args.length === 0) {
+    throw new Error(`Route ${method} "${pattern}": a handler function is required as the last argument`)
+  }
+  const handler = args[args.length - 1]
+  if (typeof handler !== 'function') {
+    throw new Error(`Route ${method} "${pattern}": last argument must be a handler function, got ${typeof handler}`)
+  }
+  const middleware = args.slice(0, -1)
+  for (let i = 0; i < middleware.length; i++) {
+    if (typeof middleware[i] !== 'function') {
+      throw new Error(`Route ${method} "${pattern}": middleware at index ${i} must be a function, got ${typeof middleware[i]}`)
+    }
+  }
+  return { handler: handler as Handler, middleware: middleware as Middleware[] }
+}
+
+/**
  * Create a new router instance
  */
 export function createRouter(): Router {
@@ -263,22 +285,19 @@ export function createRouter(): Router {
 
   const router: Router = {
     get(pattern: string, ...args: (Middleware | Handler)[]): Router {
-      const handler = args.pop() as Handler
-      const middleware = args as Middleware[]
+      const { handler, middleware } = parseRouteArgs('GET', pattern, args)
       routes.push({ method: 'GET', pattern, handler, middleware })
       return router
     },
 
     post(pattern: string, ...args: (Middleware | Handler)[]): Router {
-      const handler = args.pop() as Handler
-      const middleware = args as Middleware[]
+      const { handler, middleware } = parseRouteArgs('POST', pattern, args)
       routes.push({ method: 'POST', pattern, handler, middleware })
       return router
     },
 
     delete(pattern: string, ...args: (Middleware | Handler)[]): Router {
-      const handler = args.pop() as Handler
-      const middleware = args as Middleware[]
+      const { handler, middleware } = parseRouteArgs('DELETE', pattern, args)
       routes.push({ method: 'DELETE', pattern, handler, middleware })
       return router
     },

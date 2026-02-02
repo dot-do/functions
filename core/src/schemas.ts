@@ -592,37 +592,153 @@ export const CodeLanguageSchema = z.enum([
 export type CodeLanguage = z.infer<typeof CodeLanguageSchema>
 
 // =============================================================================
-// DEPLOY REQUEST SCHEMA
+// DEPLOY REQUEST SCHEMAS
 // =============================================================================
 
 /**
- * Schema for function deploy request body
+ * Common fields shared by all deploy request types
  */
-export const DeployRequestSchema = z.object({
+const DeployRequestBaseSchema = z.object({
   id: z.string().min(1, 'Function ID is required').regex(
     /^[a-zA-Z][a-zA-Z0-9_-]*$/,
     'Function ID must start with a letter and contain only letters, numbers, underscores, and hyphens'
   ),
   version: z.string().regex(semverRegex, 'Invalid semantic version format'),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  inputSchema: JsonSchemaSchema.optional(),
+})
+
+/**
+ * Schema for code function deploy request (type === 'code' or omitted)
+ */
+export const CodeDeployRequestSchema = DeployRequestBaseSchema.extend({
+  type: z.literal('code').optional(),
   language: CodeLanguageSchema,
   code: z.string().min(1, 'Code cannot be empty'),
   entryPoint: z.string().optional(),
   dependencies: z.record(z.string()).optional(),
-  type: FunctionTypeSchema.optional(),
-  description: z.string().optional(),
-  tags: z.array(z.string()).optional(),
+  /** Base64-encoded pre-compiled WASM binary (for Rust/Go/Zig/AssemblyScript) */
+  wasmBinary: z.string().optional(),
 })
 
 /**
- * DeployRequest derived from schema
+ * Schema for generative function deploy request (type === 'generative')
+ */
+export const GenerativeDeployRequestSchema = DeployRequestBaseSchema.extend({
+  type: z.literal('generative'),
+  model: z.string().optional(),
+  systemPrompt: z.string().optional(),
+  userPrompt: z.string().min(1, 'User prompt is required for generative functions'),
+  outputSchema: JsonSchemaSchema.optional(),
+  temperature: z.number().min(0).max(2).optional(),
+  maxTokens: z.number().int().min(1).optional(),
+  examples: z.array(z.object({
+    input: z.record(z.unknown()),
+    output: z.unknown(),
+    explanation: z.string().optional(),
+  })).optional(),
+})
+
+/**
+ * Schema for agentic function deploy request (type === 'agentic')
+ */
+export const AgenticDeployRequestSchema = DeployRequestBaseSchema.extend({
+  type: z.literal('agentic'),
+  model: z.string().optional(),
+  systemPrompt: z.string().min(1, 'System prompt is required for agentic functions'),
+  goal: z.string().min(1, 'Goal is required for agentic functions'),
+  tools: z.array(z.object({
+    name: z.string().min(1),
+    description: z.string().min(1),
+    inputSchema: JsonSchemaSchema.optional(),
+    outputSchema: JsonSchemaSchema.optional(),
+  })).optional(),
+  outputSchema: JsonSchemaSchema.optional(),
+  maxIterations: z.number().int().min(1).optional(),
+  maxToolCallsPerIteration: z.number().int().min(1).optional(),
+  enableReasoning: z.boolean().optional(),
+  enableMemory: z.boolean().optional(),
+  tokenBudget: z.number().int().min(1).optional(),
+})
+
+/**
+ * Schema for human function deploy request (type === 'human')
+ */
+export const HumanDeployRequestSchema = DeployRequestBaseSchema.extend({
+  type: z.literal('human'),
+  interactionType: z.enum([
+    'approval', 'review', 'input', 'selection',
+    'annotation', 'verification', 'custom',
+  ]),
+  uiConfig: z.record(z.unknown()).optional(),
+  assignees: z.array(z.object({
+    type: z.string().min(1),
+    value: z.string().min(1),
+  })).optional(),
+  sla: z.object({
+    responseTime: z.string().optional(),
+    resolutionTime: z.string().optional(),
+    onBreach: z.string().optional(),
+  }).optional(),
+  reminders: z.record(z.unknown()).optional(),
+  escalation: z.record(z.unknown()).optional(),
+  outputSchema: JsonSchemaSchema.optional(),
+})
+
+/**
+ * Unified deploy request schema using discriminated union on `type` field.
+ *
+ * - type === 'code': code function
+ * - type === 'generative': generative AI function
+ * - type === 'agentic': agentic AI function
+ * - type === 'human': human-in-the-loop function
+ *
+ * For backward compatibility, requests without a `type` field are validated
+ * using CodeDeployRequestSchema (which allows type to be optional).
+ */
+export const TypedDeployRequestSchema = z.discriminatedUnion('type', [
+  CodeDeployRequestSchema.extend({ type: z.literal('code') }),
+  GenerativeDeployRequestSchema,
+  AgenticDeployRequestSchema,
+  HumanDeployRequestSchema,
+])
+
+/**
+ * Unified deploy request schema that handles all function types.
+ * Accepts requests with or without a `type` field for backward compatibility.
+ *
+ * - With type === 'code' | 'generative' | 'agentic' | 'human': validated via TypedDeployRequestSchema
+ * - Without type field: validated as code function (backward compatible)
+ */
+export const DeployRequestSchema = z.union([
+  CodeDeployRequestSchema,
+  GenerativeDeployRequestSchema,
+  AgenticDeployRequestSchema,
+  HumanDeployRequestSchema,
+])
+
+/**
+ * DeployRequest derived from schema (union of all types)
  */
 export type DeployRequest = z.infer<typeof DeployRequestSchema>
+
+/**
+ * Type-specific deploy request types
+ */
+export type CodeDeployRequest = z.infer<typeof CodeDeployRequestSchema>
+export type GenerativeDeployRequest = z.infer<typeof GenerativeDeployRequestSchema>
+export type AgenticDeployRequest = z.infer<typeof AgenticDeployRequestSchema>
+export type HumanDeployRequest = z.infer<typeof HumanDeployRequestSchema>
 
 /** @deprecated Use DeployRequest instead */
 export type DeployRequestInferred = DeployRequest
 
 /**
- * Validates a deploy request body
+ * Validates a deploy request body.
+ * Supports all function types. Requests without a `type` field are
+ * validated as code functions for backward compatibility.
  */
 export function validateDeployRequest(data: unknown): ValidationResult {
   const result = DeployRequestSchema.safeParse(data)
@@ -636,7 +752,9 @@ export function validateDeployRequest(data: unknown): ValidationResult {
 }
 
 /**
- * Parses and validates a deploy request, throwing on error
+ * Parses and validates a deploy request, throwing on error.
+ * Supports all function types. Requests without a `type` field are
+ * parsed as code functions for backward compatibility.
  */
 export function parseDeployRequest(data: unknown): DeployRequest {
   return DeployRequestSchema.parse(data)

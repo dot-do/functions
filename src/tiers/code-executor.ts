@@ -19,14 +19,14 @@ import type {
   CodeLanguage,
   CodeSource,
   SandboxConfig,
-} from '../../core/src/code/index.js'
+} from '@dotdo/functions/code'
 import type {
   FunctionError,
   FunctionResultStatus,
   ExecutionContext,
-} from '../../core/src/types.js'
-import { parseDuration } from '../../core/src/types.js'
-import { executionId as toExecutionId, type ExecutionId } from '../../core/src/branded-types.js'
+  ExecutionId,
+} from '@dotdo/functions'
+import { parseDuration, executionId as toExecutionId } from '@dotdo/functions'
 import { stripTypeScript } from '../core/ts-strip'
 import { evaluate, type SandboxEnv, type EvaluateResult } from 'ai-evaluate'
 import { PyodideExecutor } from '../languages/python/pyodide-executor'

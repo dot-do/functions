@@ -50,10 +50,14 @@ export default defineConfig({
       'core/src/__tests__/schemas.test.ts',
       // Cascade tests
       'core/src/__tests__/cascade.test.ts',
+      // Function classifier tests
+      'src/core/__tests__/function-classifier.test.ts',
       // AI tests
       'src/ai/__tests__/*.test.ts',
       // Generative executor tests (require ai-functions package)
       'src/tiers/__tests__/generative-executor.test.ts',
+      // Python execution tests (require Pyodide runtime in Node.js)
+      'src/tiers/__tests__/python-execution.test.ts',
       // Template literals tests
       'src/__tests__/template-literals.test.ts',
     ],

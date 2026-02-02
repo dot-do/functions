@@ -7,7 +7,6 @@
  * @module core/cascade-executor
  */
 
-// Import types from core cascade module (not @dotdo/functions to avoid circular dependency)
 import type {
   CascadeDefinition,
   CascadeTiers,
@@ -17,7 +16,10 @@ import type {
   TierContext,
   TierAttempt,
   TierSkipCondition,
-} from '../../core/src/cascade.js'
+  FunctionType,
+  ExecutionContext,
+  Duration,
+} from '@dotdo/functions'
 
 import {
   DEFAULT_TIER_TIMEOUTS,
@@ -25,10 +27,8 @@ import {
   CascadeExhaustedError,
   TierTimeoutError,
   TierSkippedError,
-} from '../../core/src/cascade.js'
-
-import type { FunctionType, ExecutionContext, Duration } from '../../core/src/types.js'
-import { parseDuration } from '../../core/src/types.js'
+  parseDuration,
+} from '@dotdo/functions'
 
 /**
  * CascadeExecutor executes cascades by trying tiers in order,

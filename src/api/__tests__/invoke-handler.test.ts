@@ -13,13 +13,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createMockKV } from '../../test-utils/mock-kv'
 
-// Import the invoke handler that doesn't exist yet
-// These imports will cause the tests to fail (RED phase)
+// Import the invoke handler
 import { invokeHandler, InvokeHandlerContext } from '../handlers/invoke'
-import { CodeExecutor } from '../executors/code'
-import { GenerativeExecutor } from '../executors/generative'
-import { AgenticExecutor } from '../executors/agentic'
-import { HumanExecutor } from '../executors/human'
 import { CascadeExecutor } from '../executors/cascade'
 
 // Type for JSON response bodies
@@ -256,6 +251,117 @@ describe('Invoke Handler', () => {
       const response = await invokeHandler(request, mockEnv, mockCtx, context)
 
       expect([200, 501]).toContain(response.status)
+    })
+  })
+
+  describe('body size validation', () => {
+    it('returns 413 when Content-Length exceeds 10MB limit', async () => {
+      const request = new Request('https://functions.do/functions/some-func', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': String(11 * 1024 * 1024), // 11MB
+        },
+        body: JSON.stringify({ input: 'test' }),
+      })
+
+      const context: InvokeHandlerContext = {
+        functionId: 'some-func',
+        params: {},
+      }
+
+      const response = await invokeHandler(request, mockEnv, mockCtx, context)
+
+      expect(response.status).toBe(413)
+      const body = (await response.json()) as JsonBody
+      expect(body['error']).toContain('too large')
+    })
+
+    it('returns 413 for invalid Content-Length', async () => {
+      const request = new Request('https://functions.do/functions/some-func', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': 'not-a-number',
+        },
+        body: JSON.stringify({ input: 'test' }),
+      })
+
+      const context: InvokeHandlerContext = {
+        functionId: 'some-func',
+        params: {},
+      }
+
+      const response = await invokeHandler(request, mockEnv, mockCtx, context)
+
+      expect(response.status).toBe(413)
+    })
+
+    it('allows requests at exactly 10MB', async () => {
+      await mockEnv.FUNCTIONS_REGISTRY.put(
+        'registry:size-test',
+        JSON.stringify({
+          id: 'size-test',
+          version: '1.0.0',
+          language: 'javascript',
+        })
+      )
+      await mockEnv.FUNCTIONS_CODE.put(
+        'code:size-test',
+        'export default { fetch() { return new Response("ok"); } }'
+      )
+
+      const request = new Request('https://functions.do/functions/size-test', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': String(10 * 1024 * 1024), // exactly 10MB
+        },
+        body: JSON.stringify({ input: 'test' }),
+      })
+
+      const context: InvokeHandlerContext = {
+        functionId: 'size-test',
+        params: {},
+      }
+
+      const response = await invokeHandler(request, mockEnv, mockCtx, context)
+
+      // Should NOT be 413
+      expect(response.status).not.toBe(413)
+    })
+
+    it('allows requests without Content-Length header', async () => {
+      await mockEnv.FUNCTIONS_REGISTRY.put(
+        'registry:no-cl-test',
+        JSON.stringify({
+          id: 'no-cl-test',
+          version: '1.0.0',
+          language: 'javascript',
+        })
+      )
+      await mockEnv.FUNCTIONS_CODE.put(
+        'code:no-cl-test',
+        'export default { fetch() { return new Response("ok"); } }'
+      )
+
+      const request = new Request('https://functions.do/functions/no-cl-test', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ input: 'test' }),
+      })
+
+      const context: InvokeHandlerContext = {
+        functionId: 'no-cl-test',
+        params: {},
+      }
+
+      const response = await invokeHandler(request, mockEnv, mockCtx, context)
+
+      // Should proceed normally (not 413)
+      expect(response.status).not.toBe(413)
     })
   })
 

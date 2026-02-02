@@ -4,9 +4,12 @@
  * Handles function deployment including validation, compilation, and storage.
  * Uses Cloudflare Workers KV for metadata and code storage.
  *
- * Supported languages:
- * - TypeScript/JavaScript: Compiled with esbuild-wasm at deploy time
- * - Rust, Go, Zig, AssemblyScript: Accept pre-compiled WASM binaries OR compile from source
+ * Supports all four function tiers:
+ * - **Code** (default): TypeScript/JavaScript compiled with esbuild-wasm,
+ *   or WASM languages (Rust/Go/Zig/AssemblyScript) with pre-compiled binaries
+ * - **Generative**: Single AI call with structured output (model, prompts, schema)
+ * - **Agentic**: Multi-step AI with tools (model, system prompt, goal, tools)
+ * - **Human**: Human-in-the-loop tasks (interaction type, UI config, assignees, SLA)
  *
  * ## TypeScript Compilation
  *
@@ -199,16 +202,287 @@ async function uploadToDispatchNamespace(
   }
 }
 
+// =============================================================================
+// DEPLOY SUB-HANDLERS FOR EACH FUNCTION TYPE
+// =============================================================================
+
+/**
+ * Deploy a generative function.
+ * Validates generative-specific fields and stores metadata in registry.
+ */
+async function deployGenerativeFunction(
+  body: Record<string, unknown>,
+  env: Env,
+  baseUrl: string,
+): Promise<Response> {
+  const id = body.id as string
+  const version = body.version as string
+  const name = (body.name as string) || id
+  const description = body.description as string | undefined
+  const tags = body.tags as string[] | undefined
+
+  // Validate generative-specific required fields
+  const userPrompt = body.userPrompt as string | undefined
+  if (!userPrompt) {
+    return jsonResponse({ error: 'Missing required field for generative function: userPrompt' }, 400)
+  }
+
+  const model = (body.model as string) || 'claude-3-sonnet'
+  const systemPrompt = body.systemPrompt as string | undefined
+  const outputSchema = body.outputSchema as Record<string, unknown> | undefined
+  const temperature = body.temperature as number | undefined
+  const maxTokens = body.maxTokens as number | undefined
+  const examples = body.examples as Array<{ input: Record<string, unknown>; output: unknown; explanation?: string }> | undefined
+  const inputSchema = body.inputSchema as Record<string, unknown> | undefined
+
+  // Validate temperature range if provided
+  if (temperature !== undefined && (temperature < 0 || temperature > 2)) {
+    return jsonResponse({ error: 'Invalid temperature: must be between 0 and 2' }, 400)
+  }
+
+  // Validate maxTokens if provided
+  if (maxTokens !== undefined && (maxTokens < 1 || !Number.isInteger(maxTokens))) {
+    return jsonResponse({ error: 'Invalid maxTokens: must be a positive integer' }, 400)
+  }
+
+  // Create storage instance
+  const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
+
+  // Build metadata with generative-specific fields
+  const metadata: FunctionMetadata = {
+    id,
+    version,
+    type: 'generative',
+    name,
+    description,
+    tags,
+    model,
+    systemPrompt,
+    userPrompt,
+    outputSchema,
+    temperature,
+    maxTokens,
+    examples,
+    inputSchema,
+  }
+
+  await registry.put(metadata)
+  await registry.putVersion(id, version, metadata)
+
+  return jsonResponse({
+    id,
+    version,
+    type: 'generative',
+    url: `${baseUrl}/functions/${id}`,
+    model,
+  })
+}
+
+/**
+ * Deploy an agentic function.
+ * Validates agentic-specific fields and stores metadata in registry.
+ */
+async function deployAgenticFunction(
+  body: Record<string, unknown>,
+  env: Env,
+  baseUrl: string,
+): Promise<Response> {
+  const id = body.id as string
+  const version = body.version as string
+  const name = (body.name as string) || id
+  const description = body.description as string | undefined
+  const tags = body.tags as string[] | undefined
+
+  // Validate agentic-specific required fields
+  const systemPrompt = body.systemPrompt as string | undefined
+  if (!systemPrompt) {
+    return jsonResponse({ error: 'Missing required field for agentic function: systemPrompt' }, 400)
+  }
+
+  const goal = body.goal as string | undefined
+  if (!goal) {
+    return jsonResponse({ error: 'Missing required field for agentic function: goal' }, 400)
+  }
+
+  const model = (body.model as string) || 'claude-3-opus'
+  const tools = body.tools as Array<{
+    name: string
+    description: string
+    inputSchema?: Record<string, unknown>
+    outputSchema?: Record<string, unknown>
+  }> | undefined
+  const outputSchema = body.outputSchema as Record<string, unknown> | undefined
+  const maxIterations = body.maxIterations as number | undefined
+  const maxToolCallsPerIteration = body.maxToolCallsPerIteration as number | undefined
+  const enableReasoning = body.enableReasoning as boolean | undefined
+  const enableMemory = body.enableMemory as boolean | undefined
+  const tokenBudget = body.tokenBudget as number | undefined
+  const inputSchema = body.inputSchema as Record<string, unknown> | undefined
+
+  // Validate maxIterations if provided
+  if (maxIterations !== undefined && (maxIterations < 1 || !Number.isInteger(maxIterations))) {
+    return jsonResponse({ error: 'Invalid maxIterations: must be a positive integer' }, 400)
+  }
+
+  // Validate tokenBudget if provided
+  if (tokenBudget !== undefined && (tokenBudget < 1 || !Number.isInteger(tokenBudget))) {
+    return jsonResponse({ error: 'Invalid tokenBudget: must be a positive integer' }, 400)
+  }
+
+  // Validate tools structure if provided
+  if (tools) {
+    for (let i = 0; i < tools.length; i++) {
+      const tool = tools[i]
+      if (!tool || !tool.name) {
+        return jsonResponse({ error: `Invalid tool at index ${i}: missing 'name'` }, 400)
+      }
+      if (!tool.description) {
+        return jsonResponse({ error: `Invalid tool at index ${i}: missing 'description'` }, 400)
+      }
+    }
+  }
+
+  // Create storage instance
+  const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
+
+  // Build metadata with agentic-specific fields
+  const metadata: FunctionMetadata = {
+    id,
+    version,
+    type: 'agentic',
+    name,
+    description,
+    tags,
+    model,
+    systemPrompt,
+    goal,
+    tools,
+    outputSchema,
+    maxIterations,
+    maxToolCallsPerIteration,
+    enableReasoning,
+    enableMemory,
+    tokenBudget,
+    inputSchema,
+  }
+
+  await registry.put(metadata)
+  await registry.putVersion(id, version, metadata)
+
+  return jsonResponse({
+    id,
+    version,
+    type: 'agentic',
+    url: `${baseUrl}/functions/${id}`,
+    model,
+    maxIterations: maxIterations || 10,
+    toolCount: tools?.length || 0,
+  })
+}
+
+/**
+ * Deploy a human function.
+ * Validates human-specific fields and stores metadata in registry.
+ */
+async function deployHumanFunction(
+  body: Record<string, unknown>,
+  env: Env,
+  baseUrl: string,
+): Promise<Response> {
+  const id = body.id as string
+  const version = body.version as string
+  const name = (body.name as string) || id
+  const description = body.description as string | undefined
+  const tags = body.tags as string[] | undefined
+
+  // Validate human-specific required fields
+  const interactionType = body.interactionType as string | undefined
+  if (!interactionType) {
+    return jsonResponse({ error: 'Missing required field for human function: interactionType' }, 400)
+  }
+
+  const validInteractionTypes = ['approval', 'review', 'input', 'selection', 'annotation', 'verification', 'custom']
+  if (!validInteractionTypes.includes(interactionType)) {
+    return jsonResponse({
+      error: `Invalid interactionType: must be one of ${validInteractionTypes.join(', ')}`,
+    }, 400)
+  }
+
+  const uiConfig = body.uiConfig as Record<string, unknown> | undefined
+  const assignees = body.assignees as Array<{ type: string; value: string }> | undefined
+  const sla = body.sla as { responseTime?: string; resolutionTime?: string; onBreach?: string } | undefined
+  const reminders = body.reminders as Record<string, unknown> | undefined
+  const escalation = body.escalation as Record<string, unknown> | undefined
+  const outputSchema = body.outputSchema as Record<string, unknown> | undefined
+  const inputSchema = body.inputSchema as Record<string, unknown> | undefined
+
+  // Validate assignees structure if provided
+  if (assignees) {
+    for (let i = 0; i < assignees.length; i++) {
+      const assignee = assignees[i]
+      if (!assignee || !assignee.type) {
+        return jsonResponse({ error: `Invalid assignee at index ${i}: missing 'type'` }, 400)
+      }
+      if (!assignee.value) {
+        return jsonResponse({ error: `Invalid assignee at index ${i}: missing 'value'` }, 400)
+      }
+    }
+  }
+
+  // Create storage instance
+  const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
+
+  // Build metadata with human-specific fields
+  const metadata: FunctionMetadata = {
+    id,
+    version,
+    type: 'human',
+    name,
+    description,
+    tags,
+    interactionType: interactionType as FunctionMetadata['interactionType'],
+    uiConfig,
+    assignees,
+    sla,
+    reminders,
+    escalation,
+    outputSchema,
+    inputSchema,
+  }
+
+  await registry.put(metadata)
+  await registry.putVersion(id, version, metadata)
+
+  return jsonResponse({
+    id,
+    version,
+    type: 'human',
+    url: `${baseUrl}/functions/${id}`,
+    interactionType,
+  })
+}
+
 /**
  * Deploy handler - validates, compiles, and stores function code and metadata.
  *
- * Workflow:
+ * Supports all four function tiers:
+ * - **Code** (type === 'code' or omitted): Compile and store code
+ * - **Generative** (type === 'generative'): Store AI model config and prompts
+ * - **Agentic** (type === 'agentic'): Store agent config, tools, and goal
+ * - **Human** (type === 'human'): Store interaction config, UI, assignees, SLA
+ *
+ * Code function workflow:
  * 1. Parse and validate request body (id, version, language, code)
  * 2. Validate function ID format, semantic version, language support
  * 3. Compile code if needed (WASM for Rust/Go/Zig/AssemblyScript)
  * 4. Store code in KV (versioned and latest)
  * 5. Store metadata in registry (versioned and latest)
  * 6. Upload to dispatch namespace for TS/JS functions
+ *
+ * Non-code function workflow:
+ * 1. Parse and validate request body (id, version, type-specific fields)
+ * 2. Validate function ID format and semantic version
+ * 3. Store metadata with all type-specific config in registry
  *
  * @param request - The incoming HTTP request with JSON deployment payload
  * @param env - Environment bindings (KV namespaces, Cloudflare credentials)
@@ -217,27 +491,48 @@ async function uploadToDispatchNamespace(
  * @returns JSON response with deployment result including function URL
  *
  * @example
- * // POST /api/functions
+ * // POST /api/functions - Code function
  * // Body: { "id": "my-fn", "version": "1.0.0", "language": "typescript", "code": "..." }
  * // Response: { "id": "my-fn", "version": "1.0.0", "url": "https://.../functions/my-fn" }
+ *
+ * @example
+ * // POST /api/functions - Generative function
+ * // Body: { "type": "generative", "id": "summarize", "version": "1.0.0", "model": "claude-3-sonnet", "userPrompt": "Summarize: {{text}}" }
+ * // Response: { "id": "summarize", "version": "1.0.0", "type": "generative", "url": "https://.../functions/summarize" }
+ *
+ * @example
+ * // POST /api/functions - Agentic function
+ * // Body: { "type": "agentic", "id": "research", "version": "1.0.0", "systemPrompt": "...", "goal": "..." }
+ * // Response: { "id": "research", "version": "1.0.0", "type": "agentic", "url": "https://.../functions/research" }
+ *
+ * @example
+ * // POST /api/functions - Human function
+ * // Body: { "type": "human", "id": "approve", "version": "1.0.0", "interactionType": "approval" }
+ * // Response: { "id": "approve", "version": "1.0.0", "type": "human", "url": "https://.../functions/approve" }
  */
+/** Maximum allowed request body size for deploy requests (50MB) */
+const DEPLOY_MAX_BODY_SIZE = 50 * 1024 * 1024
+
 export const deployHandler: Handler = async (
   request: Request,
   env: Env,
   _ctx: ExecutionContext,
   _context?: RouteContext
 ): Promise<Response> => {
-  // Parse request body
-  let body: {
-    id?: string
-    version?: string
-    language?: string
-    code?: string
-    entryPoint?: string
-    dependencies?: Record<string, string>
-    /** Base64-encoded pre-compiled WASM binary (for Rust/Go/Zig/AssemblyScript) */
-    wasmBinary?: string
+  // Validate request body size before parsing
+  const contentLength = request.headers.get('Content-Length')
+  if (contentLength !== null) {
+    const size = parseInt(contentLength, 10)
+    if (isNaN(size) || size > DEPLOY_MAX_BODY_SIZE) {
+      return jsonResponse(
+        { error: `Request body too large. Maximum size is ${DEPLOY_MAX_BODY_SIZE} bytes (50MB).` },
+        413
+      )
+    }
   }
+
+  // Parse request body
+  let body: Record<string, unknown>
 
   try {
     body = await request.json()
@@ -245,15 +540,62 @@ export const deployHandler: Handler = async (
     return jsonResponse({ error: 'Invalid JSON body' }, 400)
   }
 
-  const { id, version, language, code, entryPoint, dependencies, wasmBinary } = body
+  // Determine function type (default to 'code' for backward compatibility)
+  const functionType = (body.type as string) || 'code'
 
-  // Validate required fields
+  // Validate common required fields
+  const id = body.id as string | undefined
+  const version = body.version as string | undefined
+
   if (!id) {
     return jsonResponse({ error: 'Missing required field: id' }, 400)
   }
   if (!version) {
     return jsonResponse({ error: 'Missing required field: version' }, 400)
   }
+
+  // Validate function ID
+  try {
+    validateFunctionId(id)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Invalid function ID'
+    return jsonResponse({ error: message }, 400)
+  }
+
+  // Validate version
+  if (!isValidVersion(version)) {
+    return jsonResponse({ error: `Invalid semantic version: ${version}` }, 400)
+  }
+
+  const baseUrl = new URL(request.url).origin
+
+  // Route to type-specific deploy handler
+  switch (functionType) {
+    case 'generative':
+      return deployGenerativeFunction(body, env, baseUrl)
+    case 'agentic':
+      return deployAgenticFunction(body, env, baseUrl)
+    case 'human':
+      return deployHumanFunction(body, env, baseUrl)
+    case 'code':
+      // Fall through to existing code deploy logic below
+      break
+    default:
+      return jsonResponse({
+        error: `Invalid function type: ${functionType}. Must be one of: code, generative, agentic, human`,
+      }, 400)
+  }
+
+  // =========================================================================
+  // CODE FUNCTION DEPLOY (existing logic, preserved for backward compatibility)
+  // =========================================================================
+
+  const language = body.language as string | undefined
+  const code = body.code as string | undefined
+  const entryPoint = body.entryPoint as string | undefined
+  const dependencies = body.dependencies as Record<string, string> | undefined
+  const wasmBinary = body.wasmBinary as string | undefined
+
   if (!language) {
     return jsonResponse({ error: 'Missing required field: language' }, 400)
   }
@@ -273,19 +615,6 @@ export const deployHandler: Handler = async (
     if (!hasCode) {
       return jsonResponse({ error: 'Missing required field: code' }, 400)
     }
-  }
-
-  // Validate function ID
-  try {
-    validateFunctionId(id)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Invalid function ID'
-    return jsonResponse({ error: message }, 400)
-  }
-
-  // Validate version
-  if (!isValidVersion(version)) {
-    return jsonResponse({ error: `Invalid semantic version: ${version}` }, 400)
   }
 
   // Validate language
@@ -492,6 +821,10 @@ export const deployHandler: Handler = async (
   const metadata: FunctionMetadata = {
     id,
     version,
+    type: 'code',
+    name: (body.name as string) || undefined,
+    description: (body.description as string) || undefined,
+    tags: (body.tags as string[]) || undefined,
     language: language as FunctionMetadata['language'],
     entryPoint: resolvedEntryPoint,
     dependencies: dependencies || {},
@@ -508,10 +841,10 @@ export const deployHandler: Handler = async (
   }
 
   // Return success response
-  const baseUrl = new URL(request.url).origin
   const response: {
     id: string
     version: string
+    type: string
     url: string
     dispatchUpload: string
     wasmExports?: string[]
@@ -524,6 +857,7 @@ export const deployHandler: Handler = async (
   } = {
     id,
     version,
+    type: 'code',
     url: `${baseUrl}/functions/${id}`,
     dispatchUpload: dispatchUploadResult.success
       ? 'success'

@@ -21,7 +21,14 @@
     "exactOptionalPropertyTypes": true,
     "noFallthroughCasesInSwitch": true,
     "noPropertyAccessFromIndexSignature": true,
-    "useDefineForClassFields": true
+    "useDefineForClassFields": true,
+    "paths": {
+      "@dotdo/functions": ["./core/src/index.ts"],
+      "@dotdo/functions/code": ["./core/src/code/index.ts"],
+      "@dotdo/functions/generative": ["./core/src/generative/index.ts"],
+      "@dotdo/functions/agentic": ["./core/src/agentic/index.ts"],
+      "@dotdo/functions/human": ["./core/src/human/index.ts"]
+    }
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

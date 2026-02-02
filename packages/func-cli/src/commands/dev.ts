@@ -511,10 +511,10 @@ async function buildWorker(
     }
 
     return { success: true }
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       success: false,
-      error: err.message || String(err),
+      error: err instanceof Error ? err.message : String(err),
     }
   }
 }
@@ -707,8 +707,8 @@ export async function runDevCommand(options: DevCommandOptions): Promise<void> {
         } else {
           buildSuccess = true
         }
-      } catch (err: any) {
-        buildError = err.message || String(err)
+      } catch (err: unknown) {
+        buildError = err instanceof Error ? err.message : String(err)
       }
     } else {
       const result = await buildWorker(entryPoint, outfile, { sourcemap: true })
@@ -776,8 +776,8 @@ export async function runDevCommand(options: DevCommandOptions): Promise<void> {
           await mf.ready
 
           console.log(colorize('Worker updated', 'green'))
-        } catch (err: any) {
-          console.error(colorize(`Failed to hot reload: ${err.message}`, 'red'))
+        } catch (err: unknown) {
+          console.error(colorize(`Failed to hot reload: ${err instanceof Error ? err.message : String(err)}`, 'red'))
           // Fallback to full restart
           console.log(colorize('Falling back to full restart...', 'yellow'))
 
@@ -869,8 +869,8 @@ export async function runDevCommand(options: DevCommandOptions): Promise<void> {
   // Initialize esbuild context for incremental builds
   try {
     await initEsbuildContext()
-  } catch (err: any) {
-    console.error(colorize(`Failed to initialize build context: ${err.message}`, 'red'))
+  } catch (err: unknown) {
+    console.error(colorize(`Failed to initialize build context: ${err instanceof Error ? err.message : String(err)}`, 'red'))
     // Continue without incremental builds
   }
 
@@ -878,8 +878,10 @@ export async function runDevCommand(options: DevCommandOptions): Promise<void> {
   try {
     mf = await startMiniflare()
     await mf.ready
-  } catch (err: any) {
-    if (err.message?.includes('EADDRINUSE') || err.code === 'EADDRINUSE') {
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err)
+    const errCode = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined
+    if (errMsg.includes('EADDRINUSE') || errCode === 'EADDRINUSE') {
       console.error(colorize(`Error: Port ${port} is already in use`, 'red'))
       process.exit(1)
     }

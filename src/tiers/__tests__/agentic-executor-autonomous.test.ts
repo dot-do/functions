@@ -17,13 +17,13 @@ import type {
   AgenticFunctionDefinition,
   AgenticFunctionConfig,
   ToolDefinition,
-} from '../../../core/src/agentic/index.js'
+} from '@dotdo/functions/agentic'
 import {
   defineAgenticFunction,
   defineTool,
   builtinTool,
-} from '../../../core/src/agentic/index.js'
-import type { ExecutionContext, TokenUsage } from '../../../core/src/types.js'
+} from '@dotdo/functions/agentic'
+import type { ExecutionContext, TokenUsage } from '@dotdo/functions'
 
 import { AgenticExecutor } from '../agentic-executor.js'
 

@@ -11,7 +11,7 @@ import { describe, it, expect, vi } from 'vitest'
 import type {
   QuickAction,
   FormField,
-} from '../../../core/src/human/index.js'
+} from '@dotdo/functions/human'
 
 import {
   TaskDeliveryService,

@@ -28,13 +28,13 @@ import type {
   AgentIteration,
   AgentState,
   BuiltinTool,
-} from '../../../core/src/agentic/index.js'
+} from '@dotdo/functions/agentic'
 import {
   defineAgenticFunction,
   defineTool,
   builtinTool,
-} from '../../../core/src/agentic/index.js'
-import type { ExecutionContext, TokenUsage } from '../../../core/src/types.js'
+} from '@dotdo/functions/agentic'
+import type { ExecutionContext, TokenUsage } from '@dotdo/functions'
 
 // The executor doesn't exist yet - this import will fail (RED phase)
 import { AgenticExecutor } from '../agentic-executor.js'

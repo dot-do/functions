@@ -228,7 +228,7 @@ if '${handlerName}' not in dir():
     sys.exit(1)
 
 # Get the handler function
-handler = eval('${handlerName}')
+handler = globals()['${handlerName}']
 
 # Parse arguments
 args = json.loads('''${escapeForPython(argsJson)}''')

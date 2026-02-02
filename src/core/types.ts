@@ -109,7 +109,16 @@ export interface FunctionPermissions {
 }
 
 /**
- * Function metadata stored in the registry
+ * Function metadata stored in the registry.
+ *
+ * Supports all four function tiers:
+ * - code: Deterministic code execution (default)
+ * - generative: Single AI call with structured output
+ * - agentic: Multi-step AI with tools
+ * - human: Human-in-the-loop execution
+ *
+ * Code functions require language, entryPoint, and dependencies.
+ * Non-code functions store type-specific configuration fields.
  */
 export interface FunctionMetadata {
   /**
@@ -123,19 +132,137 @@ export interface FunctionMetadata {
   version: string
 
   /**
-   * Programming language of the function source
+   * Function type discriminator.
+   * Defaults to 'code' for backward compatibility.
    */
-  language: 'typescript' | 'javascript' | 'rust' | 'python' | 'go' | 'zig' | 'assemblyscript' | 'csharp'
+  type?: 'code' | 'generative' | 'agentic' | 'human'
 
   /**
-   * Entry point file for the function
+   * Human-readable name for the function
    */
-  entryPoint: string
+  name?: string
 
   /**
-   * Dependencies required by the function
+   * Description of the function
    */
-  dependencies: Record<string, string>
+  description?: string
+
+  /**
+   * Tags for categorization
+   */
+  tags?: string[]
+
+  // =========================================================================
+  // CODE-SPECIFIC FIELDS (type === 'code' or undefined)
+  // =========================================================================
+
+  /**
+   * Programming language of the function source.
+   * Required for code functions; absent for non-code functions.
+   */
+  language?: 'typescript' | 'javascript' | 'rust' | 'python' | 'go' | 'zig' | 'assemblyscript' | 'csharp'
+
+  /**
+   * Entry point file for the function.
+   * Required for code functions; absent for non-code functions.
+   */
+  entryPoint?: string
+
+  /**
+   * Dependencies required by the function.
+   * Used by code functions; absent for non-code functions.
+   */
+  dependencies?: Record<string, string>
+
+  // =========================================================================
+  // GENERATIVE-SPECIFIC FIELDS (type === 'generative')
+  // =========================================================================
+
+  /** AI model to use (generative/agentic) */
+  model?: string
+
+  /** System prompt template (generative/agentic) */
+  systemPrompt?: string
+
+  /** User prompt template with {{variable}} placeholders (generative) */
+  userPrompt?: string
+
+  /** Output schema for structured generation (generative/agentic) */
+  outputSchema?: Record<string, unknown>
+
+  /** Temperature 0-1 (generative) */
+  temperature?: number
+
+  /** Max output tokens (generative) */
+  maxTokens?: number
+
+  /** Few-shot examples (generative) */
+  examples?: Array<{ input: Record<string, unknown>; output: unknown; explanation?: string }>
+
+  // =========================================================================
+  // AGENTIC-SPECIFIC FIELDS (type === 'agentic')
+  // =========================================================================
+
+  /** Goal description - what the agent should achieve (agentic) */
+  goal?: string
+
+  /** Available tools (agentic) */
+  tools?: Array<{
+    name: string
+    description: string
+    inputSchema?: Record<string, unknown>
+    outputSchema?: Record<string, unknown>
+  }>
+
+  /** Maximum iterations/turns (agentic) */
+  maxIterations?: number
+
+  /** Maximum tool calls per iteration (agentic) */
+  maxToolCallsPerIteration?: number
+
+  /** Enable chain-of-thought reasoning (agentic) */
+  enableReasoning?: boolean
+
+  /** Enable memory/context accumulation (agentic) */
+  enableMemory?: boolean
+
+  /** Token budget for the entire agentic execution (agentic) */
+  tokenBudget?: number
+
+  // =========================================================================
+  // HUMAN-SPECIFIC FIELDS (type === 'human')
+  // =========================================================================
+
+  /** Type of human interaction (human) */
+  interactionType?: 'approval' | 'review' | 'input' | 'selection' | 'annotation' | 'verification' | 'custom'
+
+  /** UI configuration for the human task (human) */
+  uiConfig?: Record<string, unknown>
+
+  /** Who can respond to the task (human) */
+  assignees?: Array<{ type: string; value: string }>
+
+  /** SLA configuration (human) */
+  sla?: {
+    responseTime?: string
+    resolutionTime?: string
+    onBreach?: string
+  }
+
+  /** Reminder configuration (human) */
+  reminders?: Record<string, unknown>
+
+  /** Escalation configuration (human) */
+  escalation?: Record<string, unknown>
+
+  // =========================================================================
+  // COMMON METADATA FIELDS
+  // =========================================================================
+
+  /**
+   * Input schema for the function
+   */
+  inputSchema?: Record<string, unknown>
 
   /**
    * Timestamp when the function was first deployed

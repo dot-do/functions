@@ -29,6 +29,7 @@ import type {
   FunctionType,
 } from '@dotdo/functions'
 import { TierDispatcher, type ExtendedMetadata, type TierDispatcherEnv } from '../tier-dispatcher'
+import { FunctionClassifier, type ClassificationResult } from '../../core/function-classifier'
 
 // =============================================================================
 // TYPES
@@ -48,8 +49,8 @@ export interface CascadeRequestBody {
  * Options for cascade execution from request
  */
 export interface CascadeRequestOptions {
-  /** Starting tier (default: 'code') */
-  startTier?: FunctionType
+  /** Starting tier (default: 'code'). Set to 'auto' for AI-based classification. */
+  startTier?: FunctionType | 'auto'
   /** Tiers to skip */
   skipTiers?: FunctionType[]
   /** Per-tier timeouts in milliseconds */
@@ -103,6 +104,118 @@ export interface CascadeResponse {
     executedAt: string
     tiersAttempted: FunctionType[]
   }
+}
+
+// =============================================================================
+// INPUT VALIDATION
+// =============================================================================
+
+/**
+ * JSON Schema type for input validation (mirrors core JsonSchema)
+ */
+export interface InputJsonSchema {
+  type?: 'object' | 'array' | 'string' | 'number' | 'boolean' | 'null'
+  properties?: Record<string, InputJsonSchema>
+  items?: InputJsonSchema
+  required?: string[]
+  enum?: unknown[]
+  description?: string
+  default?: unknown
+  [key: string]: unknown
+}
+
+/**
+ * Result of input validation against a JSON Schema
+ */
+export interface InputValidationResult {
+  valid: boolean
+  errors: string[]
+}
+
+/**
+ * Validate input data against a JSON Schema definition.
+ *
+ * Performs fail-fast validation including:
+ * - Type checking (object, array, string, number, boolean, null)
+ * - Required field validation
+ * - Enum value validation
+ * - Nested object property validation
+ * - Array item validation
+ *
+ * @param data - The input data to validate
+ * @param schema - The JSON Schema to validate against
+ * @param path - Current property path for error messages (used in recursion)
+ * @returns Validation result with any errors found
+ */
+export function validateInput(
+  data: unknown,
+  schema: InputJsonSchema,
+  path = ''
+): InputValidationResult {
+  const errors: string[] = []
+  const prefix = path ? `${path}: ` : ''
+
+  // Type validation
+  if (schema.type) {
+    const actualType = data === null ? 'null' : Array.isArray(data) ? 'array' : typeof data
+    if (schema.type !== actualType) {
+      // Allow number coercion from string
+      if (!(schema.type === 'number' && actualType === 'string' && !isNaN(Number(data)))) {
+        errors.push(`${prefix}expected type '${schema.type}', got '${actualType}'`)
+        // Fail fast on type mismatch - nested checks would be meaningless
+        return { valid: false, errors }
+      }
+    }
+  }
+
+  // Required fields validation
+  if (
+    schema.type === 'object' &&
+    schema.required &&
+    typeof data === 'object' &&
+    data !== null &&
+    !Array.isArray(data)
+  ) {
+    for (const field of schema.required) {
+      if (!(field in (data as Record<string, unknown>))) {
+        errors.push(`${prefix}missing required field '${field}'`)
+      }
+    }
+  }
+
+  // Property-level validation for objects
+  if (schema.properties && typeof data === 'object' && data !== null && !Array.isArray(data)) {
+    const record = data as Record<string, unknown>
+    for (const [key, propSchema] of Object.entries(schema.properties)) {
+      const value = record[key]
+      if (value === undefined) continue
+
+      // Enum validation
+      if (propSchema.enum && !propSchema.enum.includes(value)) {
+        errors.push(`${prefix}field '${key}' must be one of: ${propSchema.enum.join(', ')}`)
+      }
+
+      // Recursive validation for nested objects and arrays
+      if (propSchema.type === 'object' || propSchema.type === 'array') {
+        const nestedResult = validateInput(value, propSchema, path ? `${path}.${key}` : key)
+        if (!nestedResult.valid) {
+          errors.push(...nestedResult.errors)
+        }
+      }
+    }
+  }
+
+  // Array items validation
+  if (schema.type === 'array' && schema.items && Array.isArray(data)) {
+    for (let i = 0; i < data.length; i++) {
+      const itemResult = validateInput(data[i], schema.items, `${path}[${i}]`)
+      if (!itemResult.valid) {
+        errors.push(...itemResult.errors)
+      }
+    }
+  }
+
+  return { valid: errors.length === 0, errors }
 }
 
 // =============================================================================
@@ -192,6 +305,55 @@ export const cascadeHandler: Handler = async (
     return jsonResponse({ error: `Function not found: ${functionId}` }, 404)
   }
 
+  // Validate input against function's inputSchema (fail fast)
+  if (metadata.inputSchema) {
+    const validation = validateInput(input, metadata.inputSchema as InputJsonSchema)
+    if (!validation.valid) {
+      return jsonResponse(
+        {
+          error: 'Input validation failed',
+          validationErrors: validation.errors,
+          _meta: {
+            functionId,
+            schemaType: 'inputSchema',
+          },
+        },
+        400
+      )
+    }
+  }
+
+  // Auto-classify the start tier if requested
+  let classificationMeta: ClassificationResult | undefined
+  if (options.startTier === 'auto' && env.AI_CLIENT) {
+    const classifier = new FunctionClassifier(
+      env.AI_CLIENT as Parameters<typeof FunctionClassifier.prototype.classify>[0] extends never ? undefined : any,
+      { maxCacheSize: 500 },
+    )
+    const description = metadata.userPrompt || metadata.goal || metadata.systemPrompt
+    const result = await classifier.classify(
+      functionId,
+      description as string | undefined,
+      metadata.inputSchema,
+    )
+    if (result.confidence >= 0.6) {
+      options.startTier = result.type as FunctionType
+    } else {
+      options.startTier = 'code' // Default to code on low confidence
+    }
+    classificationMeta = result
+  } else if (options.startTier === 'auto') {
+    // No AI client available, fall back to heuristic
+    const { classifyByHeuristic } = await import('../../core/function-classifier')
+    const result = classifyByHeuristic(functionId, metadata.systemPrompt as string | undefined)
+    if (result.confidence >= 0.6) {
+      options.startTier = result.type as FunctionType
+    } else {
+      options.startTier = 'code'
+    }
+    classificationMeta = result
+  }
+
   // Get function code for code tier
   const codeStorage = new KVCodeStorage(env.FUNCTIONS_CODE)
   const code = await codeStorage.get(functionId)
@@ -206,7 +368,7 @@ export const cascadeHandler: Handler = async (
       metadata,
       code || undefined,
       env,
-      options
+      options as CascadeRequestOptions & { startTier?: FunctionType }
     )
 
     // Create and execute the cascade
@@ -236,6 +398,14 @@ export const cascadeHandler: Handler = async (
         functionId,
         executedAt: new Date(startedAt).toISOString(),
         tiersAttempted: result.history.map(h => h.tier),
+        ...(classificationMeta ? {
+          autoClassified: true,
+          classification: {
+            type: classificationMeta.type,
+            confidence: classificationMeta.confidence,
+            reasoning: classificationMeta.reasoning,
+          },
+        } : {}),
       },
     }
 
