@@ -11,8 +11,9 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import { invokeHandler, validateInvokeRequest } from '../invoke'
+import { invokeHandler, validateInvokeRequest, classifyFunction } from '../invoke'
 import type { Env, RouteContext } from '../../router'
+import type { ExtendedMetadata } from '../../tier-dispatcher'
 import { createMockKV } from '../../../test-utils/mock-kv'
 
 // Type for JSON response bodies
@@ -477,6 +478,189 @@ describe('Invoke Handler', () => {
       expect(mockCacheMatch).toHaveBeenCalled()
       // Should not return 404 since KV has the function
       expect(response.status).not.toBe(404)
+    })
+  })
+
+  // =============================================================================
+  // CASCADE DEFAULT INVOKE PATH TESTS
+  // =============================================================================
+
+  describe('cascade as default invoke path', () => {
+    /**
+     * Helper to set up a function WITHOUT a type field in metadata.
+     * This simulates a function that was registered without specifying an execution type.
+     */
+    async function setupFunctionWithoutType(
+      functionId: string,
+      extraMetadata: Record<string, unknown> = {}
+    ): Promise<void> {
+      const metadata = {
+        id: functionId,
+        version: '1.0.0',
+        language: 'javascript',
+        entryPoint: 'index.js',
+        // NOTE: No 'type' field - this is the key scenario
+        createdAt: '2025-01-01T00:00:00.000Z',
+        updatedAt: '2025-01-02T00:00:00.000Z',
+        ...extraMetadata,
+      }
+      await mockEnv.FUNCTIONS_REGISTRY.put(`registry:${functionId}`, JSON.stringify(metadata))
+
+      const code = `export default { fetch(req) { return new Response(JSON.stringify({ hello: 'world' }), { headers: { 'Content-Type': 'application/json' }}); } }`
+      await mockEnv.FUNCTIONS_CODE.put(`code:${functionId}`, code)
+    }
+
+    describe('classifyFunction defaults to code', () => {
+      it('returns code type when metadata has no type and no AI binding', async () => {
+        const metadata: ExtendedMetadata = {
+          id: 'no-type-func',
+          version: '1.0.0',
+          language: 'javascript',
+          entryPoint: 'index.js',
+          createdAt: '2025-01-01T00:00:00.000Z',
+          updatedAt: '2025-01-02T00:00:00.000Z',
+          // No type field - defaults to 'code' for backward compatibility
+        }
+
+        const result = await classifyFunction(metadata, undefined)
+
+        expect(result.type).toBe('code')
+      })
+
+      it('returns code type when metadata type is explicitly undefined', async () => {
+        const metadata: ExtendedMetadata = {
+          id: 'undefined-type-func',
+          version: '1.0.0',
+          language: 'javascript',
+          entryPoint: 'index.js',
+          type: undefined,
+          createdAt: '2025-01-01T00:00:00.000Z',
+          updatedAt: '2025-01-02T00:00:00.000Z',
+        }
+
+        const result = await classifyFunction(metadata, undefined)
+
+        expect(result.type).toBe('code')
+      })
+
+      it('still returns explicit type when type is set to code', async () => {
+        const metadata: ExtendedMetadata = {
+          id: 'code-func',
+          version: '1.0.0',
+          language: 'javascript',
+          entryPoint: 'index.js',
+          type: 'code',
+          createdAt: '2025-01-01T00:00:00.000Z',
+          updatedAt: '2025-01-02T00:00:00.000Z',
+        }
+
+        const result = await classifyFunction(metadata, undefined)
+
+        expect(result.type).toBe('code')
+      })
+
+      it('still returns explicit type when type is set to generative', async () => {
+        const metadata: ExtendedMetadata = {
+          id: 'gen-func',
+          version: '1.0.0',
+          language: 'javascript',
+          entryPoint: 'index.js',
+          type: 'generative',
+          createdAt: '2025-01-01T00:00:00.000Z',
+          updatedAt: '2025-01-02T00:00:00.000Z',
+        }
+
+        const result = await classifyFunction(metadata, undefined)
+
+        expect(result.type).toBe('generative')
+      })
+
+      it('still returns explicit type when type is set to agentic', async () => {
+        const metadata: ExtendedMetadata = {
+          id: 'agent-func',
+          version: '1.0.0',
+          language: 'javascript',
+          entryPoint: 'index.js',
+          type: 'agentic',
+          createdAt: '2025-01-01T00:00:00.000Z',
+          updatedAt: '2025-01-02T00:00:00.000Z',
+        }
+
+        const result = await classifyFunction(metadata, undefined)
+
+        expect(result.type).toBe('agentic')
+      })
+
+      it('still returns explicit type when type is set to human', async () => {
+        const metadata: ExtendedMetadata = {
+          id: 'human-func',
+          version: '1.0.0',
+          language: 'javascript',
+          entryPoint: 'index.js',
+          type: 'human',
+          createdAt: '2025-01-01T00:00:00.000Z',
+          updatedAt: '2025-01-02T00:00:00.000Z',
+        }
+
+        const result = await classifyFunction(metadata, undefined)
+
+        expect(result.type).toBe('human')
+      })
+    })
+
+    describe('invokeHandler routes to cascade when type is not specified', () => {
+      it('routes to code execution path when function has no type (defaults to code)', async () => {
+        await setupFunctionWithoutType('cascade-default-test')
+
+        const request = new Request('https://functions.do/functions/cascade-default-test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: 'test' }),
+        })
+        const context: RouteContext = {
+          params: { id: 'cascade-default-test' },
+          functionId: 'cascade-default-test',
+        }
+
+        const response = await invokeHandler(request, mockEnv, mockCtx, context)
+        const body = (await response.json()) as JsonBody
+
+        // With discriminated union, functions without a type field default to 'code'
+        // via validateFunctionMetadata. Without LOADER or USER_FUNCTIONS, code path
+        // returns 501.
+        const meta = body['_meta'] as Record<string, unknown> | undefined
+        if (meta) {
+          // executorType should be 'code' since type defaults to 'code'
+          expect(meta['executorType']).toBe('code')
+        }
+        // Code path without LOADER/USER_FUNCTIONS returns 501
+        expect(response.status).toBe(501)
+      })
+
+      it('still routes to code execution when type is explicitly code', async () => {
+        await setupFunction('explicit-code-test', { type: 'code' })
+
+        const request = new Request('https://functions.do/functions/explicit-code-test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        })
+        const context: RouteContext = {
+          params: { id: 'explicit-code-test' },
+          functionId: 'explicit-code-test',
+        }
+
+        const response = await invokeHandler(request, mockEnv, mockCtx, context)
+        const body = (await response.json()) as JsonBody
+
+        // With explicit type: 'code', it should go through code execution path
+        // Without LOADER or USER_FUNCTIONS, this returns 501
+        expect(response.status).toBe(501)
+        const meta = body['_meta'] as Record<string, unknown> | undefined
+        if (meta) {
+          expect(meta['executorType']).toBe('code')
+        }
+      })
     })
   })
 

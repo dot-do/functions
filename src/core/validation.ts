@@ -131,18 +131,21 @@ const VALID_FUNCTION_TYPES = ['code', 'generative', 'agentic', 'human', 'cascade
  * have correct types when present. Extra fields are allowed for
  * forward compatibility.
  *
+ * When `type` is not provided, it defaults to 'code' for backward
+ * compatibility, ensuring the result is always a valid discriminated union member.
+ *
  * @param data - The unknown value (typically from JSON.parse or KV.get)
- * @returns The validated FunctionMetadata
+ * @returns The validated FunctionMetadata (discriminated union)
  * @throws ValidationError if the data doesn't match the expected shape
  */
 export function validateFunctionMetadata(data: unknown): FunctionMetadata {
   const obj = assertObject(data, 'FunctionMetadata')
 
   // Required fields
-  const id = assertString(obj, 'id', 'FunctionMetadata')
-  const version = assertString(obj, 'version', 'FunctionMetadata')
+  assertString(obj, 'id', 'FunctionMetadata')
+  assertString(obj, 'version', 'FunctionMetadata')
 
-  // Optional typed fields
+  // Type field: validate if present, default to 'code' if absent
   const type = assertOptionalString(obj, 'type', 'FunctionMetadata')
   if (type !== undefined && !VALID_FUNCTION_TYPES.includes(type as typeof VALID_FUNCTION_TYPES[number])) {
     throw new ValidationError(
@@ -151,22 +154,56 @@ export function validateFunctionMetadata(data: unknown): FunctionMetadata {
     )
   }
 
-  // Validate other optional string fields
+  // Default type to 'code' for backward compatibility (discriminated union requires type)
+  if (type === undefined) {
+    obj['type'] = 'code'
+  }
+
+  // Validate common optional string fields
   assertOptionalString(obj, 'name', 'FunctionMetadata')
   assertOptionalString(obj, 'description', 'FunctionMetadata')
-  assertOptionalString(obj, 'language', 'FunctionMetadata')
-  assertOptionalString(obj, 'entryPoint', 'FunctionMetadata')
-  assertOptionalString(obj, 'model', 'FunctionMetadata')
-  assertOptionalString(obj, 'systemPrompt', 'FunctionMetadata')
-  assertOptionalString(obj, 'userPrompt', 'FunctionMetadata')
-  assertOptionalString(obj, 'goal', 'FunctionMetadata')
   assertOptionalString(obj, 'createdAt', 'FunctionMetadata')
   assertOptionalString(obj, 'updatedAt', 'FunctionMetadata')
   assertOptionalString(obj, 'ownerId', 'FunctionMetadata')
   assertOptionalString(obj, 'orgId', 'FunctionMetadata')
 
-  // Validate optional string array fields
+  // Validate common optional string array fields
   assertOptionalStringArray(obj, 'tags', 'FunctionMetadata')
+
+  // Validate type-specific fields based on the resolved type
+  const resolvedType = (obj['type'] as string) || 'code'
+
+  switch (resolvedType) {
+    case 'code':
+      assertOptionalString(obj, 'language', 'FunctionMetadata')
+      assertOptionalString(obj, 'entryPoint', 'FunctionMetadata')
+      break
+
+    case 'generative':
+      assertOptionalString(obj, 'model', 'FunctionMetadata')
+      assertOptionalString(obj, 'systemPrompt', 'FunctionMetadata')
+      assertOptionalString(obj, 'userPrompt', 'FunctionMetadata')
+      assertOptionalString(obj, 'goal', 'FunctionMetadata')
+      break
+
+    case 'agentic':
+      assertOptionalString(obj, 'model', 'FunctionMetadata')
+      assertOptionalString(obj, 'systemPrompt', 'FunctionMetadata')
+      assertOptionalString(obj, 'goal', 'FunctionMetadata')
+      break
+
+    case 'human':
+      assertOptionalString(obj, 'interactionType', 'FunctionMetadata')
+      break
+
+    case 'cascade':
+      assertOptionalString(obj, 'model', 'FunctionMetadata')
+      assertOptionalString(obj, 'systemPrompt', 'FunctionMetadata')
+      assertOptionalString(obj, 'userPrompt', 'FunctionMetadata')
+      assertOptionalString(obj, 'language', 'FunctionMetadata')
+      assertOptionalString(obj, 'entryPoint', 'FunctionMetadata')
+      break
+  }
 
   // Return the data cast to FunctionMetadata (extra fields preserved)
   return data as FunctionMetadata

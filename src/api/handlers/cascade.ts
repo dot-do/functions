@@ -778,15 +778,8 @@ function buildCascadeDefinition(
  * Create a TierDispatcher from the environment
  */
 function createTierDispatcher(env: CascadeEnv): TierDispatcher {
-  const dispatcherEnv: TierDispatcherEnv = {
-    LOADER: env.LOADER,
-    USER_FUNCTIONS: env.USER_FUNCTIONS,
-    AI_CLIENT: env.AI_CLIENT,
-    HUMAN_TASKS: env.HUMAN_TASKS,
-    CODE_STORAGE: env.CODE_STORAGE,
-    USER_STORAGE: env.USER_STORAGE,
-  }
-  return new TierDispatcher(dispatcherEnv)
+  // CascadeEnv is now a type alias for the unified Env type
+  return new TierDispatcher(env)
 }
 
 export default cascadeHandler

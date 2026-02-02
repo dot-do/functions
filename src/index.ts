@@ -5,43 +5,15 @@
  * Uses the modular router from src/api/router.ts with handlers in src/api/handlers/.
  */
 
-import { createRouter, Env as RouterEnv } from './api/router'
+import { createRouter } from './api/router'
 import type { RateLimitConfig } from './core/rate-limiter'
 
 /**
- * Dispatch namespace binding for Workers for Platforms
+ * Re-export the unified Env type from the canonical source.
+ * All bindings are defined in src/core/env.ts.
  */
-interface DispatchNamespace {
-  get(scriptName: string, options?: { entrypoint?: string }): {
-    fetch(request: Request): Promise<Response>
-  }
-}
-
-/**
- * Environment bindings for the Worker
- *
- * Extends the router's Env with additional optional bindings.
- */
-export interface Env extends RouterEnv {
-  /** KV namespace for API keys (optional - if not set, auth is disabled) */
-  FUNCTIONS_API_KEYS?: KVNamespace
-  /** Static assets binding for WASM binaries */
-  ASSETS?: Fetcher
-  /** Comma-separated list of additional public endpoints */
-  PUBLIC_ENDPOINTS?: string
-  /** Durable Object namespace for function executor */
-  FUNCTION_EXECUTOR?: DurableObjectNamespace
-  /** Test service binding for ai-evaluate (from ai-tests Worker) */
-  TEST?: unknown
-  /** Dispatch namespace for user-deployed functions (Workers for Platforms fallback) */
-  USER_FUNCTIONS?: DispatchNamespace
-  /**
-   * Per-user storage Durable Object namespace.
-   * Provides isolated storage for functions, code, and API keys.
-   * Replaces KV-based storage (FUNCTIONS_REGISTRY, FUNCTIONS_CODE, FUNCTIONS_API_KEYS).
-   */
-  USER_STORAGE?: DurableObjectNamespace
-}
+export type { Env } from './core/env'
+import type { Env } from './core/env'
 
 // Create the router instance (shared for rate limiting state)
 const router = createRouter()

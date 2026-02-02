@@ -52,23 +52,10 @@ const logger: Logger = createLogger({
 })
 
 /**
- * esbuild-compiler RPC interface for TypeScript compilation via Service Binding.
+ * Re-export EsbuildCompiler from the canonical env module.
  */
-export interface EsbuildCompiler {
-  transform(options: {
-    code: string
-    loader: 'ts' | 'tsx' | 'js' | 'jsx'
-    target?: string
-    format?: 'esm' | 'cjs' | 'iife'
-    jsx?: { factory?: string; fragment?: string }
-    sourcemap?: boolean
-  }): Promise<{
-    code: string
-    map?: string
-    warnings: string[]
-    errors?: string[]
-  }>
-}
+export type { EsbuildCompiler } from './env'
+import type { EsbuildCompiler } from './env'
 
 /**
  * Result from TypeScript compilation

@@ -1,4 +1,4 @@
-import type { FunctionMetadata, DeploymentRecord, VersionHistory } from './types'
+import type { FunctionMetadata, CodeFunctionMetadata, DeploymentRecord, VersionHistory } from './types'
 import { compareVersions, isValidVersion } from './types'
 import { ValidationError, NotFoundError, FunctionsDoError, ok, err, unwrap, type Result } from './errors'
 
@@ -278,7 +278,7 @@ export function validateDependencies(dependencies: unknown): void {
  * @param metadata - The function metadata to validate
  * @throws Error if any metadata field is invalid
  */
-export function validateMetadata(metadata: Omit<FunctionMetadata, 'createdAt' | 'updatedAt'>): void {
+export function validateMetadata(metadata: Omit<CodeFunctionMetadata, 'createdAt' | 'updatedAt'>): void {
   validateFunctionId(metadata.id)
   validateEntryPoint(metadata.entryPoint)
   validateLanguage(metadata.language)
@@ -302,8 +302,8 @@ export function validateMetadata(metadata: Omit<FunctionMetadata, 'createdAt' | 
  * ```
  */
 export function validateMetadataSafe(
-  metadata: Omit<FunctionMetadata, 'createdAt' | 'updatedAt'>
-): Result<Omit<FunctionMetadata, 'createdAt' | 'updatedAt'>, ValidationError> {
+  metadata: Omit<CodeFunctionMetadata, 'createdAt' | 'updatedAt'>
+): Result<Omit<CodeFunctionMetadata, 'createdAt' | 'updatedAt'>, ValidationError> {
   const idResult = validateFunctionIdSafe(metadata.id)
   if (idResult.success === false) {
     return idResult
@@ -388,8 +388,8 @@ export class FunctionRegistry {
    * @throws Error if metadata validation fails (id, entryPoint, language, dependencies, or version)
    */
   async deploy(metadata: Omit<FunctionMetadata, 'createdAt' | 'updatedAt'>): Promise<void> {
-    // Validate all metadata fields
-    validateMetadata(metadata)
+    // Validate code-specific metadata fields (this registry is for code functions)
+    validateMetadata(metadata as Omit<CodeFunctionMetadata, 'createdAt' | 'updatedAt'>)
 
     // Validate semantic version
     if (!isValidVersion(metadata.version)) {

@@ -10,13 +10,14 @@ describe('KVFunctionRegistry', () => {
   const createTestMetadata = (overrides: Partial<FunctionMetadata> = {}): FunctionMetadata => ({
     id: 'test-function',
     version: '1.0.0',
+    type: 'code',
     language: 'typescript',
     entryPoint: 'index.ts',
     dependencies: {},
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...overrides,
-  })
+  } as FunctionMetadata)
 
   beforeEach(() => {
     mockKV = createMockKV()

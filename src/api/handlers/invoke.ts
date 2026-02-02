@@ -297,8 +297,10 @@ export async function classifyFunction(
 
   // No explicit type - try AI classification if available
   if (!aiBinding) {
-    // No AI binding available - default to 'code' for backwards compatibility
-    // This allows local development and testing without AI binding
+    // No AI binding available - default to 'code' for backwards compatibility.
+    // With the discriminated union, validateFunctionMetadata always sets type
+    // to 'code' when absent, so this path is only reached if ExtendedMetadata
+    // is constructed without going through validation.
     return { type: 'code' }
   }
 
@@ -654,22 +656,11 @@ export async function executeNonCodeFunction(
 ): Promise<Response> {
   const { metadata, requestData, functionType, classificationMeta } = ctx
 
-  // Build TierDispatcher environment from the handler's env
-  const dispatcherEnv: TierDispatcherEnv = {
-    LOADER: env.LOADER,
-    USER_FUNCTIONS: env.USER_FUNCTIONS,
-    AI_CLIENT: env.AI_CLIENT,
-    HUMAN_TASKS: env.HUMAN_TASKS,
-    CODE_STORAGE: env.CODE_STORAGE,
-    USER_STORAGE: env.USER_STORAGE,
-    FUNCTIONS_REGISTRY: env.FUNCTIONS_REGISTRY,
-    FUNCTIONS_CODE: env.FUNCTIONS_CODE,
-  }
-
-  const dispatcher = new TierDispatcher(dispatcherEnv)
-  const dispatchMetadata = classificationMeta
-    ? { ...metadata, type: functionType }
-    : metadata
+  // Pass the unified Env directly to TierDispatcher
+  const dispatcher = new TierDispatcher(env)
+  // Always pass the determined functionType to the dispatcher so it routes correctly,
+  // regardless of whether the type came from AI classification or a default.
+  const dispatchMetadata = { ...metadata, type: functionType }
   const result = await dispatcher.dispatch(
     dispatchMetadata as ExtendedMetadata,
     requestData

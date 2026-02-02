@@ -6,16 +6,10 @@
  * @module handlers/cascade-types
  */
 
-import type { Env, AIClient } from '../router'
+import type { Env } from '../../core/env'
 
 /**
- * Extended environment for cascade handler with all tier executor bindings
+ * CascadeEnv is now an alias for the unified Env type.
+ * All bindings (AI_CLIENT, HUMAN_TASKS, CODE_STORAGE, etc.) are defined in src/core/env.ts.
  */
-export interface CascadeEnv extends Env {
-  /** AI client for generative/agentic execution */
-  AI_CLIENT?: AIClient
-  /** Durable Object for human task execution */
-  HUMAN_TASKS?: DurableObjectNamespace
-  /** R2 bucket for code storage */
-  CODE_STORAGE?: R2Bucket
-}
+export type CascadeEnv = Env

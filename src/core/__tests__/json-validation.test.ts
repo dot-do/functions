@@ -148,6 +148,7 @@ describe('validateFunctionMetadata', () => {
   const validMetadata: FunctionMetadata = {
     id: 'my-function',
     version: '1.0.0',
+    type: 'code',
   }
 
   it('passes for minimal valid metadata (id + version)', () => {
@@ -157,17 +158,17 @@ describe('validateFunctionMetadata', () => {
   })
 
   it('passes for full metadata with all optional fields', () => {
+    // Use 'cascade' type which supports both generative and code fields
     const full: FunctionMetadata = {
       id: 'test-fn',
       version: '2.1.0',
-      type: 'generative',
+      type: 'cascade',
       name: 'Test Function',
       description: 'A test function',
       tags: ['ai', 'test'],
       model: 'claude-3-sonnet',
       systemPrompt: 'You are a helpful assistant',
       userPrompt: 'Summarize: {{text}}',
-      goal: 'summarize text',
       language: 'typescript',
       entryPoint: 'index.ts',
       createdAt: '2025-01-01T00:00:00.000Z',
@@ -238,7 +239,7 @@ describe('validateFunctionMetadata', () => {
   })
 
   it('accepts all valid function types', () => {
-    for (const type of ['code', 'generative', 'agentic', 'human']) {
+    for (const type of ['code', 'generative', 'agentic', 'human', 'cascade']) {
       const result = validateFunctionMetadata({ id: 'fn', version: '1.0.0', type })
       expect(result.type).toBe(type)
     }

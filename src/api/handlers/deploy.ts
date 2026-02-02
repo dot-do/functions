@@ -53,7 +53,7 @@ import {
   validateEntryPoint,
   validateDependencies,
 } from '../../core/function-registry'
-import { isValidVersion, type FunctionMetadata } from '../../core/types'
+import { isValidVersion, type FunctionMetadata, type CodeFunctionMetadata, type HumanFunctionMetadata } from '../../core/types'
 import { validateDeployBody } from '../../core/validation'
 import { jsonResponse, jsonErrorResponse } from '../http-utils'
 
@@ -533,7 +533,7 @@ async function deployHumanFunction(
     name,
     description,
     tags,
-    interactionType: interactionType as FunctionMetadata['interactionType'],
+    interactionType: interactionType as HumanFunctionMetadata['interactionType'],
     uiConfig,
     assignees,
     sla,
@@ -926,7 +926,7 @@ export const deployHandler: Handler = async (
     name: body['name'] as string | undefined,
     description: body['description'] as string | undefined,
     tags: body['tags'] as string[] | undefined,
-    language: language as FunctionMetadata['language'],
+    language: language as CodeFunctionMetadata['language'],
     entryPoint: resolvedEntryPoint,
     dependencies: dependencies || {},
   }

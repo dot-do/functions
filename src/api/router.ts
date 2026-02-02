@@ -19,102 +19,13 @@ import { createRateLimitMiddleware, rateLimitMiddleware, RateLimitResult } from 
 import { createCSRFMiddleware, csrfMiddleware, generateCSRFToken, createCSRFCookie } from './middleware/csrf'
 import { RateLimitConfig, InMemoryRateLimiter } from '../core/rate-limiter'
 import { jsonResponse } from './http-utils'
-import type { RateLimiterDO } from '../do/rate-limiter'
 
 /**
- * esbuild-compiler RPC interface for TypeScript compilation via Service Binding.
- * See: workers/esbuild-compiler/src/types.ts
+ * Re-export the unified Env type and supporting interfaces from src/core/env.ts.
+ * This is the single source of truth for all environment bindings.
  */
-export interface EsbuildCompiler {
-  transform(options: {
-    code: string
-    loader: 'ts' | 'tsx' | 'js' | 'jsx'
-    target?: string
-    format?: 'esm' | 'cjs' | 'iife'
-    jsx?: { factory?: string; fragment?: string }
-    sourcemap?: boolean
-  }): Promise<{
-    code: string
-    map?: string
-    warnings: string[]
-    errors?: string[]
-  }>
-}
-
-/**
- * AI client interface for generative/agentic execution
- */
-export interface AIClient {
-  messages?: {
-    create(params: unknown): Promise<{
-      content: Array<{ type: string; text: string }>
-      usage?: { input_tokens: number; output_tokens: number }
-      stop_reason?: string
-      model?: string
-    }>
-  }
-  chat?: (request: unknown) => Promise<{
-    content: string
-    toolCalls?: Array<{ name: string; input: unknown }>
-    stopReason: string
-    tokens: { inputTokens: number; outputTokens: number; totalTokens: number }
-  }>
-}
-
-/**
- * OAuth.do service binding interface for authentication.
- * Re-exported from src/core/oauth.ts to maintain the canonical type definition.
- */
-import type { OAuthService } from '../core/oauth'
-export type OAuthServiceBinding = OAuthService
-
-/**
- * Environment type for the API
- */
-/**
- * Workers AI binding interface for function classification
- */
-export interface WorkersAI {
-  run(model: string, input: unknown): Promise<unknown>
-}
-
-export interface Env {
-  /** @deprecated Use USER_STORAGE Durable Object instead. Kept for backward compat. */
-  FUNCTIONS_REGISTRY?: KVNamespace
-  /** @deprecated Use USER_STORAGE Durable Object instead. Kept for backward compat. */
-  FUNCTIONS_CODE?: KVNamespace
-  FUNCTIONS_API_KEYS?: KVNamespace
-  FUNCTION_LOGS?: DurableObjectNamespace
-  LOADER?: unknown
-  USER_FUNCTIONS?: unknown
-  CLOUDFLARE_ACCOUNT_ID?: string
-  CLOUDFLARE_API_TOKEN?: string
-  DISPATCH_NAMESPACE?: string
-  /** esbuild-wasm compiler service for TypeScript compilation */
-  ESBUILD_COMPILER?: EsbuildCompiler
-  /** Workers AI binding for function classification and generative/agentic execution */
-  AI?: WorkersAI
-  /** AI client for generative/agentic cascade tiers (legacy name, prefer AI) */
-  AI_CLIENT?: AIClient
-  /** Durable Object for human task execution (cascade tier 4) */
-  HUMAN_TASKS?: DurableObjectNamespace
-  /** R2 bucket for code storage */
-  CODE_STORAGE?: R2Bucket
-  /** OAuth.do service binding for user authentication */
-  OAUTH?: OAuthServiceBinding
-  /**
-   * Per-user storage Durable Object namespace.
-   * Provides isolated storage for functions, code, and API keys.
-   * Replaces KV-based storage with strong consistency and per-user isolation.
-   */
-  USER_STORAGE?: DurableObjectNamespace
-  /**
-   * Rate Limiter Durable Object namespace.
-   * Provides distributed rate limiting that persists across Worker isolates.
-   * Replaces in-memory rate limiting which resets on each isolate.
-   */
-  RATE_LIMITER?: DurableObjectNamespace<RateLimiterDO>
-}
+export type { Env, EsbuildCompiler, AIClient, WorkersAI, OAuthServiceBinding } from '../core/env'
+import type { Env } from '../core/env'
 
 /**
  * Handler function type

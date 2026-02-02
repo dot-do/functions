@@ -108,105 +108,149 @@ export interface FunctionPermissions {
   }
 }
 
+// =============================================================================
+// FUNCTION METADATA: Discriminated Union on `type`
+//
+// FunctionMetadata is a discriminated union where the `type` field determines
+// which variant (and thus which fields) are available. Each variant extends
+// FunctionMetadataBase with type-specific fields.
+//
+// Supports five function tiers:
+// - code: Deterministic code execution (default)
+// - generative: Single AI call with structured output
+// - agentic: Multi-step AI with tools
+// - human: Human-in-the-loop execution
+// - cascade: Combined generative + code pipeline
+// =============================================================================
+
 /**
- * Function metadata stored in the registry.
+ * Common fields shared by all function metadata variants.
  *
- * Supports all four function tiers:
- * - code: Deterministic code execution (default)
- * - generative: Single AI call with structured output
- * - agentic: Multi-step AI with tools
- * - human: Human-in-the-loop execution
- *
- * Code functions require language, entryPoint, and dependencies.
- * Non-code functions store type-specific configuration fields.
+ * Every FunctionMetadata variant has these fields. The `type` field is the
+ * discriminant that determines which variant-specific fields are available.
  */
-export interface FunctionMetadata {
-  /**
-   * Unique function identifier
-   */
+export interface FunctionMetadataBase {
+  /** Unique function identifier */
   id: string
 
-  /**
-   * Semantic version of the function
-   */
+  /** Semantic version of the function */
   version: string
 
-  /**
-   * Function type discriminator.
-   * Defaults to 'code' for backward compatibility.
-   */
-  type?: 'code' | 'generative' | 'agentic' | 'human'
+  /** Function type discriminator */
+  type: 'code' | 'generative' | 'agentic' | 'human' | 'cascade'
 
-  /**
-   * Human-readable name for the function
-   */
+  /** Human-readable name for the function */
   name?: string
 
-  /**
-   * Description of the function
-   */
+  /** Description of the function */
   description?: string
 
-  /**
-   * Tags for categorization
-   */
+  /** Tags for categorization */
   tags?: string[]
 
-  // =========================================================================
-  // CODE-SPECIFIC FIELDS (type === 'code' or undefined)
-  // =========================================================================
+  /** Input schema for the function */
+  inputSchema?: Record<string, unknown>
 
-  /**
-   * Programming language of the function source.
-   * Required for code functions; absent for non-code functions.
-   */
+  /** Timestamp when the function was first deployed */
+  createdAt?: string
+
+  /** Timestamp when the function was last updated */
+  updatedAt?: string
+
+  /** Owner user ID (from OAuth) */
+  ownerId?: string
+
+  /** Owning organization ID (from OAuth) */
+  orgId?: string
+
+  /** Access control permissions for the function */
+  permissions?: FunctionPermissions
+}
+
+// =============================================================================
+// CODE VARIANT (type === 'code')
+// =============================================================================
+
+/**
+ * Metadata for code (Tier 1) functions.
+ *
+ * Code functions execute deterministic compiled code (TypeScript, JavaScript,
+ * Rust, Go, etc.) with language, entryPoint, and dependencies.
+ */
+export interface CodeFunctionMetadata extends FunctionMetadataBase {
+  type: 'code'
+
+  /** Programming language of the function source */
   language?: 'typescript' | 'javascript' | 'rust' | 'python' | 'go' | 'zig' | 'assemblyscript' | 'csharp'
 
-  /**
-   * Entry point file for the function.
-   * Required for code functions; absent for non-code functions.
-   */
+  /** Entry point file for the function */
   entryPoint?: string
 
-  /**
-   * Dependencies required by the function.
-   * Used by code functions; absent for non-code functions.
-   */
+  /** Dependencies required by the function */
   dependencies?: Record<string, string>
+}
 
-  // =========================================================================
-  // GENERATIVE-SPECIFIC FIELDS (type === 'generative')
-  // =========================================================================
+// =============================================================================
+// GENERATIVE VARIANT (type === 'generative')
+// =============================================================================
 
-  /** AI model to use (generative/agentic) */
+/**
+ * Metadata for generative (Tier 2) functions.
+ *
+ * Generative functions make a single AI call with structured output,
+ * using model, prompts, schema, and generation parameters.
+ */
+export interface GenerativeFunctionMetadata extends FunctionMetadataBase {
+  type: 'generative'
+
+  /** AI model to use */
   model?: string
 
-  /** System prompt template (generative/agentic) */
+  /** System prompt template */
   systemPrompt?: string
 
-  /** User prompt template with {{variable}} placeholders (generative) */
+  /** User prompt template with {{variable}} placeholders */
   userPrompt?: string
 
-  /** Output schema for structured generation (generative/agentic) */
+  /** Output schema for structured generation */
   outputSchema?: Record<string, unknown>
 
-  /** Temperature 0-1 (generative) */
+  /** Temperature 0-2 */
   temperature?: number
 
-  /** Max output tokens (generative) */
+  /** Max output tokens */
   maxTokens?: number
 
-  /** Few-shot examples (generative) */
+  /** Few-shot examples */
   examples?: Array<{ input: Record<string, unknown>; output: unknown; explanation?: string }>
+}
 
-  // =========================================================================
-  // AGENTIC-SPECIFIC FIELDS (type === 'agentic')
-  // =========================================================================
+// =============================================================================
+// AGENTIC VARIANT (type === 'agentic')
+// =============================================================================
 
-  /** Goal description - what the agent should achieve (agentic) */
+/**
+ * Metadata for agentic (Tier 3) functions.
+ *
+ * Agentic functions use multi-step AI reasoning with tools, goals,
+ * iteration limits, and token budgets.
+ */
+export interface AgenticFunctionMetadata extends FunctionMetadataBase {
+  type: 'agentic'
+
+  /** AI model to use */
+  model?: string
+
+  /** System prompt template */
+  systemPrompt?: string
+
+  /** Goal description - what the agent should achieve */
   goal?: string
 
-  /** Available tools (agentic) */
+  /** Output schema for structured output */
+  outputSchema?: Record<string, unknown>
+
+  /** Available tools */
   tools?: Array<{
     name: string
     description: string
@@ -214,81 +258,125 @@ export interface FunctionMetadata {
     outputSchema?: Record<string, unknown>
   }>
 
-  /** Maximum iterations/turns (agentic) */
+  /** Maximum iterations/turns */
   maxIterations?: number
 
-  /** Maximum tool calls per iteration (agentic) */
+  /** Maximum tool calls per iteration */
   maxToolCallsPerIteration?: number
 
-  /** Enable chain-of-thought reasoning (agentic) */
+  /** Enable chain-of-thought reasoning */
   enableReasoning?: boolean
 
-  /** Enable memory/context accumulation (agentic) */
+  /** Enable memory/context accumulation */
   enableMemory?: boolean
 
-  /** Token budget for the entire agentic execution (agentic) */
+  /** Token budget for the entire agentic execution */
   tokenBudget?: number
+}
 
-  // =========================================================================
-  // HUMAN-SPECIFIC FIELDS (type === 'human')
-  // =========================================================================
+// =============================================================================
+// HUMAN VARIANT (type === 'human')
+// =============================================================================
 
-  /** Type of human interaction (human) */
+/**
+ * Metadata for human (Tier 4) functions.
+ *
+ * Human functions require human-in-the-loop interaction, with
+ * interaction type, UI config, assignees, SLAs, and escalation.
+ */
+export interface HumanFunctionMetadata extends FunctionMetadataBase {
+  type: 'human'
+
+  /** Type of human interaction */
   interactionType?: 'approval' | 'review' | 'input' | 'selection' | 'annotation' | 'verification' | 'custom'
 
-  /** UI configuration for the human task (human) */
+  /** UI configuration for the human task */
   uiConfig?: Record<string, unknown>
 
-  /** Who can respond to the task (human) */
+  /** Who can respond to the task */
   assignees?: Array<{ type: string; value: string }>
 
-  /** SLA configuration (human) */
+  /** SLA configuration */
   sla?: {
     responseTime?: string
     resolutionTime?: string
     onBreach?: string
   }
 
-  /** Reminder configuration (human) */
+  /** Reminder configuration */
   reminders?: Record<string, unknown>
 
-  /** Escalation configuration (human) */
+  /** Escalation configuration */
   escalation?: Record<string, unknown>
-
-  // =========================================================================
-  // COMMON METADATA FIELDS
-  // =========================================================================
-
-  /**
-   * Input schema for the function
-   */
-  inputSchema?: Record<string, unknown>
-
-  /**
-   * Timestamp when the function was first deployed
-   */
-  createdAt?: string
-
-  /**
-   * Timestamp when the function was last updated
-   */
-  updatedAt?: string
-
-  /**
-   * Owner user ID (from OAuth)
-   */
-  ownerId?: string
-
-  /**
-   * Owning organization ID (from OAuth)
-   */
-  orgId?: string
-
-  /**
-   * Access control permissions for the function
-   */
-  permissions?: FunctionPermissions
 }
+
+// =============================================================================
+// CASCADE VARIANT (type === 'cascade')
+// =============================================================================
+
+/**
+ * Metadata for cascade functions.
+ *
+ * Cascade functions combine generative and code capabilities in a pipeline,
+ * inheriting fields from both generative and code variants.
+ */
+export interface CascadeFunctionMetadata extends FunctionMetadataBase {
+  type: 'cascade'
+
+  // Generative-like fields
+  /** AI model to use */
+  model?: string
+
+  /** System prompt template */
+  systemPrompt?: string
+
+  /** User prompt template with {{variable}} placeholders */
+  userPrompt?: string
+
+  /** Output schema for structured generation */
+  outputSchema?: Record<string, unknown>
+
+  /** Temperature 0-2 */
+  temperature?: number
+
+  /** Max output tokens */
+  maxTokens?: number
+
+  // Code-like fields
+  /** Programming language of the function source */
+  language?: 'typescript' | 'javascript' | 'rust' | 'python' | 'go' | 'zig' | 'assemblyscript' | 'csharp'
+
+  /** Entry point file for the function */
+  entryPoint?: string
+
+  /** Dependencies required by the function */
+  dependencies?: Record<string, string>
+}
+
+// =============================================================================
+// DISCRIMINATED UNION
+// =============================================================================
+
+/**
+ * Function metadata stored in the registry.
+ *
+ * This is a discriminated union on the `type` field. Use type narrowing
+ * (switch/if on `type`) to access variant-specific fields:
+ *
+ * ```typescript
+ * if (metadata.type === 'code') {
+ *   // metadata.language, metadata.entryPoint available
+ * } else if (metadata.type === 'generative') {
+ *   // metadata.model, metadata.userPrompt available
+ * }
+ * ```
+ */
+export type FunctionMetadata =
+  | CodeFunctionMetadata
+  | GenerativeFunctionMetadata
+  | AgenticFunctionMetadata
+  | HumanFunctionMetadata
+  | CascadeFunctionMetadata
 
 /**
  * Parsed semantic version components

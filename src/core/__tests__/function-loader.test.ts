@@ -43,6 +43,7 @@ function createMockRegistry() {
   const testFunc1: FunctionMetadata = {
     id: 'test-func-1',
     version: '1.0.0',
+    type: 'code',
     language: 'typescript',
     entryPoint: 'index.ts',
     dependencies: {},
@@ -63,6 +64,7 @@ function createMockRegistry() {
   const echoFunction: FunctionMetadata = {
     id: 'echo-function',
     version: '1.0.0',
+    type: 'code',
     language: 'javascript',
     entryPoint: 'handler.js',
     dependencies: {},

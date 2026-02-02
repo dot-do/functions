@@ -65,46 +65,12 @@ export const TIER_MAP: Record<string, TierNumber> = {
 export const TIER_TIMEOUTS: Record<TierNumber, number> = TIER_TIMEOUT_MAP
 
 /**
- * Extended environment with all tier executor bindings
+ * TierDispatcherEnv is now an alias for the unified Env type.
+ * All tier executor bindings are defined in src/core/env.ts.
  */
-export interface TierDispatcherEnv {
-  /** Worker loader for code execution */
-  LOADER?: unknown
-  /** Dispatch namespace for code execution */
-  USER_FUNCTIONS?: unknown
-  /** AI client for generative/agentic execution */
-  AI_CLIENT?: AIClient
-  /** Durable Object for human task execution */
-  HUMAN_TASKS?: DurableObjectNamespace
-  /** R2 bucket for code storage */
-  CODE_STORAGE?: R2Bucket
-  /** Per-user storage Durable Object namespace */
-  USER_STORAGE?: DurableObjectNamespace
-  /** @deprecated KV function registry (fallback when USER_STORAGE is not available) */
-  FUNCTIONS_REGISTRY?: KVNamespace
-  /** @deprecated KV code storage (fallback when USER_STORAGE is not available) */
-  FUNCTIONS_CODE?: KVNamespace
-}
-
-/**
- * AI client interface (simplified)
- */
-export interface AIClient {
-  messages?: {
-    create(params: unknown): Promise<{
-      content: Array<{ type: string; text: string }>
-      usage?: { input_tokens: number; output_tokens: number }
-      stop_reason?: string
-      model?: string
-    }>
-  }
-  chat?: (request: unknown) => Promise<{
-    content: string
-    toolCalls?: Array<{ name: string; input: unknown }>
-    stopReason: string
-    tokens: { inputTokens: number; outputTokens: number; totalTokens: number }
-  }>
-}
+import type { Env, AIClient } from '../core/env'
+export type TierDispatcherEnv = Env
+export type { AIClient } from '../core/env'
 
 /**
  * Extract the AI client type that AgenticExecutor expects as its second constructor parameter.
@@ -864,8 +830,29 @@ export class TierDispatcher {
             },
           }
         } else if (errorHandling === 'fallback' && step.fallbackTo) {
-          // Try fallback step
+          // Try fallback step - actually dispatch to the fallback function
           tiersAttempted.push(`fallback:${step.fallbackTo}`)
+
+          const fallbackMetadata = await this.getStepMetadata(step.fallbackTo)
+          if (fallbackMetadata) {
+            let fallbackCode: string | undefined
+            const fallbackType = fallbackMetadata.type || 'code'
+            if (fallbackType === 'code') {
+              fallbackCode = await this.getStepCode(step.fallbackTo)
+            }
+
+            const fallbackResult = await this.dispatch(fallbackMetadata, currentInput, fallbackCode)
+            stepsExecuted++
+
+            if (fallbackResult.status < 400) {
+              // Fallback succeeded - use its output as input for next step
+              lastResult = fallbackResult
+              const { _meta, ...fallbackOutput } = fallbackResult.body
+              currentInput = fallbackOutput
+              continue
+            }
+          }
+          // Fallback also failed or not found - continue to next step
           continue
         }
         // Continue to next step

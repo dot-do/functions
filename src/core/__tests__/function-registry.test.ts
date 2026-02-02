@@ -1190,6 +1190,7 @@ describe('Metadata Validation', () => {
     const validMetadata = {
       id: 'my-func',
       version: '1.0.0',
+      type: 'code' as const,
       language: 'typescript' as const,
       entryPoint: 'src/index.ts',
       dependencies: { lodash: '^4.17.21' },
