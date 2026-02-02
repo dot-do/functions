@@ -242,15 +242,13 @@ export class KVApiKeyStore {
       created: Date.now(),
     }
 
-    if (options.scopes) {
-      metadata.scopes = options.scopes
-    }
-    if (options.rateLimit) {
-      metadata.rateLimit = options.rateLimit
-    }
-    if (options.expiresAt) {
-      metadata.expiresAt = options.expiresAt
-    }
+    Object.assign(metadata,
+      ...[
+        options.scopes && { scopes: options.scopes },
+        options.rateLimit && { rateLimit: options.rateLimit },
+        options.expiresAt && { expiresAt: options.expiresAt },
+      ].filter(Boolean)
+    )
 
     // Store the key metadata
     await this.kv.put(`keys:${keyHash}`, JSON.stringify(metadata))
@@ -418,12 +416,12 @@ export class KVApiKeyStore {
       created: Date.now(),
     }
 
-    if (oldMetadata.scopes) {
-      newMetadata.scopes = oldMetadata.scopes
-    }
-    if (oldMetadata.rateLimit) {
-      newMetadata.rateLimit = oldMetadata.rateLimit
-    }
+    Object.assign(newMetadata,
+      ...[
+        oldMetadata.scopes && { scopes: oldMetadata.scopes },
+        oldMetadata.rateLimit && { rateLimit: oldMetadata.rateLimit },
+      ].filter(Boolean)
+    )
 
     // Store new key
     await this.kv.put(`keys:${newKeyHash}`, JSON.stringify(newMetadata))

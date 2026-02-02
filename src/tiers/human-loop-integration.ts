@@ -21,6 +21,9 @@ import type {
   UIContext,
   ReminderChannel,
 } from '@dotdo/functions/human'
+import { createLogger } from '../core/logger'
+
+const logger = createLogger({ context: { component: 'human-loop-integration' } })
 
 // =============================================================================
 // TYPES
@@ -313,11 +316,13 @@ export async function createSlackMessage(
 ): Promise<{ messageId: string }> {
   // In production, this would call the Slack API
   // For now, we log and return a mock message ID
-  console.log(`[Slack] Creating message for task ${taskId}`)
-  console.log(`[Slack] Title: ${config.title}`)
-  console.log(`[Slack] Description: ${config.description}`)
-  console.log(`[Slack] Channel: ${config.channel}`)
-  console.log(`[Slack] Mentions: ${config.mentions?.join(', ')}`)
+  logger.info('Creating Slack message', {
+    taskId,
+    title: config.title,
+    description: config.description,
+    channel: config.channel,
+    mentions: config.mentions?.join(', '),
+  })
 
   return { messageId: `slack-${taskId}-${Date.now()}` }
 }
@@ -336,10 +341,12 @@ export async function createTeamsMessage(
   }
 ): Promise<{ messageId: string }> {
   // In production, this would call the Teams webhook
-  console.log(`[Teams] Creating message for task ${taskId}`)
-  console.log(`[Teams] Title: ${config.title}`)
-  console.log(`[Teams] Description: ${config.description}`)
-  console.log(`[Teams] Webhook: ${config.webhookUrl}`)
+  logger.info('Creating Teams message', {
+    taskId,
+    title: config.title,
+    description: config.description,
+    webhookUrl: config.webhookUrl,
+  })
 
   return { messageId: `teams-${taskId}-${Date.now()}` }
 }
@@ -356,10 +363,12 @@ export async function sendEmail(
   }
 ): Promise<{ messageId: string }> {
   // In production, this would send an actual email
-  console.log(`[Email] Sending email for task ${config.taskId}`)
-  console.log(`[Email] To: ${Array.isArray(config.to) ? config.to.join(', ') : config.to}`)
-  console.log(`[Email] Title: ${config.title}`)
-  console.log(`[Email] Description: ${config.description}`)
+  logger.info('Sending email', {
+    taskId: config.taskId,
+    to: Array.isArray(config.to) ? config.to.join(', ') : config.to,
+    title: config.title,
+    description: config.description,
+  })
 
   return { messageId: `email-${config.taskId}-${Date.now()}` }
 }
@@ -540,19 +549,19 @@ export class NotificationServiceAdapter {
 
         case 'sms':
           // SMS would require additional integration
-          console.log(`[SMS] Notification to ${recipient}: ${body}`)
+          logger.info('SMS notification', { recipient, body })
           return true
 
         case 'push':
           // Push would require additional integration
-          console.log(`[Push] Notification to ${recipient}: ${subject} - ${body}`)
+          logger.info('Push notification', { recipient, subject, body })
           return true
 
         default:
           return false
       }
     } catch (error) {
-      console.error(`Failed to send ${channel} notification:`, error)
+      logger.error(`Failed to send ${channel} notification`, { error: error instanceof Error ? error : new Error(String(error)) })
       return false
     }
   }

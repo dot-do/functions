@@ -18,6 +18,9 @@ import {
 } from '../../core/oauth'
 import { hashApiKey } from '../../core/crypto-utils'
 import { PUBLIC_ENDPOINTS } from '../../config'
+import { createLogger } from '../../core/logger'
+
+const logger = createLogger({ context: { component: 'auth-middleware' } })
 
 /**
  * API key record stored in KV
@@ -257,9 +260,9 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig): (request: Re
     // This prevents a critical vulnerability where unconfigured auth silently
     // allows all requests through.
     if (!kv && !oauth) {
-      console.warn(
-        'Auth middleware: no auth backend configured (neither API_KEYS KV nor OAuth service). ' +
-        'Denying request to', path, '- configure FUNCTIONS_API_KEYS or OAUTH to enable authentication.'
+      logger.warn(
+        'Auth middleware: no auth backend configured. Denying request - configure FUNCTIONS_API_KEYS or OAUTH to enable authentication.',
+        { path }
       )
       return {
         shouldContinue: false,
@@ -470,7 +473,7 @@ async function validateOAuthToken(
 
     return { shouldContinue: true, authContext }
   } catch (error) {
-    console.error('OAuth validation error:', error)
+    logger.error('OAuth validation error', { error: error instanceof Error ? error : new Error(String(error)) })
     return {
       shouldContinue: false,
       error: 'OAuth service error',

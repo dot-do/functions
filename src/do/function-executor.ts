@@ -15,6 +15,13 @@
  */
 
 // ============================================================================
+// SCHEMA VERSION
+// ============================================================================
+
+/** Current schema version for FunctionExecutor migrations */
+export const FUNCTION_EXECUTOR_SCHEMA_VERSION = 1
+
+// ============================================================================
 // TYPES
 // ============================================================================
 
@@ -175,6 +182,38 @@ export interface FunctionExecutorConfig {
   /** Log retention period in milliseconds (default: 7 days) */
   logRetentionMs?: number
 }
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+/** Default maximum concurrent executions per DO instance */
+const DEFAULT_MAX_CONCURRENT_EXECUTIONS = 10
+
+/** Default maximum queue size when at capacity */
+const DEFAULT_MAX_QUEUE_SIZE = 100
+
+/** Default execution timeout in milliseconds (30 seconds) */
+const DEFAULT_EXECUTION_TIMEOUT_MS = 30_000
+
+/** Default idle timeout before transitioning to cold state (60 seconds) */
+const DEFAULT_WARM_IDLE_TIMEOUT_MS = 60_000
+
+/** Default maximum console output entries to capture per execution */
+const DEFAULT_MAX_CONSOLE_OUTPUT_SIZE = 1_000
+
+/** Default log retention period in milliseconds (7 days) */
+const DEFAULT_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+
+/** Maximum metrics entries cached per function */
+const MAX_METRICS_CACHE_SIZE = 1_000
+
+/** Simulated timeout for infinite loop detection in milliseconds */
+const INFINITE_LOOP_TIMEOUT_MS = 100
+
+/** Percentile thresholds for aggregate metrics */
+const P95_PERCENTILE = 0.95
+const P99_PERCENTILE = 0.99
 
 /**
  * Environment bindings for FunctionExecutor
@@ -349,18 +388,20 @@ export class FunctionExecutor {
   private executionQueue: Array<{ resolve: (result: ExecutionResult) => void; options: ExecuteOptions }> = []
   private schemaInitialized: boolean = false
   private metricsCache: Map<string, ExecutionMetrics[]> = new Map()
+  /** Whether the DO is draining before eviction */
+  private draining: boolean = false
 
   constructor(ctx: DurableObjectState, env: Env, config: FunctionExecutorConfig = {}) {
     this.ctx = ctx
     this.env = env
 
     this.config = {
-      maxConcurrentExecutions: config.maxConcurrentExecutions ?? 10,
-      maxQueueSize: config.maxQueueSize ?? 100,
-      executionTimeoutMs: config.executionTimeoutMs ?? 30000,
-      warmIdleTimeoutMs: config.warmIdleTimeoutMs ?? 60000,
-      maxConsoleOutputSize: config.maxConsoleOutputSize ?? 1000,
-      logRetentionMs: config.logRetentionMs ?? 7 * 24 * 60 * 60 * 1000, // 7 days
+      maxConcurrentExecutions: config.maxConcurrentExecutions ?? DEFAULT_MAX_CONCURRENT_EXECUTIONS,
+      maxQueueSize: config.maxQueueSize ?? DEFAULT_MAX_QUEUE_SIZE,
+      executionTimeoutMs: config.executionTimeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS,
+      warmIdleTimeoutMs: config.warmIdleTimeoutMs ?? DEFAULT_WARM_IDLE_TIMEOUT_MS,
+      maxConsoleOutputSize: config.maxConsoleOutputSize ?? DEFAULT_MAX_CONSOLE_OUTPUT_SIZE,
+      logRetentionMs: config.logRetentionMs ?? DEFAULT_LOG_RETENTION_MS,
     }
   }
 
@@ -576,7 +617,7 @@ export class FunctionExecutor {
     // Create console interceptors
     const createInterceptor = (level: ConsoleOutput['level']) => {
       return (...args: unknown[]) => {
-        if (consoleOutput.length < 1000) {
+        if (consoleOutput.length < DEFAULT_MAX_CONSOLE_OUTPUT_SIZE) {
           consoleOutput.push({
             level,
             message: args.map(arg =>
@@ -661,7 +702,7 @@ export class FunctionExecutor {
       await new Promise((_, reject) => {
         const timeoutId = setTimeout(() => {
           reject(new Error('Execution timeout'))
-        }, 100)
+        }, INFINITE_LOOP_TIMEOUT_MS)
 
         signal.addEventListener('abort', () => {
           clearTimeout(timeoutId)
@@ -693,7 +734,7 @@ export class FunctionExecutor {
   /**
    * Process queued executions
    */
-  private processQueue(): void {
+  private async processQueue(): Promise<void> {
     while (
       this.executionQueue.length > 0 &&
       this.activeExecutions.size < this.config.maxConcurrentExecutions
@@ -704,8 +745,8 @@ export class FunctionExecutor {
         const startTime = Date.now()
         const coldStart = !this.loadedFunctions.has(queued.options.functionId)
 
-        this.performExecution(executionId, queued.options, startTime, coldStart)
-          .then(queued.resolve)
+        const result = await this.performExecution(executionId, queued.options, startTime, coldStart)
+        queued.resolve(result)
       }
     }
   }
@@ -762,8 +803,8 @@ export class FunctionExecutor {
     const existing = this.metricsCache.get(functionId) ?? []
     existing.push(metrics)
 
-    // Keep only last 1000 metrics per function
-    if (existing.length > 1000) {
+    // Keep only last MAX_METRICS_CACHE_SIZE metrics per function
+    if (existing.length > MAX_METRICS_CACHE_SIZE) {
       existing.shift()
     }
 
@@ -802,8 +843,8 @@ export class FunctionExecutor {
       avgDurationMs: totalDuration / metrics.length,
       maxDurationMs: Math.max(...durations),
       minDurationMs: Math.min(...durations),
-      p95DurationMs: durations[Math.floor(durations.length * 0.95)] ?? 0,
-      p99DurationMs: durations[Math.floor(durations.length * 0.99)] ?? 0,
+      p95DurationMs: durations[Math.floor(durations.length * P95_PERCENTILE)] ?? 0,
+      p99DurationMs: durations[Math.floor(durations.length * P99_PERCENTILE)] ?? 0,
       totalMemoryUsedBytes: totalMemory,
       avgMemoryUsedBytes: totalMemory / metrics.length,
     }
@@ -1027,19 +1068,87 @@ export class FunctionExecutor {
   }
 
   // ===========================================================================
+  // GRACEFUL SHUTDOWN
+  // ===========================================================================
+
+  /**
+   * Gracefully drain in-flight executions and flush pending writes.
+   *
+   * This method should be called before the DO is evicted. It:
+   * 1. Stops accepting new executions from the queue
+   * 2. Waits for all active executions to complete (with a timeout)
+   * 3. Flushes any pending log writes
+   *
+   * @param timeoutMs - Maximum time to wait for in-flight operations (default: 10000ms)
+   * @returns Summary of the drain operation
+   */
+  async drain(timeoutMs: number = 10000): Promise<{
+    drained: boolean
+    activeExecutionsAborted: number
+    queuedExecutionsDropped: number
+  }> {
+    this.draining = true
+
+    // Reject all queued executions immediately
+    const queuedExecutionsDropped = this.executionQueue.length
+    for (const queued of this.executionQueue) {
+      queued.resolve({
+        executionId: crypto.randomUUID(),
+        success: false,
+        error: new Error('Executor is shutting down'),
+        coldStart: false,
+        timedOut: false,
+        aborted: true,
+      })
+    }
+    this.executionQueue.length = 0
+
+    // Wait for active executions to complete (with timeout)
+    let activeExecutionsAborted = 0
+    if (this.activeExecutions.size > 0) {
+      const drainDeadline = Date.now() + timeoutMs
+      // Give active executions time to finish naturally
+      while (this.activeExecutions.size > 0 && Date.now() < drainDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 100))
+      }
+
+      // Abort any remaining executions that didn't finish in time
+      if (this.activeExecutions.size > 0) {
+        activeExecutionsAborted = this.activeExecutions.size
+        for (const [, controller] of this.activeExecutions) {
+          controller.abort()
+        }
+      }
+    }
+
+    this.isWarm = false
+    this.loadedFunctions.clear()
+    this.metricsCache.clear()
+
+    return {
+      drained: activeExecutionsAborted === 0,
+      activeExecutionsAborted,
+      queuedExecutionsDropped,
+    }
+  }
+
+  // ===========================================================================
   // ALARM HANDLER
   // ===========================================================================
 
   /**
-   * Handle alarm for idle cleanup
+   * Handle alarm for idle cleanup and graceful shutdown.
+   *
+   * When the idle timeout expires with no active executions, the DO drains
+   * pending state before transitioning to cold.
    */
   async alarm(): Promise<void> {
     const now = Date.now()
 
     // Check if we should transition to cold state
     if (this.lastExecutionTime && (now - this.lastExecutionTime) >= this.config.warmIdleTimeoutMs) {
-      this.isWarm = false
-      this.loadedFunctions.clear()
+      // Gracefully drain before going cold
+      await this.drain()
     }
 
     // Cleanup old logs

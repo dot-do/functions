@@ -14,6 +14,17 @@
  * @module durable-object/function-logs
  */
 
+import { createLogger } from '../core/logger'
+
+const logger = createLogger({ context: { component: 'function-logs' } })
+
+// ============================================================================
+// SCHEMA VERSION
+// ============================================================================
+
+/** Current schema version for FunctionLogs migrations */
+export const FUNCTION_LOGS_SCHEMA_VERSION = 1
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -815,7 +826,7 @@ export class FunctionLogs {
 
       return new Response('Not Found', { status: 404 })
     } catch (error) {
-      console.error('FunctionLogs error:', error)
+      logger.error('FunctionLogs error', { error: error instanceof Error ? error : new Error(String(error)) })
       return new Response(JSON.stringify({ error: 'Internal error' }), {
         status: 500,
         headers: { 'Content-Type': 'application/json' },
@@ -989,5 +1000,65 @@ export class FunctionLogs {
     }
 
     return idsToDelete.size
+  }
+
+  // ===========================================================================
+  // GRACEFUL SHUTDOWN
+  // ===========================================================================
+
+  /**
+   * Gracefully shut down the FunctionLogs DO.
+   *
+   * Cleans up all in-flight state:
+   * 1. Stops the retention timer
+   * 2. Clears all heartbeat timers
+   * 3. Closes all WebSocket subscribers with a going-away message
+   *
+   * @returns Summary of what was cleaned up
+   */
+  async drain(): Promise<{
+    subscribersClosed: number
+    heartbeatTimersCleared: number
+    retentionTimerStopped: boolean
+  }> {
+    let subscribersClosed = 0
+    let heartbeatTimersCleared = 0
+    let retentionTimerStopped = false
+
+    // 1. Stop the retention timer
+    if (this.retentionTimer) {
+      clearInterval(this.retentionTimer)
+      this.retentionTimer = null
+      retentionTimerStopped = true
+    }
+
+    // 2. Clear all heartbeat timers
+    for (const [_ws, timer] of this.heartbeatTimers) {
+      clearInterval(timer)
+      heartbeatTimersCleared++
+    }
+    this.heartbeatTimers.clear()
+
+    // 3. Close all WebSocket subscribers with a going-away message
+    for (const [_functionId, subs] of this.subscribers) {
+      for (const ws of subs) {
+        try {
+          ws.send(JSON.stringify({ type: 'shutdown', reason: 'Logs service is shutting down' }))
+          ws.close(1001, 'Service shutting down')
+          subscribersClosed++
+        } catch {
+          // Ignore errors on already-closed sockets
+        }
+      }
+    }
+    this.subscribers.clear()
+
+    logger.info('FunctionLogs drained', {
+      subscribersClosed,
+      heartbeatTimersCleared,
+      retentionTimerStopped,
+    })
+
+    return { subscribersClosed, heartbeatTimersCleared, retentionTimerStopped }
   }
 }

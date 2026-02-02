@@ -14,6 +14,10 @@
 // Re-export FunctionPermissions from types for convenience
 export { type FunctionPermissions } from './types'
 
+import { createLogger } from './logger'
+
+const logger = createLogger({ context: { component: 'oauth' } })
+
 /**
  * OAuth.do service binding interface.
  * This defines the RPC methods available on the oauth.do service.
@@ -229,7 +233,7 @@ export class OAuthClient {
     try {
       return await this.service.validateToken(token)
     } catch (error) {
-      console.error('OAuth token validation error:', error)
+      logger.error('OAuth token validation error', { error: error instanceof Error ? error : new Error(String(error)) })
       return null
     }
   }
@@ -248,7 +252,7 @@ export class OAuthClient {
     try {
       return await this.service.getUserInfo(token)
     } catch (error) {
-      console.error('OAuth get user info error:', error)
+      logger.error('OAuth get user info error', { error: error instanceof Error ? error : new Error(String(error)) })
       return null
     }
   }
@@ -269,7 +273,7 @@ export class OAuthClient {
       const scopeResults = await this.service.checkScopes(token, requiredScopes)
       return requiredScopes.every((scope) => scopeResults[scope] === true)
     } catch (error) {
-      console.error('OAuth scope check error:', error)
+      logger.error('OAuth scope check error', { error: error instanceof Error ? error : new Error(String(error)) })
       return false
     }
   }
@@ -288,7 +292,7 @@ export class OAuthClient {
     try {
       return await this.service.getOrganizations(token)
     } catch (error) {
-      console.error('OAuth get organizations error:', error)
+      logger.error('OAuth get organizations error', { error: error instanceof Error ? error : new Error(String(error)) })
       return null
     }
   }
@@ -314,7 +318,7 @@ export class OAuthClient {
     try {
       return await this.service.checkPermission(token, resource, action)
     } catch (error) {
-      console.error('OAuth permission check error:', error)
+      logger.error('OAuth permission check error', { error: error instanceof Error ? error : new Error(String(error)) })
       return { allowed: false, reason: 'Permission check failed' }
     }
   }

@@ -290,7 +290,7 @@ export async function compileTypeScript(
     return compileResult
   } catch (error) {
     // esbuild service call failed, fall back to regex
-    console.error('esbuild-compiler service error:', error)
+    logger.error('esbuild-compiler service error', { error: error instanceof Error ? error : new Error(String(error)) })
 
     if (!needsFullCompilation(code)) {
       // Can fall back to regex for simple code

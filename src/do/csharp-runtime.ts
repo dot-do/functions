@@ -19,6 +19,16 @@
 
 import { DurableObject } from 'cloudflare:workers'
 import { RpcTarget } from '../lib/capnweb'
+import { createLogger } from '../core/logger'
+
+const logger = createLogger({ context: { component: 'csharp-runtime' } })
+
+// ============================================================================
+// SCHEMA VERSION
+// ============================================================================
+
+/** Current schema version for CSharpRuntimeDO migrations */
+export const CSHARP_RUNTIME_SCHEMA_VERSION = 1
 
 // ============================================================================
 // TYPES
@@ -340,7 +350,7 @@ export class CSharpRuntimeDO extends DurableObject<Env> {
       return true
     } catch (error) {
       if (this.config.debug) {
-        console.error(`Failed to load assembly ${functionId}:`, error)
+        logger.error('Failed to load assembly', { functionId, error: error instanceof Error ? error : new Error(String(error)) })
       }
       return false
     }

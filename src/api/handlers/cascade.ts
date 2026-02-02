@@ -743,41 +743,22 @@ function buildCascadeDefinition(
   // Build cascade options from request
   const cascadeOptions: CascadeOptions = {}
 
-  if (requestOptions.startTier) {
-    cascadeOptions.startTier = requestOptions.startTier
-  }
+  const tierTimeouts = requestOptions.tierTimeouts
+    ? Object.fromEntries(
+        (['code', 'generative', 'agentic', 'human'] as const)
+          .filter(t => requestOptions.tierTimeouts?.[t])
+          .map(t => [t, `${requestOptions.tierTimeouts![t]}ms`])
+      )
+    : undefined
 
-  if (requestOptions.skipTiers && requestOptions.skipTiers.length > 0) {
-    cascadeOptions.skipTiers = requestOptions.skipTiers
-  }
-
-  if (requestOptions.tierTimeouts) {
-    cascadeOptions.tierTimeouts = {}
-    if (requestOptions.tierTimeouts.code) {
-      cascadeOptions.tierTimeouts.code = `${requestOptions.tierTimeouts.code}ms`
-    }
-    if (requestOptions.tierTimeouts.generative) {
-      cascadeOptions.tierTimeouts.generative = `${requestOptions.tierTimeouts.generative}ms`
-    }
-    if (requestOptions.tierTimeouts.agentic) {
-      cascadeOptions.tierTimeouts.agentic = `${requestOptions.tierTimeouts.agentic}ms`
-    }
-    if (requestOptions.tierTimeouts.human) {
-      cascadeOptions.tierTimeouts.human = `${requestOptions.tierTimeouts.human}ms`
-    }
-  }
-
-  if (requestOptions.totalTimeout) {
-    cascadeOptions.totalTimeout = `${requestOptions.totalTimeout}ms`
-  }
-
-  if (requestOptions.enableParallel) {
-    cascadeOptions.enableParallel = true
-  }
-
-  if (requestOptions.enableFallback) {
-    cascadeOptions.enableFallback = true
-  }
+  Object.assign(cascadeOptions, {
+    ...(requestOptions.startTier && { startTier: requestOptions.startTier }),
+    ...(requestOptions.skipTiers?.length && { skipTiers: requestOptions.skipTiers }),
+    ...(tierTimeouts && Object.keys(tierTimeouts).length > 0 && { tierTimeouts }),
+    ...(requestOptions.totalTimeout && { totalTimeout: `${requestOptions.totalTimeout}ms` }),
+    ...(requestOptions.enableParallel && { enableParallel: true }),
+    ...(requestOptions.enableFallback && { enableFallback: true }),
+  })
 
   return {
     id: `cascade-${functionId}`,

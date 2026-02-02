@@ -14,6 +14,9 @@ import * as esbuild from 'esbuild'
 import { writeFile, mkdir, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { createLogger } from '../../core/logger'
+
+const logger = createLogger({ context: { component: 'ts-compile' } })
 
 // Re-export SDK compiler utilities for convenience
 export {
@@ -95,7 +98,7 @@ export async function compileTypeScript(code: string): Promise<CompileResult> {
 
     // Clean up temp directory
     await rm(tempDir, { recursive: true }).catch((err) => {
-      console.warn('Cleanup failed:', err.message)
+      logger.warn('Cleanup failed', { error: err })
     })
 
     const outputFile = result.outputFiles?.find((f) => f.path.endsWith('.js'))
@@ -115,7 +118,7 @@ export async function compileTypeScript(code: string): Promise<CompileResult> {
   } catch (error) {
     // Clean up temp directory on error
     await rm(tempDir, { recursive: true }).catch((err) => {
-      console.warn('Cleanup failed:', err.message)
+      logger.warn('Cleanup failed', { error: err })
     })
 
     // esbuild throws errors with a messages array for syntax errors

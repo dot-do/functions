@@ -12,6 +12,10 @@
  * @module core/audit-logger
  */
 
+import { createLogger } from './logger'
+
+const logger = createLogger({ context: { component: 'audit-logger' }, format: 'json' })
+
 /**
  * Actions that can be logged for audit purposes.
  */
@@ -68,8 +72,8 @@ export interface AuditLogEntry {
  * ```
  */
 export function logAuditEvent(entry: AuditLogEntry): void {
-  // Log to console in structured format for capture by log aggregation
-  console.log(JSON.stringify({ type: 'audit', ...entry }))
+  // Log in structured format for capture by log aggregation
+  logger.info('audit', { type: 'audit', ...entry })
 }
 
 /**

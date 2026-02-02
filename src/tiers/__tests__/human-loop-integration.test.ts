@@ -316,7 +316,7 @@ describe('Human-in-the-Loop Integration', () => {
       const platformConfig = createTestPlatformConfig('slack')
       const adapter = new NotificationServiceAdapter(platformConfig)
 
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const consoleSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
 
       const result = await adapter.sendNotification(
         '+1234567890',
@@ -335,7 +335,7 @@ describe('Human-in-the-Loop Integration', () => {
       const platformConfig = createTestPlatformConfig('slack')
       const adapter = new NotificationServiceAdapter(platformConfig)
 
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const consoleSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
 
       const result = await adapter.sendNotification(
         'user-123',

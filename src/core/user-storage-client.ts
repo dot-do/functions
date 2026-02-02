@@ -375,15 +375,13 @@ export class UserStorageApiKeys {
       created: Date.now(),
     }
 
-    if (options.scopes) {
-      metadata.scopes = options.scopes
-    }
-    if (options.rateLimit) {
-      metadata.rateLimit = options.rateLimit
-    }
-    if (options.expiresAt) {
-      metadata.expiresAt = options.expiresAt
-    }
+    Object.assign(metadata,
+      ...[
+        options.scopes && { scopes: options.scopes },
+        options.rateLimit && { rateLimit: options.rateLimit },
+        options.expiresAt && { expiresAt: options.expiresAt },
+      ].filter(Boolean)
+    )
 
     // Store via RPC - putApiKey expects (keyHash, metadata without keyHash)
     const { keyHash: _kh, ...metadataWithoutHash } = metadata
@@ -470,30 +468,18 @@ export class UserStorageApiKeys {
       revokedAt: Date.now(),
     }
 
-    if (metadata.scopes) {
-      updated.scopes = metadata.scopes
-    }
-    if (metadata.rateLimit) {
-      updated.rateLimit = metadata.rateLimit
-    }
-    if (metadata.expiresAt) {
-      updated.expiresAt = metadata.expiresAt
-    }
-    if (options?.reason) {
-      updated.revokedReason = options.reason
-    }
-    if (metadata.rotatedAt) {
-      updated.rotatedAt = metadata.rotatedAt
-    }
-    if (metadata.lastModified) {
-      updated.lastModified = metadata.lastModified
-    }
-    if (metadata.lastUsed) {
-      updated.lastUsed = metadata.lastUsed
-    }
-    if (metadata.usageCount) {
-      updated.usageCount = metadata.usageCount
-    }
+    Object.assign(updated,
+      ...[
+        metadata.scopes && { scopes: metadata.scopes },
+        metadata.rateLimit && { rateLimit: metadata.rateLimit },
+        metadata.expiresAt && { expiresAt: metadata.expiresAt },
+        options?.reason && { revokedReason: options.reason },
+        metadata.rotatedAt && { rotatedAt: metadata.rotatedAt },
+        metadata.lastModified && { lastModified: metadata.lastModified },
+        metadata.lastUsed && { lastUsed: metadata.lastUsed },
+        metadata.usageCount && { usageCount: metadata.usageCount },
+      ].filter(Boolean)
+    )
 
     await this.stub.putApiKey(keyHash, updated)
   }

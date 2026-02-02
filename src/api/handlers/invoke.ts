@@ -42,6 +42,9 @@ import {
   createClassifier,
 } from '../../core/function-classifier'
 import { INVOKE } from '../../config/defaults'
+import { createLogger } from '../../core/logger'
+
+const logger = createLogger({ context: { component: 'invoke-handler' } })
 import {
   getCachedMetadata,
   cacheMetadata,
@@ -263,7 +266,7 @@ export async function validateInvokeRequest(
       requestData = Object.fromEntries(formData.entries())
     } catch (formError) {
       // Log error for debugging but continue with empty data to not break cascade flow
-      console.warn(`[invoke] Failed to parse multipart/form-data for ${functionId}: ${getErrorMessage(formError)}`)
+      logger.warn('Failed to parse multipart/form-data', { functionId, error: formError })
     }
   } else if (contentType?.includes('text/plain')) {
     requestData = { text: await request.text() }
@@ -412,7 +415,7 @@ async function executeWithWorkerLoader(
     }
   } catch (loaderError) {
     const message = getErrorMessage(loaderError)
-    console.error(`[invoke] Worker loader error for ${functionId}: ${message}`)
+    logger.error('Worker loader error', { functionId, error: new Error(message) })
     return { success: false, error: message }
   }
 }

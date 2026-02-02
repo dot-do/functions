@@ -6,6 +6,9 @@
  */
 
 import { RATE_LIMITS } from '../config'
+import { createLogger } from './logger'
+
+const logger = createLogger({ context: { component: 'rate-limiter' } })
 
 /**
  * Configuration for rate limiting behavior
@@ -350,9 +353,8 @@ export const DEFAULT_RATE_LIMITS = {
  */
 export function createDefaultRateLimiter(): CompositeRateLimiter {
   // WARNING: These InMemoryRateLimiter instances do NOT work correctly in Workers
-  console.warn(
-    '[rate-limiter] createDefaultRateLimiter() creates in-memory rate limiters that do NOT persist across requests. ' +
-    'For production, use RateLimiterDO (Durable Object) instead.'
+  logger.warn(
+    'createDefaultRateLimiter() creates in-memory rate limiters that do NOT persist across requests. For production, use RateLimiterDO (Durable Object) instead.'
   )
   const composite = new CompositeRateLimiter()
   composite.addLimiter('ip', new InMemoryRateLimiter(DEFAULT_RATE_LIMITS.ip))

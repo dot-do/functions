@@ -20,6 +20,9 @@ import { createCSRFMiddleware, csrfMiddleware, generateCSRFToken, createCSRFCook
 import { RateLimitConfig, InMemoryRateLimiter } from '../core/rate-limiter'
 import { jsonResponse } from './http-utils'
 import { PUBLIC_ENDPOINTS } from '../config'
+import { createLogger } from '../core/logger'
+
+const logger = createLogger({ context: { component: 'router' } })
 
 /**
  * Re-export the unified Env type and supporting interfaces from src/core/env.ts.
@@ -372,16 +375,12 @@ export function createRouter(): Router {
         }
 
         // Build context
+        const functionId = routeParams['id'] || routeParams['functionId']
+        const version = url.searchParams.get('version')
         const context: RouteContext = {
           params: routeParams,
-        }
-        const functionId = routeParams['id'] || routeParams['functionId']
-        if (functionId) {
-          context.functionId = functionId
-        }
-        const version = url.searchParams.get('version')
-        if (version) {
-          context.version = version
+          ...(functionId && { functionId }),
+          ...(version && { version }),
         }
 
         // Resolve API version from path, query, headers, or default
@@ -404,9 +403,7 @@ export function createRouter(): Router {
             return authResult.response!
           }
           // Pass auth context to handlers
-          if (authResult.authContext) {
-            context.authContext = authResult.authContext
-          }
+          Object.assign(context, authResult.authContext && { authContext: authResult.authContext })
         }
 
         // Apply rate limiting via Durable Object (distributed, persistent)
@@ -567,7 +564,7 @@ export function createRouter(): Router {
         return response
       } catch (error) {
         // Global error handler
-        console.error('Router error:', error)
+        logger.error('Router error', { error: error instanceof Error ? error : new Error(String(error)) })
         const message = error instanceof Error ? error.message : 'Internal server error'
         return jsonResponse(
           {
