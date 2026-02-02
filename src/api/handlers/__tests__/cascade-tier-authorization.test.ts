@@ -62,6 +62,7 @@ import {
   TierAuthorizationError,
 } from '../cascade'
 import { createMockKV } from '../../../test-utils/mock-kv'
+import { createMockExecutionContext } from '../../../test-utils/mock-execution-context'
 import type { CascadeEnv } from '../cascade-types'
 import type { AuthContext } from '../../middleware/auth'
 
@@ -236,10 +237,7 @@ describe('cascadeHandler tier authorization', () => {
       AI_CLIENT: mockAIClient,
     } as unknown as CascadeEnv
 
-    mockCtx = {
-      waitUntil: vi.fn(),
-      passThroughOnException: vi.fn(),
-    } as unknown as ExecutionContext
+    mockCtx = createMockExecutionContext()
   })
 
   /**

@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { createRouter } from '../../router'
 import type { Env, RouteContext, Handler, Middleware } from '../../router'
 import { createMockKV } from '../../../test-utils/mock-kv'
+import { createMockExecutionContext } from '../../../test-utils/mock-execution-context'
 
 // Type for JSON response bodies
 type JsonBody = Record<string, unknown>
@@ -36,10 +37,7 @@ describe('Router', () => {
       // FUNCTIONS_API_KEYS not set - auth disabled by default for most tests
     }
 
-    mockCtx = {
-      waitUntil: vi.fn(),
-      passThroughOnException: vi.fn(),
-    } as unknown as ExecutionContext
+    mockCtx = createMockExecutionContext()
   })
 
   afterEach(() => {

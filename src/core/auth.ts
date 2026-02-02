@@ -144,6 +144,9 @@ export function createAuthMiddleware(config: AuthConfig) {
 }
 
 /**
- * Default public endpoints that don't require authentication
+ * Default public endpoints that don't require authentication.
+ * @deprecated Import PUBLIC_ENDPOINTS from '../config' instead for the canonical list.
  */
-export const DEFAULT_PUBLIC_ENDPOINTS = ['/', '/health']
+export { PUBLIC_ENDPOINTS } from '../config'
+import { PUBLIC_ENDPOINTS } from '../config'
+export const DEFAULT_PUBLIC_ENDPOINTS: string[] = [...PUBLIC_ENDPOINTS.CORE]

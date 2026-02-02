@@ -12,6 +12,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createMockKV } from '../../test-utils/mock-kv'
+import { createMockExecutionContext } from '../../test-utils/mock-execution-context'
 import {
   createAuthMiddleware,
   authMiddleware,
@@ -43,10 +44,7 @@ describe('Auth Middleware - Default Deny When Unconfigured', () => {
   let mockCtx: ExecutionContext
 
   beforeEach(() => {
-    mockCtx = {
-      waitUntil: vi.fn(),
-      passThroughOnException: vi.fn(),
-    } as unknown as ExecutionContext
+    mockCtx = createMockExecutionContext()
   })
 
   describe('no auth backend configured', () => {

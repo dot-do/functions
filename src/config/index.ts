@@ -41,6 +41,9 @@ export {
   // C# runtime
   CSHARP,
 
+  // Public endpoints
+  PUBLIC_ENDPOINTS,
+
   // Human executor
   HUMAN_EXECUTOR,
 

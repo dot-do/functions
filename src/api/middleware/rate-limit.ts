@@ -11,7 +11,7 @@ import {
   RateLimitResult as CoreRateLimitResult,
 } from '../../core/rate-limiter'
 import { jsonResponse } from '../http-utils'
-import { RATE_LIMITS } from '../../config'
+import { RATE_LIMITS, PUBLIC_ENDPOINTS } from '../../config'
 
 /**
  * Rate limit configuration for middleware
@@ -416,5 +416,5 @@ export const rateLimitMiddleware = createRateLimitMiddleware({
     ip: { windowMs: RATE_LIMITS.IP.WINDOW_MS, maxRequests: RATE_LIMITS.IP.MAX_REQUESTS },
     function: { windowMs: RATE_LIMITS.FUNCTION.WINDOW_MS, maxRequests: RATE_LIMITS.FUNCTION.MAX_REQUESTS },
   },
-  bypass: ['/health', '/'],
+  bypass: [...PUBLIC_ENDPOINTS.CORE],
 })

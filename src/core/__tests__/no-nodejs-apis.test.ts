@@ -136,7 +136,7 @@ describe('No Node.js APIs in production code', () => {
     it('code-executor.ts should use btoa/atob instead of Buffer', async () => {
       // The CodeExecutor module should load and work without Buffer
       const { CodeExecutor } = await import('../../tiers/code-executor')
-      const executor = new CodeExecutor({} as any)
+      const executor = new CodeExecutor({})
       // If the module loaded, it means no unresolved Buffer references at module level
       expect(executor).toBeDefined()
     })

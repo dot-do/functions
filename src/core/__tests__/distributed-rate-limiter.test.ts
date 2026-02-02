@@ -16,7 +16,7 @@ import {
   DEFAULT_RATE_LIMITS,
   type RateLimitConfig,
 } from '../rate-limiter'
-import { createMockRateLimiterNamespace, createResettableMockNamespace } from '../../test-utils/mock-durable-object'
+import { createMockDurableObjectState, createMockRateLimiterNamespace, createResettableMockNamespace } from '../../test-utils/mock-durable-object'
 
 describe('RateLimiterDO', () => {
   let doInstance: RateLimiterDO
@@ -28,17 +28,7 @@ describe('RateLimiterDO', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     // Create a fresh DO instance for each test
-    const mockState = {
-      id: { toString: () => 'test-id', name: 'test-id', equals: () => true },
-      storage: {
-        get: async () => undefined,
-        put: async () => {},
-        delete: async () => true,
-      },
-      blockConcurrencyWhile: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
-      waitUntil: () => {},
-    } as unknown as DurableObjectState
-
+    const mockState = createMockDurableObjectState()
     doInstance = new RateLimiterDO(mockState)
   })
 

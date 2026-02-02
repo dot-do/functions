@@ -19,6 +19,7 @@ import { createRateLimitMiddleware, rateLimitMiddleware, RateLimitResult } from 
 import { createCSRFMiddleware, csrfMiddleware, generateCSRFToken, createCSRFCookie } from './middleware/csrf'
 import { RateLimitConfig, InMemoryRateLimiter } from '../core/rate-limiter'
 import { jsonResponse } from './http-utils'
+import { PUBLIC_ENDPOINTS } from '../config'
 
 /**
  * Re-export the unified Env type and supporting interfaces from src/core/env.ts.
@@ -389,7 +390,7 @@ export function createRouter(): Router {
         context.apiVersionSource = apiVersionSource
 
         // Check if this is a protected endpoint and run auth
-        const isPublicEndpoint = ['/health', '/', '/api/status'].includes(path)
+        const isPublicEndpoint = (PUBLIC_ENDPOINTS.CORE as readonly string[]).includes(path)
 
         if (!isPublicEndpoint && env.FUNCTIONS_API_KEYS) {
           // Auth middleware expects a generic record type for flexibility with different env shapes.

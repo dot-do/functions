@@ -316,6 +316,25 @@ export const DETERMINISTIC = {
 } as const
 
 // =============================================================================
+// PUBLIC ENDPOINTS CONFIGURATION
+// =============================================================================
+
+/**
+ * Public endpoints that bypass authentication and rate limiting.
+ * Centralized here to avoid hardcoding the same paths in multiple places.
+ */
+export const PUBLIC_ENDPOINTS = {
+  /** Core public paths that never require auth or rate limiting */
+  CORE: ['/', '/health', '/api/status'] as readonly string[],
+
+  /** Auth validation endpoints that must be accessible without prior auth */
+  AUTH_VALIDATION: ['/v1/api/auth/validate', '/api/auth/validate'] as readonly string[],
+
+  /** All public endpoints (core + auth validation) used by auth middleware */
+  ALL: ['/', '/health', '/api/status', '/v1/api/auth/validate', '/api/auth/validate'] as readonly string[],
+} as const
+
+// =============================================================================
 // INVOKE HANDLER CONFIGURATION
 // =============================================================================
 

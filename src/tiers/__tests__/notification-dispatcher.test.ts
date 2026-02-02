@@ -82,15 +82,32 @@ class MockDurableObjectStorage {
     this.data.clear()
     this.alarms = []
   }
+
+  /**
+   * Returns this mock as a DurableObjectStorage type.
+   * The mock implements the subset of DurableObjectStorage methods
+   * used by NotificationDispatcher (get, put, delete, list).
+   */
+  asDurableObjectStorage(): DurableObjectStorage {
+    return this as unknown as DurableObjectStorage
+  }
 }
 
 class MockDurableObjectState {
   public storage: MockDurableObjectStorage
   public id: DurableObjectId
+  public readonly props: undefined = undefined
 
   constructor(id = 'test-notification-id') {
     this.storage = new MockDurableObjectStorage()
     this.id = { toString: () => id } as DurableObjectId
+  }
+
+  /**
+   * Returns this mock as a DurableObjectState type.
+   */
+  asDurableObjectState(): DurableObjectState {
+    return this as unknown as DurableObjectState
   }
 }
 
@@ -176,7 +193,7 @@ describe('NotificationDispatcher', () => {
         emailFrom: 'noreply@human.do',
       }
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         config
       )
 
@@ -211,7 +228,7 @@ describe('NotificationDispatcher', () => {
 
     it('should return error when email API URL is not configured', async () => {
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         {}
       )
 
@@ -233,7 +250,7 @@ describe('NotificationDispatcher', () => {
         emailApiUrl: 'https://api.email-provider.com/v1/send',
       }
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         config
       )
 
@@ -258,7 +275,7 @@ describe('NotificationDispatcher', () => {
         emailApiUrl: 'https://api.email-provider.com/v1/send',
       }
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         config
       )
 
@@ -288,7 +305,7 @@ describe('NotificationDispatcher', () => {
         slackWebhookUrl: 'https://hooks.slack.com/services/T123/B456/xyz789',
       }
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         config
       )
 
@@ -314,7 +331,7 @@ describe('NotificationDispatcher', () => {
 
     it('should return error when Slack webhook is not configured', async () => {
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         {}
       )
 
@@ -343,7 +360,7 @@ describe('NotificationDispatcher', () => {
         smsApiKey: 'sms-api-key',
       }
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         config
       )
 
@@ -368,7 +385,7 @@ describe('NotificationDispatcher', () => {
 
     it('should return error when SMS API is not configured', async () => {
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         {}
       )
 
@@ -397,7 +414,7 @@ describe('NotificationDispatcher', () => {
         pushApiKey: 'push-api-key',
       }
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         config
       )
 
@@ -422,7 +439,7 @@ describe('NotificationDispatcher', () => {
 
     it('should return error when push API is not configured', async () => {
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         {}
       )
 
@@ -455,7 +472,7 @@ describe('NotificationDispatcher', () => {
         },
       }
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         config
       )
 
@@ -493,7 +510,7 @@ describe('NotificationDispatcher', () => {
         },
       }
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         config
       )
 
@@ -519,7 +536,7 @@ describe('NotificationDispatcher', () => {
         webhooks: {},
       }
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         config
       )
 
@@ -538,7 +555,7 @@ describe('NotificationDispatcher', () => {
 
     it('should dispatch webhook directly to a URL', async () => {
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         {}
       )
 
@@ -567,7 +584,7 @@ describe('NotificationDispatcher', () => {
         emailApiKey: 'test-key',
       }
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         config
       )
     })
@@ -656,7 +673,7 @@ describe('NotificationDispatcher', () => {
 
     it('should store records for unconfigured channels', async () => {
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         {} // no config
       )
 
@@ -686,7 +703,7 @@ describe('NotificationDispatcher', () => {
         emailApiUrl: 'https://api.email-provider.com/v1/send',
       }
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         config
       )
 
@@ -710,7 +727,7 @@ describe('NotificationDispatcher', () => {
 
     it('should return error when retrying non-existent notification', async () => {
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         {}
       )
 
@@ -727,7 +744,7 @@ describe('NotificationDispatcher', () => {
   describe('Edge Cases', () => {
     it('should handle unsupported channel gracefully', async () => {
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         {}
       )
 
@@ -749,7 +766,7 @@ describe('NotificationDispatcher', () => {
         emailApiUrl: 'https://api.email-provider.com/v1/send',
       }
       dispatcher = new NotificationDispatcher(
-        storage as unknown as DurableObjectStorage,
+        storage.asDurableObjectStorage(),
         config
       )
 
@@ -816,7 +833,7 @@ describe('HumanExecutor Notification Integration', () => {
     }
 
     executor = new HumanExecutor(
-      mockState as unknown as DurableObjectState,
+      mockState.asDurableObjectState(),
       env
     )
   })
@@ -1046,7 +1063,7 @@ describe('HumanExecutor Backward Compatibility', () => {
 
     // No NOTIFICATION_CONFIG = no real dispatcher, only interface-based
     executor = new HumanExecutor(
-      mockState as unknown as DurableObjectState,
+      mockState.asDurableObjectState(),
       { NOTIFICATIONS: mockNotifications }
     )
   })

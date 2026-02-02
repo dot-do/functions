@@ -177,6 +177,8 @@ function createMockState(sql: MockSqlStorage) {
       toString: () => 'test-do-id',
       name: 'test-logs',
     },
+    props: undefined,
+    waitUntil: () => {},
     blockConcurrencyWhile: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
   }
 }

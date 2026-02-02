@@ -13,8 +13,6 @@
  * - Execution trace and result structure
  * - Cost and token tracking
  *
- * RED PHASE: These tests are written to FAIL until implementation exists.
- *
  * @module tiers/__tests__/agentic-executor.test
  */
 
@@ -2578,6 +2576,736 @@ describe('AgenticExecutor', () => {
       const result = await resultPromise
 
       expect(result.agenticExecution.model).toBe('claude-4-opus')
+    })
+  })
+
+  // ===========================================================================
+  // 13. PUBLIC METHODS: executeIteration & executeTool
+  // ===========================================================================
+
+  describe('public methods', () => {
+    it('executeIteration should return state with continue=false', async () => {
+      const definition = createTestAgenticDefinition({ tools: [] })
+      executor = new AgenticExecutor(definition, undefined, mockEnv)
+
+      const state: AgentState = {
+        iteration: 0,
+        memory: [],
+        toolResults: [],
+        goalAchieved: false,
+        output: undefined,
+      }
+
+      const result = await executor.executeIteration(state, {
+        executionId: 'test-iter-1',
+      })
+
+      expect(result.state).toBe(state)
+      expect(result.toolCalls).toHaveLength(0)
+      expect(result.continue).toBe(false)
+    })
+
+    it('executeTool should invoke the registered handler', async () => {
+      const toolHandler = vi.fn().mockResolvedValue({ data: 'tool result' })
+      const definition = createTestAgenticDefinition({
+        tools: [createSearchTool()],
+      })
+
+      executor = new AgenticExecutor(definition, undefined, mockEnv)
+      executor.registerToolHandler('search', toolHandler)
+
+      const searchTool = createSearchTool()
+      const result = await executor.executeTool(
+        searchTool,
+        { query: 'test query' },
+        { executionId: 'test-tool-1' }
+      )
+
+      expect(result).toEqual({ data: 'tool result' })
+      expect(toolHandler).toHaveBeenCalledWith(
+        { query: 'test query' },
+        expect.objectContaining({
+          toolDefinition: searchTool,
+          executionContext: { executionId: 'test-tool-1' },
+        })
+      )
+    })
+
+    it('executeTool should throw for unregistered handler', async () => {
+      const definition = createTestAgenticDefinition({
+        tools: [createSearchTool()],
+      })
+
+      executor = new AgenticExecutor(definition, undefined, mockEnv)
+      // Not registering any handlers
+
+      await expect(
+        executor.executeTool(
+          createSearchTool(),
+          { query: 'test' },
+          { executionId: 'test-tool-2' }
+        )
+      ).rejects.toThrow("No handler registered for tool 'search'")
+    })
+  })
+
+  // ===========================================================================
+  // 14. AI CLIENT ERRORS
+  // ===========================================================================
+
+  describe('AI client errors', () => {
+    it('should handle AI client throwing an error', async () => {
+      mockAI = createMockAIClient([])
+      mockAI.chat = vi.fn().mockRejectedValue(new Error('AI service unavailable'))
+
+      const definition = createTestAgenticDefinition({ tools: [] })
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+
+      const resultPromise = executor.execute(
+        { question: 'test' },
+        {},
+        { executionId: 'test-ai-error-1' }
+      )
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      expect(result.status).toBe('failed')
+      expect(result.error).toBeDefined()
+      expect(result.error?.message).toContain('AI service unavailable')
+    })
+
+    it('should handle AI client returning max_tokens stopReason', async () => {
+      mockAI = createMockAIClient([
+        {
+          content: 'Partial response that was cut off due to max tok',
+          stopReason: 'max_tokens',
+          tokens: { inputTokens: 100, outputTokens: 4096, totalTokens: 4196 },
+        },
+        {
+          content: 'Done.',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 150, outputTokens: 20, totalTokens: 170 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition({ tools: [] })
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+
+      const resultPromise = executor.execute(
+        { task: 'generate long text' },
+        {},
+        { executionId: 'test-max-tokens-1' }
+      )
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      // max_tokens is not end_turn, so loop continues to next iteration
+      expect(result.agenticExecution.iterations).toBe(2)
+      expect(result.status).toBe('completed')
+    })
+  })
+
+  // ===========================================================================
+  // 15. RESULT METADATA & METRICS
+  // ===========================================================================
+
+  describe('result metadata and metrics', () => {
+    it('should include functionId and functionVersion in result', async () => {
+      mockAI = createMockAIClient([
+        {
+          content: 'Done.',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 40, outputTokens: 15, totalTokens: 55 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition({
+        id: 'my-custom-agent',
+        version: '2.3.1',
+      })
+
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+
+      const resultPromise = executor.execute(
+        { input: 'test' },
+        {},
+        { executionId: 'test-meta-1' }
+      )
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      expect(result.functionId).toBe('my-custom-agent')
+      expect(result.functionVersion).toBe('2.3.1')
+    })
+
+    it('should include startedAt and completedAt in metadata', async () => {
+      mockAI = createMockAIClient([
+        {
+          content: 'Done.',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 40, outputTokens: 15, totalTokens: 55 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition()
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+
+      const resultPromise = executor.execute(
+        { input: 'test' },
+        {},
+        { executionId: 'test-meta-2' }
+      )
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      expect(result.metadata).toBeDefined()
+      expect(typeof result.metadata.startedAt).toBe('number')
+      expect(typeof result.metadata.completedAt).toBe('number')
+      expect(result.metadata.completedAt).toBeGreaterThanOrEqual(
+        result.metadata.startedAt
+      )
+    })
+
+    it('should track input and output size in metrics', async () => {
+      mockAI = createMockAIClient([
+        {
+          content: JSON.stringify({ result: 'big output data here' }),
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 40, outputTokens: 15, totalTokens: 55 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition()
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+
+      const input = { question: 'What is the meaning of life?' }
+      const resultPromise = executor.execute(input, {}, {
+        executionId: 'test-meta-3',
+      })
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      expect(result.metrics.inputSizeBytes).toBe(JSON.stringify(input).length)
+      expect(result.metrics.outputSizeBytes).toBeGreaterThan(0)
+      expect(result.metrics.retryCount).toBe(0)
+    })
+
+    it('should generate executionId when context not provided', async () => {
+      mockAI = createMockAIClient([
+        {
+          content: 'Done.',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 40, outputTokens: 15, totalTokens: 55 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition()
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+
+      const resultPromise = executor.execute({ input: 'test' })
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      expect(result.executionId).toBeDefined()
+      expect(result.executionId).toMatch(/^exec-/)
+    })
+
+    it('should use executionId from context when provided', async () => {
+      mockAI = createMockAIClient([
+        {
+          content: 'Done.',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 40, outputTokens: 15, totalTokens: 55 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition()
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+
+      const resultPromise = executor.execute(
+        { input: 'test' },
+        {},
+        { executionId: 'my-custom-exec-id' }
+      )
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      expect(result.executionId).toBe('my-custom-exec-id')
+    })
+
+    it('should report durationMs in metrics', async () => {
+      mockAI = createMockAIClient([
+        {
+          content: 'Done.',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 40, outputTokens: 15, totalTokens: 55 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition()
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+
+      const resultPromise = executor.execute(
+        { input: 'test' },
+        {},
+        { executionId: 'test-duration-1' }
+      )
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      expect(typeof result.metrics.durationMs).toBe('number')
+      expect(result.metrics.durationMs).toBeGreaterThanOrEqual(0)
+    })
+  })
+
+  // ===========================================================================
+  // 16. CANCELLATION EDGE CASES
+  // ===========================================================================
+
+  describe('cancellation edge cases', () => {
+    it('should skip agent loop when signal is pre-aborted', async () => {
+      mockAI = createMockAIClient([
+        {
+          content: 'Should not reach.',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 40, outputTokens: 15, totalTokens: 55 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition({ tools: [] })
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+
+      const abortController = new AbortController()
+      abortController.abort() // Pre-abort before execution
+
+      const resultPromise = executor.execute(
+        { task: 'should be cancelled' },
+        {},
+        {
+          executionId: 'test-preabort-1',
+          signal: abortController.signal,
+        }
+      )
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      // Pre-aborted signal prevents the loop from ever entering.
+      // The AI client should never be called.
+      expect(mockAI.chat).not.toHaveBeenCalled()
+      expect(result.agenticExecution.iterations).toBe(0)
+    })
+
+    it('should cancel on abort during long AI call', async () => {
+      const abortController = new AbortController()
+
+      mockAI = createMockAIClient([])
+      // AI takes a long time to respond
+      mockAI.chat = vi.fn().mockImplementation(async () => {
+        await new Promise((r) => setTimeout(r, 60000))
+        return {
+          content: 'Done.',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 50, outputTokens: 20, totalTokens: 70 },
+        }
+      })
+
+      const definition = createTestAgenticDefinition({ tools: [] })
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+
+      const resultPromise = executor.execute(
+        { task: 'test' },
+        {},
+        {
+          executionId: 'test-cancel-during-ai-1',
+          signal: abortController.signal,
+        }
+      )
+
+      // Abort after a short delay, during the pending AI call
+      await vi.advanceTimersByTimeAsync(100)
+      abortController.abort()
+      await vi.runAllTimersAsync()
+
+      const result = await resultPromise
+
+      expect(result.status).toBe('cancelled')
+    })
+  })
+
+  // ===========================================================================
+  // 17. BUDGET BOUNDARY BEHAVIOR
+  // ===========================================================================
+
+  describe('budget boundary behavior', () => {
+    it('should stop before second iteration when budget would be exceeded', async () => {
+      mockAI = createMockAIClient([
+        {
+          content: '',
+          toolCalls: [{ name: 'search', input: { query: 'first' } }],
+          stopReason: 'tool_use',
+          tokens: { inputTokens: 400, outputTokens: 100, totalTokens: 500 },
+        },
+        {
+          content: '',
+          toolCalls: [{ name: 'search', input: { query: 'second' } }],
+          stopReason: 'tool_use',
+          tokens: { inputTokens: 400, outputTokens: 200, totalTokens: 600 },
+        },
+        {
+          content: 'Done.',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 500, outputTokens: 100, totalTokens: 600 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition({
+        tools: [createSearchTool()],
+      })
+
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+      executor.registerToolHandler('search', createMockToolHandler({ results: [] }))
+      executor.setTokenBudget(800) // budget for ~1.5 iterations
+
+      const resultPromise = executor.execute(
+        { task: 'budget test' },
+        {},
+        { executionId: 'test-budget-boundary-1' }
+      )
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      // Should stop after second iteration exceeds budget
+      expect(result.agenticExecution.totalTokens.totalTokens).toBeLessThanOrEqual(1100)
+      expect(result.error?.message).toContain('budget')
+    })
+
+    it('should not apply budget when not configured', async () => {
+      mockAI = createMockAIClient([
+        {
+          content: '',
+          toolCalls: [{ name: 'search', input: { query: 'test' } }],
+          stopReason: 'tool_use',
+          tokens: { inputTokens: 10000, outputTokens: 5000, totalTokens: 15000 },
+        },
+        {
+          content: 'Done.',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 15000, outputTokens: 2000, totalTokens: 17000 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition({
+        tools: [createSearchTool()],
+      })
+
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+      executor.registerToolHandler('search', createMockToolHandler({ results: [] }))
+      // NOT setting token budget
+
+      const resultPromise = executor.execute(
+        { task: 'no budget' },
+        {},
+        { executionId: 'test-no-budget-1' }
+      )
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      expect(result.status).toBe('completed')
+      expect(result.error).toBeUndefined()
+      expect(result.agenticExecution.totalTokens.totalTokens).toBe(32000)
+    })
+  })
+
+  // ===========================================================================
+  // 18. OUTPUT PARSING
+  // ===========================================================================
+
+  describe('output parsing', () => {
+    it('should parse JSON content as output', async () => {
+      mockAI = createMockAIClient([
+        {
+          content: JSON.stringify({ answer: 42, details: 'computed' }),
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 40, outputTokens: 20, totalTokens: 60 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition()
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+
+      const resultPromise = executor.execute(
+        { input: 'test' },
+        {},
+        { executionId: 'test-parse-1' }
+      )
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      expect(result.output).toEqual({ answer: 42, details: 'computed' })
+    })
+
+    it('should return raw string when content is not JSON', async () => {
+      mockAI = createMockAIClient([
+        {
+          content: 'This is plain text, not JSON.',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 40, outputTokens: 20, totalTokens: 60 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition()
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+
+      const resultPromise = executor.execute(
+        { input: 'test' },
+        {},
+        { executionId: 'test-parse-2' }
+      )
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      expect(result.output).toBe('This is plain text, not JSON.')
+    })
+
+    it('should handle empty content as output', async () => {
+      mockAI = createMockAIClient([
+        {
+          content: '',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 40, outputTokens: 5, totalTokens: 45 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition()
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+
+      const resultPromise = executor.execute(
+        { input: 'test' },
+        {},
+        { executionId: 'test-parse-3' }
+      )
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      expect(result.status).toBe('completed')
+      // Empty string is the last content
+      expect(result.output).toBe('')
+    })
+  })
+
+  // ===========================================================================
+  // 19. SYSTEM PROMPT PASSING
+  // ===========================================================================
+
+  describe('system prompt', () => {
+    it('should pass systemPrompt to AI client', async () => {
+      mockAI = createMockAIClient([
+        {
+          content: 'Done.',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 50, outputTokens: 20, totalTokens: 70 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition({
+        systemPrompt: 'You are a specialized data analyst.',
+      })
+
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+
+      const resultPromise = executor.execute(
+        { query: 'analyze this' },
+        {},
+        { executionId: 'test-sysprompt-1' }
+      )
+
+      await vi.runAllTimersAsync()
+      await resultPromise
+
+      expect(mockAI.chat).toHaveBeenCalledWith(
+        expect.objectContaining({
+          systemPrompt: 'You are a specialized data analyst.',
+        })
+      )
+    })
+
+    it('should pass enableReasoning flag to AI client', async () => {
+      mockAI = createMockAIClient([
+        {
+          content: 'Done.',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 50, outputTokens: 20, totalTokens: 70 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition({
+        enableReasoning: true,
+      })
+
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+
+      const resultPromise = executor.execute(
+        { query: 'test' },
+        {},
+        { executionId: 'test-reasoning-flag-1' }
+      )
+
+      await vi.runAllTimersAsync()
+      await resultPromise
+
+      expect(mockAI.chat).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enableReasoning: true,
+        })
+      )
+    })
+  })
+
+  // ===========================================================================
+  // 20. TOOL INPUT VALIDATION
+  // ===========================================================================
+
+  describe('tool input validation', () => {
+    it('should fail tool call when multiple required fields are missing', async () => {
+      const multiFieldTool = defineTool(
+        'multi_input',
+        'Tool requiring multiple fields',
+        {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            age: { type: 'number' },
+            email: { type: 'string' },
+          },
+          required: ['name', 'age', 'email'],
+        },
+        { type: 'inline', handler: 'return input' }
+      )
+
+      mockAI = createMockAIClient([
+        {
+          content: '',
+          toolCalls: [{ name: 'multi_input', input: { name: 'Alice' } }], // missing age and email
+          stopReason: 'tool_use',
+          tokens: { inputTokens: 50, outputTokens: 30, totalTokens: 80 },
+        },
+        {
+          content: 'Invalid input.',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition({
+        tools: [multiFieldTool],
+      })
+
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+      executor.registerToolHandler('multi_input', createMockToolHandler({ ok: true }))
+
+      const resultPromise = executor.execute(
+        { task: 'test validation' },
+        {},
+        { executionId: 'test-validation-1' }
+      )
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      const toolCall = result.agenticExecution.trace[0].toolCalls[0]
+      expect(toolCall.success).toBe(false)
+      expect(toolCall.error).toContain('validation')
+    })
+
+    it('should pass tool call when all required fields present', async () => {
+      mockAI = createMockAIClient([
+        {
+          content: '',
+          toolCalls: [{ name: 'search', input: { query: 'valid query' } }],
+          stopReason: 'tool_use',
+          tokens: { inputTokens: 50, outputTokens: 30, totalTokens: 80 },
+        },
+        {
+          content: 'Done.',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition({
+        tools: [createSearchTool()],
+      })
+
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+      executor.registerToolHandler('search', createMockToolHandler({ results: ['found it'] }))
+
+      const resultPromise = executor.execute(
+        { task: 'test validation pass' },
+        {},
+        { executionId: 'test-validation-2' }
+      )
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      const toolCall = result.agenticExecution.trace[0].toolCalls[0]
+      expect(toolCall.success).toBe(true)
+    })
+
+    it('should skip validation when inputSchema has no type', async () => {
+      const noTypeTool = defineTool(
+        'no_type_tool',
+        'Tool with no type in schema',
+        { properties: { x: { type: 'number' } } },
+        { type: 'inline', handler: 'return input' }
+      )
+
+      mockAI = createMockAIClient([
+        {
+          content: '',
+          toolCalls: [{ name: 'no_type_tool', input: {} }],
+          stopReason: 'tool_use',
+          tokens: { inputTokens: 50, outputTokens: 30, totalTokens: 80 },
+        },
+        {
+          content: 'Done.',
+          stopReason: 'end_turn',
+          tokens: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+        },
+      ])
+
+      const definition = createTestAgenticDefinition({
+        tools: [noTypeTool],
+      })
+
+      executor = new AgenticExecutor(definition, mockAI, mockEnv)
+      executor.registerToolHandler('no_type_tool', createMockToolHandler({ ok: true }))
+
+      const resultPromise = executor.execute(
+        { task: 'test no type' },
+        {},
+        { executionId: 'test-validation-3' }
+      )
+
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      const toolCall = result.agenticExecution.trace[0].toolCalls[0]
+      expect(toolCall.success).toBe(true)
     })
   })
 })

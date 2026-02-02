@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { listHandler } from '../list'
 import type { Env, RouteContext } from '../../router'
 import { createMockKV } from '../../../test-utils/mock-kv'
+import { createMockExecutionContext } from '../../../test-utils/mock-execution-context'
 
 // Type for JSON response bodies
 type JsonBody = Record<string, unknown>
@@ -26,10 +27,7 @@ describe('List Handler', () => {
       FUNCTIONS_REGISTRY: createMockKV(),
       FUNCTIONS_CODE: createMockKV(),
     }
-    mockCtx = {
-      waitUntil: vi.fn(),
-      passThroughOnException: vi.fn(),
-    } as unknown as ExecutionContext
+    mockCtx = createMockExecutionContext()
   })
 
   /**

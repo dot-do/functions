@@ -59,6 +59,7 @@ vi.mock('@dotdo/functions', () => ({
 import { validateInput, cascadeHandler } from '../cascade'
 import type { InputJsonSchema } from '../cascade'
 import { createMockKV } from '../../../test-utils/mock-kv'
+import { createMockExecutionContext } from '../../../test-utils/mock-execution-context'
 import type { CascadeEnv } from '../cascade-types'
 
 // Type alias for JSON response bodies
@@ -430,10 +431,7 @@ describe('cascadeHandler input validation', () => {
       FUNCTIONS_CODE: codeKV,
     } as CascadeEnv
 
-    mockCtx = {
-      waitUntil: vi.fn(),
-      passThroughOnException: vi.fn(),
-    } as unknown as ExecutionContext
+    mockCtx = createMockExecutionContext()
   })
 
   /**

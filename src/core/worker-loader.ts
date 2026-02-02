@@ -719,9 +719,13 @@ export class WorkerLoader {
         const miniflareModule = await import('miniflare')
         Miniflare = miniflareModule.Miniflare
         useMiniflare = true
-      } catch {
-        // Miniflare not available (e.g., in vitest-pool-workers), use in-process evaluation
-        this.logger.debug('Miniflare not available, using in-process evaluation', { id })
+      } catch (importError) {
+        const importErrorMessage = importError instanceof Error ? importError.message : String(importError)
+        this.logger.warn('Dynamic import of miniflare failed, falling back to in-process evaluation', {
+          id,
+          error: importErrorMessage,
+          hint: 'This is expected in vitest-pool-workers or production; ensure miniflare is installed for local dev',
+        })
       }
 
       if (useMiniflare && Miniflare) {
@@ -775,8 +779,15 @@ export class WorkerLoader {
             throw error
           }
         } catch (miniflareError) {
+          const miniflareErrorMessage = miniflareError instanceof Error ? miniflareError.message : String(miniflareError)
+          const miniflareErrorStack = miniflareError instanceof Error ? miniflareError.stack : undefined
           // Miniflare instantiation or execution failed, fall back to in-process evaluation
-          this.logger.debug('Miniflare failed, falling back to in-process evaluation', { id, error: (miniflareError as Error).message })
+          this.logger.warn('Miniflare execution failed, falling back to in-process evaluation', {
+            id,
+            error: miniflareErrorMessage,
+            stack: miniflareErrorStack,
+            hint: 'Check that the function code is valid and Miniflare is correctly configured',
+          })
         }
       }
 
@@ -870,6 +881,11 @@ export class WorkerLoader {
           } catch (error) {
             const duration = Date.now() - startTime
             const err = error as Error
+            loaderRef.logger.error('In-process evaluation failed for function', {
+              functionId,
+              error: err.message || String(error),
+              durationMs: duration,
+            })
             return new Response(JSON.stringify({
               success: false,
               error: err.message || String(error),

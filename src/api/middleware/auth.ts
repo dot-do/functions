@@ -17,6 +17,7 @@ import {
   type OrganizationMembership,
 } from '../../core/oauth'
 import { hashApiKey } from '../../core/crypto-utils'
+import { PUBLIC_ENDPOINTS } from '../../config'
 
 /**
  * API key record stored in KV
@@ -205,7 +206,7 @@ function isApiKeyFormat(token: string): boolean {
  */
 export function createAuthMiddleware(config: AuthMiddlewareConfig) {
   const {
-    publicEndpoints = ['/health', '/'],
+    publicEndpoints = [...PUBLIC_ENDPOINTS.CORE],
     apiKeysKV,
     apiKeyHeader = 'X-API-Key',
     scopeRequirements,
@@ -485,11 +486,5 @@ async function validateOAuthToken(
  * Default auth middleware with standard configuration
  */
 export const authMiddleware = createAuthMiddleware({
-  publicEndpoints: [
-    '/health',
-    '/',
-    '/api/status',
-    '/v1/api/auth/validate', // Auth validation should be accessible
-    '/api/auth/validate',
-  ],
+  publicEndpoints: [...PUBLIC_ENDPOINTS.ALL],
 })

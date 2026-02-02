@@ -21,6 +21,7 @@ import { compileC } from '../../languages/cpp/compile'
 
 // Import the CodeExecutor to test compileToWasm behavior
 import { CodeExecutor } from '../../tiers/code-executor'
+import { functionId } from '@dotdo/functions'
 
 describe('Honest Language Support', () => {
   describe('Rust compilation returns not-yet-supported error', () => {
@@ -180,7 +181,7 @@ describe('Honest Language Support', () => {
       await expect(
         executor.execute(
           {
-            id: 'test-fn' as any,
+            id: functionId('test-fn'),
             version: '1.0.0',
             language: 'rust' as any,
             source: { type: 'inline', code: rustCode },
@@ -198,7 +199,7 @@ describe('Honest Language Support', () => {
       await expect(
         executor.execute(
           {
-            id: 'test-fn' as any,
+            id: functionId('test-fn'),
             version: '1.0.0',
             language: 'rust' as any,
             source: { type: 'inline', code: '__WASM_ASSETS__:test-fn:latest' },
@@ -218,7 +219,7 @@ describe('Honest Language Support', () => {
       try {
         await executor.execute(
           {
-            id: 'test-fn' as any,
+            id: functionId('test-fn'),
             version: '1.0.0',
             language: 'rust' as any,
             source: { type: 'inline', code: 'fn main() {}' },
@@ -238,7 +239,7 @@ describe('Honest Language Support', () => {
       try {
         await executor.execute(
           {
-            id: 'test-fn' as any,
+            id: functionId('test-fn'),
             version: '1.0.0',
             language: 'go' as any,
             source: { type: 'inline', code: 'package main' },
@@ -256,7 +257,7 @@ describe('Honest Language Support', () => {
       try {
         await executor.execute(
           {
-            id: 'test-fn' as any,
+            id: functionId('test-fn'),
             version: '1.0.0',
             language: 'zig' as any,
             source: { type: 'inline', code: 'export fn add() void {}' },
@@ -274,7 +275,7 @@ describe('Honest Language Support', () => {
       try {
         await executor.execute(
           {
-            id: 'test-fn' as any,
+            id: functionId('test-fn'),
             version: '1.0.0',
             language: 'assemblyscript' as any,
             source: { type: 'inline', code: 'export function add(): i32 { return 0 }' },
@@ -294,7 +295,7 @@ describe('Honest Language Support', () => {
       try {
         await executor.execute(
           {
-            id: 'test-fn' as any,
+            id: functionId('test-fn'),
             version: '1.0.0',
             language: 'typescript',
             source: { type: 'inline', code: 'export default function handler(input: any) { return input }' },
@@ -313,7 +314,7 @@ describe('Honest Language Support', () => {
       try {
         await executor.execute(
           {
-            id: 'test-fn' as any,
+            id: functionId('test-fn'),
             version: '1.0.0',
             language: 'javascript',
             source: { type: 'inline', code: 'export default function handler(input) { return input }' },
@@ -331,7 +332,7 @@ describe('Honest Language Support', () => {
       try {
         await executor.execute(
           {
-            id: 'test-fn' as any,
+            id: functionId('test-fn'),
             version: '1.0.0',
             language: 'python',
             source: { type: 'inline', code: 'def handler(input):\n  return input' },

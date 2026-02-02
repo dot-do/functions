@@ -130,10 +130,10 @@ describe.skipIf(!shouldRunE2E())('E2E: TypeScript Function Deploy and Invoke', (
   })
 
   describe('Error Handling', () => {
-    // NOTE: TypeScript syntax errors are not validated at deploy time
-    // because we store source directly and compile at runtime.
-    // This test verifies that deploy succeeds but invoke fails for syntax errors.
-    it.skip('syntax errors are caught at runtime, not deploy time', async () => {
+    // TypeScript syntax errors are not validated at deploy time because we
+    // store source directly and compile at runtime.  Deploy should succeed
+    // (stores source) but runtime invocation should fail with an error.
+    it('syntax errors are caught at runtime, not deploy time', async () => {
       const functionId = generateTestFunctionId()
       deployedFunctions.push(functionId)
 
@@ -145,7 +145,9 @@ describe.skipIf(!shouldRunE2E())('E2E: TypeScript Function Deploy and Invoke', (
         }
       `
 
-      // Deploy succeeds (stores source without validation)
+      // Deploy succeeds (stores source without validation).
+      // Use deployFunction (API-only) since dispatch namespace upload is
+      // not needed -- the worker_loaders path handles execution.
       const result = await deployFunction({
         id: functionId,
         code,
@@ -154,9 +156,9 @@ describe.skipIf(!shouldRunE2E())('E2E: TypeScript Function Deploy and Invoke', (
       })
       expect(result.id).toBe(functionId)
 
-      // Runtime invocation would fail due to syntax error
-      // (Skipped because dispatch upload would also fail)
-    })
+      // Runtime invocation should fail due to syntax error
+      await expect(invokeFunction(functionId)).rejects.toThrow(/error|failed|syntax/i)
+    }, E2E_CONFIG.deployInvokeTimeout)
 
     it('handles runtime errors gracefully', async () => {
       const functionId = generateTestFunctionId()
