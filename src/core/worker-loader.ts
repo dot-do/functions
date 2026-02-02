@@ -67,10 +67,7 @@ export class WorkerLoaderError extends Error {
     if (cause !== undefined) {
       this.cause = cause
     }
-    // Maintain proper stack trace for where error was thrown
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, this.constructor)
-    }
+    // Stack trace is automatically captured by the Error constructor in V8/Workers
   }
 }
 

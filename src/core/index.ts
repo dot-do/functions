@@ -82,6 +82,18 @@ export {
   type ClassifierOptions,
 } from './function-classifier'
 
+// Runtime Validation
+export {
+  validateFunctionMetadata,
+  validateDeployBody,
+  validateInvokeBody,
+  assertObject,
+  assertString,
+  assertOptionalString,
+  assertOptionalStringArray,
+  safeJsonParse,
+} from './validation'
+
 // Utilities
 export { encodeULEB128, encodeSLEB128, encodeName, createSection } from './wasm-encoding'
 export { stripTypeScript } from './ts-strip'

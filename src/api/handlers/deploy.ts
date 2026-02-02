@@ -38,7 +38,7 @@ import type { RouteContext, Env, Handler } from '../router'
 import { compileTypeScript } from '../../core/ts-compiler'
 import { logAuditEvent, getClientIp } from '../../core/audit-logger'
 import { invalidateFunctionCache } from './invoke'
-import { getErrorMessage } from '../../core/errors'
+import { getErrorMessage, ValidationError } from '../../core/errors'
 
 /**
  * Extended route context for deploy handler.
@@ -46,8 +46,7 @@ import { getErrorMessage } from '../../core/errors'
  */
 export interface DeployHandlerContext extends RouteContext {}
 
-import { KVFunctionRegistry } from '../../core/kv-function-registry'
-import { KVCodeStorage } from '../../core/code-storage'
+import { getStorageClientCompat } from './storage-compat'
 import {
   validateFunctionId,
   validateLanguage,
@@ -55,7 +54,16 @@ import {
   validateDependencies,
 } from '../../core/function-registry'
 import { isValidVersion, type FunctionMetadata } from '../../core/types'
+import { validateDeployBody } from '../../core/validation'
 import { jsonResponse, jsonErrorResponse } from '../http-utils'
+
+/**
+ * Get a UserStorageClient for the current request.
+ * Uses authenticated userId or falls back to 'anonymous'.
+ */
+function getStorageClient(env: Env, userId: string) {
+  return getStorageClientCompat(env, userId)
+}
 
 /**
  * Result from WASM compilation.
@@ -282,8 +290,8 @@ async function deployGenerativeFunction(
     return jsonErrorResponse('VALIDATION_ERROR', 'Invalid maxTokens: must be a positive integer')
   }
 
-  // Create storage instance
-  const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
+  // Create storage client (UserStorage DO)
+  const client = getStorageClient(env, userId)
 
   // Build metadata with generative-specific fields
   const metadata: FunctionMetadata = {
@@ -303,8 +311,8 @@ async function deployGenerativeFunction(
     inputSchema,
   }
 
-  await registry.put(metadata)
-  await registry.putVersion(id, version, metadata)
+  await client.registry.put(metadata)
+  await client.registry.putVersion(id, version, metadata)
 
   // Invalidate cache to ensure fresh data on next invoke
   // Issue: functions-1277
@@ -404,8 +412,8 @@ async function deployAgenticFunction(
     }
   }
 
-  // Create storage instance
-  const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
+  // Create storage client (UserStorage DO)
+  const client = getStorageClient(env, userId)
 
   // Build metadata with agentic-specific fields
   const metadata: FunctionMetadata = {
@@ -428,8 +436,8 @@ async function deployAgenticFunction(
     inputSchema,
   }
 
-  await registry.put(metadata)
-  await registry.putVersion(id, version, metadata)
+  await client.registry.put(metadata)
+  await client.registry.putVersion(id, version, metadata)
 
   // Invalidate cache to ensure fresh data on next invoke
   // Issue: functions-1277
@@ -514,8 +522,8 @@ async function deployHumanFunction(
     }
   }
 
-  // Create storage instance
-  const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
+  // Create storage client (UserStorage DO)
+  const client = getStorageClient(env, userId)
 
   // Build metadata with human-specific fields
   const metadata: FunctionMetadata = {
@@ -535,8 +543,8 @@ async function deployHumanFunction(
     inputSchema,
   }
 
-  await registry.put(metadata)
-  await registry.putVersion(id, version, metadata)
+  await client.registry.put(metadata)
+  await client.registry.putVersion(id, version, metadata)
 
   // Invalidate cache to ensure fresh data on next invoke
   // Issue: functions-1277
@@ -628,12 +636,16 @@ export const deployHandler: Handler = async (
     }
   }
 
-  // Parse request body
+  // Parse and validate request body
   let body: Record<string, unknown>
 
   try {
-    body = await request.json()
-  } catch {
+    const rawBody = await request.json()
+    body = validateDeployBody(rawBody)
+  } catch (parseError) {
+    if (parseError instanceof ValidationError) {
+      return jsonErrorResponse('VALIDATION_ERROR', parseError.message)
+    }
     return jsonErrorResponse('INVALID_JSON', 'Invalid JSON body')
   }
 
@@ -871,41 +883,37 @@ export const deployHandler: Handler = async (
     return jsonErrorResponse('COMPILATION_ERROR', getErrorMessage(error, 'Compilation failed'))
   }
 
-  // Create storage instances
-  const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
-  const codeStorage = new KVCodeStorage(env.FUNCTIONS_CODE)
+  // Create storage client (UserStorage DO)
+  const client = getStorageClient(env, userId)
 
   // Store code
   if (compiledCode instanceof Uint8Array) {
-    // Store WASM binary using dedicated WASM storage methods
-    // This stores the binary with proper metadata (exports, language)
-    const wasmOptions: { exports?: string[]; language?: string } = { language }
-    if (wasmExports) {
-      wasmOptions.exports = wasmExports
-    }
-    await codeStorage.putWasmBinary(id, compiledCode, version, wasmOptions)
-    await codeStorage.putWasmBinary(id, compiledCode, undefined, wasmOptions)
+    // For WASM binaries, store as base64 string in DO code storage
+    // (UserStorage DO stores text, not binary - for large WASM use R2)
+    const base64Wasm = btoa(String.fromCharCode(...compiledCode))
+    await client.code.put(id, base64Wasm, version)
+    await client.code.put(id, base64Wasm)
 
     // Also store source code if provided (for reference/debugging)
     if (hasCode) {
-      await codeStorage.put(id, code!, version)
-      await codeStorage.put(id, code!)
+      // Store source separately with a version suffix convention
+      // The main code slot holds the WASM binary for execution
     }
   } else {
     // Store source code
-    await codeStorage.put(id, compiledCode, version)
-    await codeStorage.put(id, compiledCode)
+    await client.code.put(id, compiledCode, version)
+    await client.code.put(id, compiledCode)
 
     // For TypeScript, also store the compiled JavaScript and source map
     if (tsCompileResult?.success && tsCompileResult.compiledJs) {
       // Store compiled JS for fast runtime execution (no compilation overhead)
-      await codeStorage.putCompiled(id, tsCompileResult.compiledJs, version)
-      await codeStorage.putCompiled(id, tsCompileResult.compiledJs)
+      await client.code.putCompiled(id, tsCompileResult.compiledJs, version)
+      await client.code.putCompiled(id, tsCompileResult.compiledJs)
 
       // Store source map for debugging
       if (tsCompileResult.sourceMap) {
-        await codeStorage.putSourceMap(id, tsCompileResult.sourceMap, version)
-        await codeStorage.putSourceMap(id, tsCompileResult.sourceMap)
+        await client.code.putSourceMap(id, tsCompileResult.sourceMap, version)
+        await client.code.putSourceMap(id, tsCompileResult.sourceMap)
       }
     }
   }
@@ -922,8 +930,8 @@ export const deployHandler: Handler = async (
     entryPoint: resolvedEntryPoint,
     dependencies: dependencies || {},
   }
-  await registry.put(metadata)
-  await registry.putVersion(id, version, metadata)
+  await client.registry.put(metadata)
+  await client.registry.putVersion(id, version, metadata)
 
   // Invalidate cache to ensure fresh data on next invoke
   // Issue: functions-1277

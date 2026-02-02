@@ -916,7 +916,7 @@ export class FunctionLogs {
 
     if (cursor) {
       try {
-        const decoded = JSON.parse(Buffer.from(cursor, 'base64').toString())
+        const decoded = JSON.parse(atob(cursor))
         offset = decoded.offset
       } catch {
         // Invalid cursor, start from beginning
@@ -928,7 +928,7 @@ export class FunctionLogs {
 
     let nextCursor: string | null = null
     if (hasMore) {
-      nextCursor = Buffer.from(JSON.stringify({ offset: offset + effectiveLimit })).toString('base64')
+      nextCursor = btoa(JSON.stringify({ offset: offset + effectiveLimit }))
     }
 
     return {

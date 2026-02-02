@@ -7,7 +7,7 @@
  */
 
 import type { RouteContext, Env, Handler } from '../router'
-import { KVFunctionRegistry } from '../../core/kv-function-registry'
+import { getStorageClientCompat } from './storage-compat'
 import { jsonResponse } from '../http-utils'
 
 /**
@@ -77,10 +77,11 @@ export const listHandler: Handler = async (
     }, 400)
   }
 
-  const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
+  const userId = context?.authContext?.userId || 'anonymous'
+  const client = getStorageClientCompat(env, userId)
 
   // Fetch functions from registry
-  const result = await registry.list({
+  const result = await client.registry.list({
     cursor: cursorParam ?? undefined,
     limit,
   })

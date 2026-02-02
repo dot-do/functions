@@ -90,6 +90,8 @@ interface WindowState {
  * FOR PRODUCTION: Use the RateLimiterDO (Durable Object) in src/do/rate-limiter.ts
  * which provides distributed rate limiting that persists across Worker isolates.
  *
+ * @deprecated Use RateLimiterDO from src/do/rate-limiter.ts for production.
+ * This class is retained only for backward compatibility and local testing.
  * @see src/do/rate-limiter.ts for the production-ready distributed implementation
  */
 export class InMemoryRateLimiter implements RateLimiter {

@@ -27,11 +27,11 @@
  */
 
 import type { RouteContext, Env, Handler } from '../router'
-import { KVFunctionRegistry } from '../../core/kv-function-registry'
-import { KVCodeStorage } from '../../core/code-storage'
+import { getStorageClientCompat } from './storage-compat'
 import { validateFunctionId } from '../../core/function-registry'
-import { getErrorMessage } from '../../core/errors'
+import { getErrorMessage, ValidationError } from '../../core/errors'
 import type { FunctionMetadata } from '../../core/types'
+import { validateInvokeBody, validateFunctionMetadata } from '../../core/validation'
 import { jsonResponse } from '../http-utils'
 import { stripTypeScriptSync } from '../../core/ts-compiler'
 import { TierDispatcher, type ExtendedMetadata, type TierDispatcherEnv } from '../tier-dispatcher'
@@ -50,6 +50,14 @@ import {
   getCachedSourceCode,
   cacheSourceCode,
 } from '../caching'
+
+/**
+ * Get a UserStorageClient for the current request.
+ * Uses authenticated userId or falls back to 'anonymous'.
+ */
+function getStorageClient(env: Env, userId?: string) {
+  return getStorageClientCompat(env, userId || 'anonymous')
+}
 
 // Re-export invalidateFunctionCache for callers that need cache invalidation
 export { invalidateFunctionCache } from '../caching'
@@ -203,14 +211,14 @@ export async function validateInvokeRequest(
     }
   }
 
-  // Get function metadata - check cache first to reduce KV request amplification
+  // Get function metadata - check cache first to reduce DO request amplification
   let metadata = await getCachedMetadata(functionId, version)
 
   if (!metadata) {
-    const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
+    const client = getStorageClient(env)
     metadata = version
-      ? await registry.getVersion(functionId, version)
-      : await registry.get(functionId)
+      ? await client.registry.getVersion(functionId, version)
+      : await client.registry.get(functionId)
 
     // Cache the metadata if found
     if (metadata) {
@@ -233,8 +241,15 @@ export async function validateInvokeRequest(
     const bodyText = await request.text()
     if (bodyText.trim()) {
       try {
-        requestData = JSON.parse(bodyText)
-      } catch {
+        const parsed = JSON.parse(bodyText)
+        requestData = validateInvokeBody(parsed, `invoke request for ${functionId}`)
+      } catch (parseError) {
+        if (parseError instanceof ValidationError) {
+          return {
+            valid: false,
+            errorResponse: jsonResponse({ error: parseError.message }, 400),
+          }
+        }
         return {
           valid: false,
           errorResponse: jsonResponse({ error: 'Invalid JSON body' }, 400),
@@ -507,7 +522,7 @@ export async function executeCodeFunction(
   start: number
 ): Promise<Response> {
   const { functionId, version, metadata, requestData, request } = ctx
-  const codeStorage = new KVCodeStorage(env.FUNCTIONS_CODE)
+  const client = getStorageClient(env)
 
   // For TypeScript, try to use pre-compiled JavaScript first
   let jsCode: string | null = null
@@ -520,10 +535,10 @@ export async function executeCodeFunction(
     if (jsCode) {
       usedPrecompiled = true
     } else {
-      // Cache miss - fetch from KV
+      // Cache miss - fetch from UserStorage DO
       jsCode = version
-        ? await codeStorage.getCompiled(functionId, version)
-        : await codeStorage.getCompiled(functionId)
+        ? await client.code.getCompiled(functionId, version)
+        : await client.code.getCompiled(functionId)
 
       if (jsCode) {
         usedPrecompiled = true
@@ -537,8 +552,8 @@ export async function executeCodeFunction(
         let sourceCode = await getCachedSourceCode(functionId, version)
         if (!sourceCode) {
           sourceCode = version
-            ? await codeStorage.get(functionId, version)
-            : await codeStorage.get(functionId)
+            ? await client.code.get(functionId, version)
+            : await client.code.get(functionId)
 
           // Cache source code if found
           if (sourceCode) {
@@ -571,8 +586,8 @@ export async function executeCodeFunction(
     jsCode = await getCachedSourceCode(functionId, version)
     if (!jsCode) {
       jsCode = version
-        ? await codeStorage.get(functionId, version)
-        : await codeStorage.get(functionId)
+        ? await client.code.get(functionId, version)
+        : await client.code.get(functionId)
 
       // Cache if found
       if (jsCode) {
@@ -641,13 +656,14 @@ export async function executeNonCodeFunction(
 
   // Build TierDispatcher environment from the handler's env
   const dispatcherEnv: TierDispatcherEnv = {
-    FUNCTIONS_REGISTRY: env.FUNCTIONS_REGISTRY,
-    FUNCTIONS_CODE: env.FUNCTIONS_CODE,
     LOADER: env.LOADER,
     USER_FUNCTIONS: env.USER_FUNCTIONS,
     AI_CLIENT: env.AI_CLIENT,
     HUMAN_TASKS: env.HUMAN_TASKS,
     CODE_STORAGE: env.CODE_STORAGE,
+    USER_STORAGE: env.USER_STORAGE,
+    FUNCTIONS_REGISTRY: env.FUNCTIONS_REGISTRY,
+    FUNCTIONS_CODE: env.FUNCTIONS_CODE,
   }
 
   const dispatcher = new TierDispatcher(dispatcherEnv)

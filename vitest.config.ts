@@ -40,6 +40,11 @@ export default defineWorkersProject({
       'src/languages/go/__tests__/e2e.test.ts',       // Imports child_process
       'src/languages/typescript/__tests__/compile.test.ts',      // Imports typescript (node:os)
       'src/languages/typescript/__tests__/sdk-compiler.test.ts', // Imports typescript (node:os)
+      // Fake WASM compilers removed - these tests tested the old regex-based fakes.
+      // See src/core/__tests__/honest-language-support.test.ts for current tests.
+      'src/languages/rust/__tests__/compile.test.ts',            // Fake Rust compiler removed
+      'src/languages/assemblyscript/__tests__/compile.test.ts',  // Fake AssemblyScript compiler removed
+      'src/languages/cpp/__tests__/compile.test.ts',             // Fake C++ compiler removed
       'src/__tests__/wrangler-config.test.ts', // Uses readFileSync (not implemented in Workers)
       // Pre-existing failures: unimplemented features / Pyodide runtime issues
       'src/core/__tests__/distributed-rate-limiter.test.ts', // RateLimiterDO class not yet implemented

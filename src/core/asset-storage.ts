@@ -334,10 +334,6 @@ export class AssetUploader {
    * Convert Uint8Array to base64 string
    */
   private toBase64(data: Uint8Array): string {
-    // Use Buffer in Node.js, btoa in browser/Workers
-    if (typeof Buffer !== 'undefined') {
-      return Buffer.from(data).toString('base64')
-    }
     const binary = String.fromCharCode(...data)
     return btoa(binary)
   }

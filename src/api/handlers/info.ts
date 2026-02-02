@@ -7,7 +7,7 @@
  */
 
 import type { RouteContext, Env, Handler } from '../router'
-import { KVFunctionRegistry } from '../../core/kv-function-registry'
+import { getStorageClientCompat } from './storage-compat'
 import { validateFunctionId } from '../../core/function-registry'
 import { jsonResponse, jsonErrorResponse } from '../http-utils'
 
@@ -51,8 +51,9 @@ export const infoHandler: Handler = async (
     return jsonErrorResponse('INVALID_FUNCTION_ID', message)
   }
 
-  const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
-  const metadata = await registry.get(functionId)
+  const userId = context?.authContext?.userId || 'anonymous'
+  const client = getStorageClientCompat(env, userId)
+  const metadata = await client.registry.get(functionId)
 
   if (!metadata) {
     return jsonErrorResponse('FUNCTION_NOT_FOUND', `Function not found: ${functionId}`)

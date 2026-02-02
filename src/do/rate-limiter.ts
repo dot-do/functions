@@ -1,7 +1,7 @@
 /**
  * Rate Limiter Durable Object
  *
- * Provides distributed rate limiting across Worker instances.
+ * Provides distributed rate limiting across Worker instances using Workers RPC.
  * This DO maintains rate limit state using SQLite storage for persistence
  * and supports sliding window counters for accurate rate limiting.
  *
@@ -12,28 +12,24 @@
  * - Atomic check-and-increment operations
  * - Window expiration handling
  * - SQLite-backed persistence
+ * - Workers RPC for direct method invocation (no HTTP overhead)
+ *
+ * Uses Workers RPC for direct method invocation instead of HTTP routes.
+ * Reference: https://developers.cloudflare.com/durable-objects/api/rpc/
  *
  * @module durable-object/rate-limiter
  */
+
+import { DurableObject } from 'cloudflare:workers'
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
 /**
- * Configuration for rate limiting behavior
- */
-export interface RateLimitConfig {
-  /** Time window in milliseconds (e.g., 60000 for 1 minute) */
-  windowMs: number
-  /** Maximum number of requests allowed per window */
-  maxRequests: number
-}
-
-/**
  * Result of a rate limit check
  */
-export interface RateLimitResult {
+export interface RateLimitCheckResult {
   /** Whether the request is allowed */
   allowed: boolean
   /** Number of requests remaining in the current window */
@@ -43,56 +39,21 @@ export interface RateLimitResult {
 }
 
 /**
- * Request body for rate limiter operations
+ * SQL row type for rate limit entries
  */
-export interface RateLimiterRequest {
-  /** Action to perform */
-  action: 'check' | 'increment' | 'checkAndIncrement' | 'reset' | 'getStats'
-  /** Key to rate limit (e.g., IP address, function ID) */
+type SqlStorageValue = string | number | null | ArrayBuffer
+
+interface RateLimitRow extends Record<string, SqlStorageValue> {
   key: string
-  /** Rate limit configuration */
-  config: RateLimitConfig
-}
-
-/**
- * Response from rate limiter operations
- */
-export interface RateLimiterResponse {
-  /** Operation result */
-  result?: RateLimitResult
-  /** Statistics (for getStats action) */
-  stats?: RateLimiterStats
-  /** Error message if operation failed */
-  error?: string
-}
-
-/**
- * Statistics about the rate limiter state
- */
-export interface RateLimiterStats {
-  /** Total number of tracked keys */
-  totalKeys: number
-  /** Number of currently active windows */
-  activeWindows: number
-  /** Total requests tracked */
-  totalRequests: number
-}
-
-/**
- * Window state for tracking requests
- */
-interface WindowState {
-  /** Number of requests in the current window */
   count: number
-  /** Unix timestamp (ms) when the window resets */
-  resetAt: number
+  reset_at: number
 }
 
 /**
  * Environment bindings for RateLimiterDO
  */
 interface Env {
-  // Environment bindings
+  // No specific bindings needed
 }
 
 // ============================================================================
@@ -103,18 +64,25 @@ interface Env {
  * RateLimiterDO - Distributed Rate Limiter Durable Object
  *
  * Provides atomic rate limiting operations that work across multiple
- * Worker instances. Uses in-memory storage for fast access with
- * optional SQLite persistence for durability.
+ * Worker instances. Uses SQLite storage for persistence and durability.
+ *
+ * Extends DurableObject for Workers RPC support - all public methods
+ * are callable directly via the stub without HTTP routing.
+ *
+ * Usage from a Worker:
+ * ```typescript
+ * const id = env.RATE_LIMITER.idFromName(clientIP)
+ * const stub = env.RATE_LIMITER.get(id)
+ * const result = await stub.check('api-key-123', 100, 60000)
+ * if (!result.allowed) { return new Response('Too Many Requests', { status: 429 }) }
+ * await stub.increment('api-key-123', 60000)
+ * ```
  */
-export class RateLimiterDO {
-  private ctx: DurableObjectState
-  private env: Env
-  private windows: Map<string, WindowState> = new Map()
-  private schemaInitialized: boolean = false
+export class RateLimiterDO extends DurableObject<Env> {
+  private schemaInitialized = false
 
   constructor(ctx: DurableObjectState, env: Env) {
-    this.ctx = ctx
-    this.env = env
+    super(ctx, env)
   }
 
   // ===========================================================================
@@ -141,42 +109,47 @@ export class RateLimiterDO {
     `)
 
     this.schemaInitialized = true
+  }
 
-    // Load existing rate limits from storage
-    this.loadFromStorage()
+  // ===========================================================================
+  // HELPER METHODS
+  // ===========================================================================
+
+  /**
+   * Safely get a single row from a SQL result, returning null if not found.
+   */
+  private oneOrNull<T extends Record<string, SqlStorageValue>>(
+    cursor: SqlStorageCursor<T>
+  ): T | null {
+    const rows = cursor.toArray()
+    return rows.length > 0 ? rows[0]! : null
   }
 
   /**
-   * Load rate limit state from SQLite storage
+   * Get the current window state for a key from storage
    */
-  private loadFromStorage(): void {
-    const results = this.ctx.storage.sql.exec<{
-      key: string
-      count: number
-      reset_at: number
-    }>(`SELECT key, count, reset_at FROM rate_limits`).toArray()
+  private getWindow(key: string): { count: number; resetAt: number } | null {
+    const row = this.oneOrNull(
+      this.ctx.storage.sql.exec<RateLimitRow>(
+        `SELECT key, count, reset_at FROM rate_limits WHERE key = ?`,
+        key
+      )
+    )
 
-    const now = Date.now()
-    for (const row of results) {
-      // Only load non-expired windows
-      if (row.reset_at > now) {
-        this.windows.set(row.key, {
-          count: row.count,
-          resetAt: row.reset_at,
-        })
-      }
-    }
+    if (!row) return null
+
+    return { count: row.count, resetAt: row.reset_at }
   }
 
   /**
    * Persist a rate limit window to storage
    */
-  private persistWindow(key: string, window: WindowState): void {
+  private persistWindow(key: string, count: number, resetAt: number): void {
     this.ctx.storage.sql.exec(
       `INSERT OR REPLACE INTO rate_limits (key, count, reset_at) VALUES (?, ?, ?)`,
       key,
-      window.count,
-      window.resetAt
+      count,
+      resetAt
     )
   }
 
@@ -188,244 +161,133 @@ export class RateLimiterDO {
   }
 
   // ===========================================================================
-  // RATE LIMITING OPERATIONS
+  // PUBLIC RPC METHODS
   // ===========================================================================
 
   /**
-   * Check if a request is allowed without incrementing the counter
+   * Check if a request is allowed for the given key without incrementing.
+   *
+   * @param key - Unique identifier for rate limiting (e.g., IP address, function ID)
+   * @param limit - Maximum number of requests allowed per window
+   * @param windowMs - Time window in milliseconds
+   * @returns Rate limit check result
    */
-  private check(key: string, config: RateLimitConfig): RateLimitResult {
-    const now = Date.now()
-    const window = this.windows.get(key)
+  async check(key: string, limit: number, windowMs: number): Promise<RateLimitCheckResult> {
+    this.initializeSchema()
 
-    // Handle zero maxRequests - never allow
-    if (config.maxRequests <= 0) {
-      return {
-        allowed: false,
-        remaining: 0,
-        resetAt: now + config.windowMs,
-      }
-    }
+    const now = Date.now()
+    const window = this.getWindow(key)
 
     // No existing window or window has expired
     if (!window || window.resetAt <= now) {
       return {
         allowed: true,
-        remaining: config.maxRequests - 1,
-        resetAt: now + config.windowMs,
+        remaining: Math.max(0, limit),
+        resetAt: now + windowMs,
       }
     }
 
     // Check against current window
-    const remaining = Math.max(0, config.maxRequests - window.count)
+    const remaining = Math.max(0, limit - window.count)
     return {
-      allowed: window.count < config.maxRequests,
+      allowed: window.count < limit,
       remaining,
       resetAt: window.resetAt,
     }
   }
 
   /**
-   * Increment the request count for the given key
+   * Increment the request count for the given key.
+   * Creates a new window if none exists or the current window has expired.
+   *
+   * @param key - Unique identifier for rate limiting
+   * @param windowMs - Time window in milliseconds
    */
-  private increment(key: string, config: RateLimitConfig): void {
+  async increment(key: string, windowMs: number): Promise<void> {
     this.initializeSchema()
 
     const now = Date.now()
-    const window = this.windows.get(key)
+    const window = this.getWindow(key)
 
     // Create new window or reset expired window
     if (!window || window.resetAt <= now) {
-      const newWindow: WindowState = {
-        count: 1,
-        resetAt: now + config.windowMs,
-      }
-      this.windows.set(key, newWindow)
-      this.persistWindow(key, newWindow)
+      this.persistWindow(key, 1, now + windowMs)
       return
     }
 
     // Increment existing window
-    window.count++
-    this.persistWindow(key, window)
+    this.persistWindow(key, window.count + 1, window.resetAt)
   }
 
   /**
-   * Check and increment atomically
+   * Reset the rate limit for a specific key.
+   * Removes the key from storage entirely.
+   *
+   * @param key - Unique identifier to reset
    */
-  private checkAndIncrement(key: string, config: RateLimitConfig): RateLimitResult {
+  async reset(key: string): Promise<void> {
+    this.initializeSchema()
+    this.deleteWindow(key)
+  }
+
+  /**
+   * Check and increment in one atomic operation.
+   * This is the most common operation for rate limiting.
+   *
+   * @param key - Unique identifier for rate limiting
+   * @param limit - Maximum number of requests allowed per window
+   * @param windowMs - Time window in milliseconds
+   * @returns Rate limit check result after the operation
+   */
+  async checkAndIncrement(key: string, limit: number, windowMs: number): Promise<RateLimitCheckResult> {
     this.initializeSchema()
 
     const now = Date.now()
-
-    // Handle zero maxRequests - never allow
-    if (config.maxRequests <= 0) {
-      return {
-        allowed: false,
-        remaining: 0,
-        resetAt: now + config.windowMs,
-      }
-    }
-
-    const window = this.windows.get(key)
+    const window = this.getWindow(key)
 
     // Create new window or reset expired window
     if (!window || window.resetAt <= now) {
-      const resetAt = now + config.windowMs
-      const newWindow: WindowState = {
-        count: 1,
-        resetAt,
-      }
-      this.windows.set(key, newWindow)
-      this.persistWindow(key, newWindow)
+      const resetAt = now + windowMs
+      this.persistWindow(key, 1, resetAt)
       return {
         allowed: true,
-        remaining: config.maxRequests - 1,
+        remaining: Math.max(0, limit - 1),
         resetAt,
       }
     }
 
     // Check and increment existing window
-    const allowed = window.count < config.maxRequests
+    const allowed = window.count < limit
     if (allowed) {
-      window.count++
-      this.persistWindow(key, window)
+      this.persistWindow(key, window.count + 1, window.resetAt)
     }
 
     return {
       allowed,
-      remaining: Math.max(0, config.maxRequests - window.count),
+      remaining: Math.max(0, limit - (allowed ? window.count + 1 : window.count)),
       resetAt: window.resetAt,
     }
   }
 
   /**
-   * Reset the rate limit for a specific key
+   * Clean up expired windows from storage.
+   *
+   * @returns Number of expired windows deleted
    */
-  private reset(key: string): void {
-    this.initializeSchema()
-    this.windows.delete(key)
-    this.deleteWindow(key)
-  }
-
-  /**
-   * Get statistics about the rate limiter state
-   */
-  private getStats(): RateLimiterStats {
-    const now = Date.now()
-    let activeWindows = 0
-    let totalRequests = 0
-
-    for (const window of this.windows.values()) {
-      if (window.resetAt > now) {
-        activeWindows++
-        totalRequests += window.count
-      }
-    }
-
-    return {
-      totalKeys: this.windows.size,
-      activeWindows,
-      totalRequests,
-    }
-  }
-
-  /**
-   * Cleanup expired windows
-   */
-  private cleanup(): number {
+  async cleanup(): Promise<number> {
     this.initializeSchema()
 
     const now = Date.now()
-    let deleted = 0
+    const expired = this.ctx.storage.sql.exec<RateLimitRow>(
+      `SELECT key FROM rate_limits WHERE reset_at <= ?`,
+      now
+    ).toArray()
 
-    for (const [key, window] of this.windows.entries()) {
-      if (window.resetAt <= now) {
-        this.windows.delete(key)
-        this.deleteWindow(key)
-        deleted++
-      }
+    for (const row of expired) {
+      this.deleteWindow(row.key)
     }
 
-    return deleted
-  }
-
-  // ===========================================================================
-  // HTTP HANDLER
-  // ===========================================================================
-
-  /**
-   * Handle HTTP requests to the rate limiter DO
-   */
-  async fetch(request: Request): Promise<Response> {
-    // Handle GET requests for stats
-    if (request.method === 'GET') {
-      const url = new URL(request.url)
-
-      if (url.pathname === '/stats') {
-        this.initializeSchema()
-        return Response.json({ stats: this.getStats() })
-      }
-
-      if (url.pathname === '/cleanup') {
-        const deleted = this.cleanup()
-        return Response.json({ deleted })
-      }
-
-      return Response.json({ error: 'Unknown endpoint' }, { status: 404 })
-    }
-
-    // Handle POST requests for rate limiting operations
-    if (request.method !== 'POST') {
-      return Response.json({ error: 'Method not allowed' }, { status: 405 })
-    }
-
-    try {
-      const body = await request.json() as RateLimiterRequest
-      const { action, key, config } = body
-
-      if (!key) {
-        return Response.json({ error: 'Missing key' }, { status: 400 })
-      }
-
-      if (!config && action !== 'reset' && action !== 'getStats') {
-        return Response.json({ error: 'Missing config' }, { status: 400 })
-      }
-
-      let result: RateLimiterResponse
-
-      switch (action) {
-        case 'check':
-          result = { result: this.check(key, config) }
-          break
-
-        case 'increment':
-          this.increment(key, config)
-          result = { result: this.check(key, config) }
-          break
-
-        case 'checkAndIncrement':
-          result = { result: this.checkAndIncrement(key, config) }
-          break
-
-        case 'reset':
-          this.reset(key)
-          result = { result: { allowed: true, remaining: config?.maxRequests ?? 0, resetAt: 0 } }
-          break
-
-        case 'getStats':
-          result = { stats: this.getStats() }
-          break
-
-        default:
-          return Response.json({ error: `Unknown action: ${action}` }, { status: 400 })
-      }
-
-      return Response.json(result)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      return Response.json({ error: message }, { status: 500 })
-    }
+    return expired.length
   }
 
   // ===========================================================================
@@ -433,24 +295,20 @@ export class RateLimiterDO {
   // ===========================================================================
 
   /**
-   * Handle alarm for periodic cleanup
+   * Handle alarm for periodic cleanup of expired windows.
    */
   async alarm(): Promise<void> {
-    this.cleanup()
+    await this.cleanup()
 
     // Schedule next cleanup if there are still windows
-    if (this.windows.size > 0) {
-      // Find the next expiration time
-      let nextExpiration = Infinity
-      for (const window of this.windows.values()) {
-        if (window.resetAt < nextExpiration) {
-          nextExpiration = window.resetAt
-        }
-      }
+    const nextExpiry = this.oneOrNull(
+      this.ctx.storage.sql.exec<{ min_reset: number }>(
+        `SELECT MIN(reset_at) as min_reset FROM rate_limits`
+      )
+    )
 
-      if (nextExpiration < Infinity) {
-        await this.ctx.storage.setAlarm(nextExpiration + 1000) // Add 1 second buffer
-      }
+    if (nextExpiry?.min_reset) {
+      await this.ctx.storage.setAlarm(nextExpiry.min_reset + 1000) // Add 1 second buffer
     }
   }
 }

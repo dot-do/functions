@@ -666,12 +666,19 @@ function createProvider(
  */
 export class FunctionClassifier {
   private providers: AIProvider[]
-  private cache: Map<string, ClassificationCacheEntry> = new Map()
-  private maxCacheSize: number
-  private defaultCacheTtlMs: number
+  /**
+   * Track cache keys for clearCache/invalidate operations.
+   * The actual cached data lives in Cloudflare's Cache API (caches.default),
+   * which persists across Worker isolates and requests.
+   */
+  private trackedCacheKeys: Set<string> = new Set()
+  private defaultCacheTtlSeconds: number
   private temperature: number
   private timeoutMs: number
   private maxRetriesPerProvider: number
+
+  /** Cache key URL prefix for classifier cache entries */
+  private static readonly CACHE_PREFIX = 'https://functions.do/cache/classifier/'
 
   constructor(
     options: ClassifierOptions,
@@ -690,8 +697,8 @@ export class FunctionClassifier {
     this.temperature = options.temperature ?? 0
     this.timeoutMs = options.timeoutMs ?? 10000
     this.maxRetriesPerProvider = options.maxRetriesPerProvider ?? 1
-    this.maxCacheSize = CLASSIFIER_CACHE.MAX_SIZE
-    this.defaultCacheTtlMs = CLASSIFIER_CACHE.TTL_MS
+    // Convert ms to seconds for Cache-Control max-age
+    this.defaultCacheTtlSeconds = Math.floor(CLASSIFIER_CACHE.TTL_MS / 1000)
   }
 
   /**
@@ -710,8 +717,8 @@ export class FunctionClassifier {
   ): Promise<ClassificationResult> {
     const cacheKey = this.computeCacheKey(name, description, inputSchema)
 
-    // Check in-memory cache first
-    const cached = this.getFromCache(cacheKey)
+    // Check Cache API first (persists across isolates/requests)
+    const cached = await this.getFromCache(cacheKey)
     if (cached) {
       return cached
     }
@@ -737,8 +744,8 @@ export class FunctionClassifier {
             latencyMs: Date.now() - startTime,
           }
 
-          // Cache the result in-memory
-          this.setInCache(cacheKey, result)
+          // Cache the result in Cache API (persists across isolates)
+          await this.setInCache(cacheKey, result)
 
           return result
         } catch (error) {
@@ -763,29 +770,57 @@ export class FunctionClassifier {
   }
 
   /**
-   * Get the number of cached classifications
+   * Get the number of tracked cache keys (for this instance).
+   * Note: The actual cache lives in Cache API and may contain entries
+   * from other classifier instances.
    */
   getCacheSize(): number {
-    return this.cache.size
+    return this.trackedCacheKeys.size
   }
 
   /**
-   * Clear the classification cache
+   * Clear all tracked classification cache entries from Cache API.
    */
-  clearCache(): void {
-    this.cache.clear()
+  async clearCache(): Promise<void> {
+    try {
+      const cache = this.getCache()
+      if (cache) {
+        const deletePromises = Array.from(this.trackedCacheKeys).map((key) => {
+          const url = FunctionClassifier.CACHE_PREFIX + encodeURIComponent(key)
+          return cache.delete(new Request(url))
+        })
+        await Promise.all(deletePromises)
+      }
+    } catch (error) {
+      // Cache clear failed - non-fatal, entries will expire via TTL
+      console.debug('[classifier-cache] clear error:', error instanceof Error ? error.message : String(error))
+    }
+    this.trackedCacheKeys.clear()
   }
 
   /**
-   * Invalidate a specific cache entry
+   * Invalidate a specific cache entry from Cache API.
    */
-  invalidate(
+  async invalidate(
     name: string,
     description?: string,
     inputSchema?: Record<string, unknown>
-  ): boolean {
+  ): Promise<boolean> {
     const cacheKey = this.computeCacheKey(name, description, inputSchema)
-    return this.cache.delete(cacheKey)
+    try {
+      const cache = this.getCache()
+      if (!cache) {
+        this.trackedCacheKeys.delete(cacheKey)
+        return false
+      }
+      const url = FunctionClassifier.CACHE_PREFIX + encodeURIComponent(cacheKey)
+      const deleted = await cache.delete(new Request(url))
+      this.trackedCacheKeys.delete(cacheKey)
+      return !!deleted
+    } catch (error) {
+      console.debug('[classifier-cache] invalidate error:', error instanceof Error ? error.message : String(error))
+      return false
+    }
   }
 
   /**
@@ -807,42 +842,68 @@ export class FunctionClassifier {
   }
 
   /**
-   * Get a cached classification result if still valid.
+   * Get the Cache API default cache, or null if not available.
+   * Defensive against environments where caches.default is undefined or broken.
    */
-  private getFromCache(key: string): ClassificationResult | null {
-    const entry = this.cache.get(key)
-    if (!entry) return null
-
-    // Check TTL
-    if (Date.now() - entry.timestamp > entry.ttl) {
-      this.cache.delete(key)
+  private getCache(): Cache | null {
+    try {
+      const cache = typeof caches !== 'undefined' ? caches.default : undefined
+      if (!cache || typeof cache.match !== 'function') return null
+      return cache
+    } catch {
       return null
     }
-
-    // Move to end for LRU ordering
-    this.cache.delete(key)
-    this.cache.set(key, entry)
-
-    return entry.result
   }
 
   /**
-   * Cache a classification result with LRU eviction.
+   * Get a cached classification result from Cache API.
+   * Returns null on cache miss or error (caller should proceed to AI classification).
    */
-  private setInCache(key: string, result: ClassificationResult): void {
-    // Evict oldest if at capacity
-    if (this.cache.size >= this.maxCacheSize) {
-      const oldestKey = this.cache.keys().next().value
-      if (oldestKey !== undefined) {
-        this.cache.delete(oldestKey)
+  private async getFromCache(key: string): Promise<ClassificationResult | null> {
+    try {
+      const cache = this.getCache()
+      if (!cache) return null
+      const url = FunctionClassifier.CACHE_PREFIX + encodeURIComponent(key)
+      const cached = await cache.match(new Request(url))
+      if (cached) {
+        const entry = await cached.json() as ClassificationCacheEntry
+        // Track this key for clearCache/invalidate
+        this.trackedCacheKeys.add(key)
+        return entry.result
       }
+    } catch (error) {
+      // Cache miss or parse error - fall through to AI classification
+      console.debug('[classifier-cache] get error:', error instanceof Error ? error.message : String(error))
     }
+    return null
+  }
 
-    this.cache.set(key, {
-      result,
-      timestamp: Date.now(),
-      ttl: this.defaultCacheTtlMs,
-    })
+  /**
+   * Store a classification result in Cache API with TTL.
+   * Uses Cache-Control max-age for automatic TTL-based expiration.
+   */
+  private async setInCache(key: string, result: ClassificationResult): Promise<void> {
+    try {
+      const cache = this.getCache()
+      if (!cache) return
+      const url = FunctionClassifier.CACHE_PREFIX + encodeURIComponent(key)
+      const entry: ClassificationCacheEntry = {
+        result,
+        timestamp: Date.now(),
+        ttl: this.defaultCacheTtlSeconds * 1000,
+      }
+      const response = new Response(JSON.stringify(entry), {
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': `max-age=${this.defaultCacheTtlSeconds}`,
+        },
+      })
+      await cache.put(new Request(url), response)
+      this.trackedCacheKeys.add(key)
+    } catch (error) {
+      // Cache put failed - non-fatal, classification result is still returned
+      console.debug('[classifier-cache] put error:', error instanceof Error ? error.message : String(error))
+    }
   }
 }
 

@@ -328,12 +328,20 @@ export function createLogger(config: LoggerConfig = {}): Logger {
 }
 
 /**
- * Get log level from environment
- * Checks process.env.LOG_LEVEL or defaults to 'info'
+ * Get log level from environment bindings or defaults to 'info'.
+ *
+ * In Workers, pass `env.LOG_LEVEL` from the Worker bindings.
+ * Falls back to checking globalThis for Node.js/test compatibility.
+ *
+ * @param envLogLevel - Optional log level from Worker env bindings
  */
-export function getLogLevelFromEnv(): LogLevel {
-  if (typeof process !== 'undefined' && process.env?.['LOG_LEVEL']) {
-    const level = process.env['LOG_LEVEL'].toLowerCase() as LogLevel
+export function getLogLevelFromEnv(envLogLevel?: string): LogLevel {
+  const raw = envLogLevel
+    ?? (typeof globalThis !== 'undefined' && 'process' in globalThis
+      ? (globalThis as any).process?.env?.['LOG_LEVEL']
+      : undefined)
+  if (raw) {
+    const level = raw.toLowerCase() as LogLevel
     if (level in LOG_LEVEL_VALUES) {
       return level
     }
@@ -342,21 +350,32 @@ export function getLogLevelFromEnv(): LogLevel {
 }
 
 /**
- * Get log format from environment
- * Checks process.env.LOG_FORMAT or defaults based on NODE_ENV
+ * Get log format from environment bindings or defaults based on environment.
+ *
+ * In Workers, pass `env.LOG_FORMAT` from the Worker bindings.
+ * Falls back to checking globalThis for Node.js/test compatibility.
+ *
+ * @param envLogFormat - Optional log format from Worker env bindings
+ * @param isProduction - Whether running in production (defaults to false)
  */
-export function getLogFormatFromEnv(): 'json' | 'text' {
-  if (typeof process !== 'undefined') {
-    if (process.env?.['LOG_FORMAT'] === 'json') {
-      return 'json'
-    }
-    if (process.env?.['LOG_FORMAT'] === 'text') {
-      return 'text'
-    }
-    // Default to JSON in production, text in development
-    if (process.env?.['NODE_ENV'] === 'production') {
-      return 'json'
-    }
+export function getLogFormatFromEnv(envLogFormat?: string, isProduction?: boolean): 'json' | 'text' {
+  const raw = envLogFormat
+    ?? (typeof globalThis !== 'undefined' && 'process' in globalThis
+      ? (globalThis as any).process?.env?.['LOG_FORMAT']
+      : undefined)
+  if (raw === 'json') {
+    return 'json'
+  }
+  if (raw === 'text') {
+    return 'text'
+  }
+  // Check production flag or Node.js NODE_ENV
+  if (isProduction) {
+    return 'json'
+  }
+  if (typeof globalThis !== 'undefined' && 'process' in globalThis
+    && (globalThis as any).process?.env?.['NODE_ENV'] === 'production') {
+    return 'json'
   }
   return 'text'
 }

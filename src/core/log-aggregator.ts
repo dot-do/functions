@@ -994,7 +994,7 @@ export class LogAggregator {
     // Validate cursor
     if (cursor) {
       try {
-        const decoded = JSON.parse(Buffer.from(cursor, 'base64').toString())
+        const decoded = JSON.parse(atob(cursor))
         if (!decoded.offset || typeof decoded.offset !== 'number') {
           throw new Error('Invalid cursor')
         }
@@ -1008,7 +1008,7 @@ export class LogAggregator {
 
     if (cursor) {
       try {
-        const decoded = JSON.parse(Buffer.from(cursor, 'base64').toString())
+        const decoded = JSON.parse(atob(cursor))
         offset = decoded.offset
       } catch {
         throw new Error('Invalid cursor')
@@ -1020,7 +1020,7 @@ export class LogAggregator {
 
     let nextCursor: string | null = null
     if (hasMore) {
-      nextCursor = Buffer.from(JSON.stringify({ offset: offset + effectiveLimit })).toString('base64')
+      nextCursor = btoa(JSON.stringify({ offset: offset + effectiveLimit }))
     }
 
     return {

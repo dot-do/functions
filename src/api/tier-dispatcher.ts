@@ -9,9 +9,13 @@
  */
 
 import type { FunctionMetadata } from '../core/types'
+import { createUserStorageClient } from '../core/user-storage-client'
+import { KVFunctionRegistry } from '../core/kv-function-registry'
+import { KVCodeStorage } from '../core/code-storage'
 import { CodeExecutor, type CodeExecutorEnv, type CodeFunctionResultWithCache } from '../tiers/code-executor'
 import { GenerativeExecutor, type GenerativeExecutorOptions } from '../tiers/generative-executor'
 import { AgenticExecutor } from '../tiers/agentic-executor'
+import { validateFetchUrl } from '../core/ssrf-protection'
 import { TIER_TIMEOUT_MAP } from '../config'
 import type {
   CodeFunctionDefinition,
@@ -64,10 +68,6 @@ export const TIER_TIMEOUTS: Record<TierNumber, number> = TIER_TIMEOUT_MAP
  * Extended environment with all tier executor bindings
  */
 export interface TierDispatcherEnv {
-  /** KV for function registry */
-  FUNCTIONS_REGISTRY: KVNamespace
-  /** KV for code storage */
-  FUNCTIONS_CODE: KVNamespace
   /** Worker loader for code execution */
   LOADER?: unknown
   /** Dispatch namespace for code execution */
@@ -78,6 +78,12 @@ export interface TierDispatcherEnv {
   HUMAN_TASKS?: DurableObjectNamespace
   /** R2 bucket for code storage */
   CODE_STORAGE?: R2Bucket
+  /** Per-user storage Durable Object namespace */
+  USER_STORAGE?: DurableObjectNamespace
+  /** @deprecated KV function registry (fallback when USER_STORAGE is not available) */
+  FUNCTIONS_REGISTRY?: KVNamespace
+  /** @deprecated KV code storage (fallback when USER_STORAGE is not available) */
+  FUNCTIONS_CODE?: KVNamespace
 }
 
 /**
@@ -266,7 +272,6 @@ export class TierDispatcher {
     const codeEnv: CodeExecutorEnv = {
       LOADER: env.LOADER as Fetcher | undefined,
       CODE_STORAGE: env.CODE_STORAGE,
-      FUNCTION_REGISTRY: env.FUNCTIONS_REGISTRY,
     }
     this.codeExecutor = new CodeExecutor(codeEnv)
 
@@ -965,6 +970,11 @@ export class TierDispatcher {
       case 'web_fetch':
         return async (input: unknown) => {
           const { url, method = 'GET' } = input as { url: string; method?: string }
+          // SSRF protection: validate URL before fetching
+          const validation = validateFetchUrl(url)
+          if (!validation.valid) {
+            return { error: `SSRF protection: ${validation.reason}`, blocked: true }
+          }
           try {
             const response = await fetch(url, { method })
             const contentType = response.headers.get('content-type') || ''
@@ -1119,23 +1129,42 @@ export class TierDispatcher {
   }
 
   /**
-   * Get metadata for a step function
+   * Get metadata for a step function via UserStorage DO
    */
   private async getStepMetadata(functionId: string): Promise<ExtendedMetadata | null> {
     try {
-      const data = await this.env.FUNCTIONS_REGISTRY.get(`registry:${functionId}`, 'json')
-      return data as ExtendedMetadata | null
+      if (this.env.USER_STORAGE) {
+        const client = createUserStorageClient(this.env.USER_STORAGE, 'anonymous')
+        const data = await client.registry.get(functionId)
+        return data as ExtendedMetadata | null
+      }
+      // KV fallback
+      if (this.env.FUNCTIONS_REGISTRY) {
+        const registry = new KVFunctionRegistry(this.env.FUNCTIONS_REGISTRY)
+        const data = await registry.get(functionId)
+        return data as ExtendedMetadata | null
+      }
+      return null
     } catch {
       return null
     }
   }
 
   /**
-   * Get code for a step function
+   * Get code for a step function via UserStorage DO or KV fallback
    */
   private async getStepCode(functionId: string): Promise<string | undefined> {
     try {
-      return await this.env.FUNCTIONS_CODE.get(`code:${functionId}`, 'text') || undefined
+      if (this.env.USER_STORAGE) {
+        const client = createUserStorageClient(this.env.USER_STORAGE, 'anonymous')
+        return await client.code.get(functionId) || undefined
+      }
+      // KV fallback
+      if (this.env.FUNCTIONS_CODE) {
+        const code = new KVCodeStorage(this.env.FUNCTIONS_CODE)
+        return await code.get(functionId) || undefined
+      }
+      return undefined
     } catch {
       return undefined
     }

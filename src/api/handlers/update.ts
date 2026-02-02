@@ -7,7 +7,7 @@
  */
 
 import type { RouteContext, Env, Handler } from '../router'
-import { KVFunctionRegistry } from '../../core/kv-function-registry'
+import { getStorageClientCompat } from './storage-compat'
 import { validateFunctionId } from '../../core/function-registry'
 import { jsonResponse } from '../http-utils'
 
@@ -133,10 +133,11 @@ export const updateHandler: Handler = async (
     }
   }
 
-  const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
+  const userId = context?.authContext?.userId || 'anonymous'
+  const client = getStorageClientCompat(env, userId)
 
   // Check if function exists
-  const existing = await registry.get(functionId)
+  const existing = await client.registry.get(functionId)
   if (!existing) {
     return jsonResponse({ error: `Function not found: ${functionId}` }, 404)
   }
@@ -163,7 +164,7 @@ export const updateHandler: Handler = async (
   }
 
   // Perform the update
-  const updatedMetadata = await registry.update(functionId, updates)
+  const updatedMetadata = await client.registry.update(functionId, updates)
 
   // Return the updated metadata
   return jsonResponse({

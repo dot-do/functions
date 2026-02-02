@@ -27,6 +27,7 @@ import type { FunctionMetadata } from '../core/types'
 import { compareVersions } from '../core/types'
 import { validateFunctionId } from '../core/function-registry'
 import { ValidationError, NotFoundError } from '../core/errors'
+import { validateFunctionMetadata } from '../core/validation'
 
 // ============================================================================
 // TYPES
@@ -343,7 +344,7 @@ export class UserStorage extends DurableObject<Env> {
 
     if (!result) return null
 
-    return JSON.parse(result.metadata_json) as FunctionMetadata
+    return validateFunctionMetadata(JSON.parse(result.metadata_json))
   }
 
   /**
@@ -362,7 +363,7 @@ export class UserStorage extends DurableObject<Env> {
     ).toArray()
 
     const hasMore = rows.length > limit
-    const items = rows.slice(0, limit).map(row => JSON.parse(row.metadata_json as string) as FunctionMetadata)
+    const items = rows.slice(0, limit).map(row => validateFunctionMetadata(JSON.parse(row.metadata_json as string)))
 
     const result: ListResult<FunctionMetadata> = {
       items,
@@ -463,7 +464,7 @@ export class UserStorage extends DurableObject<Env> {
     )
 
     if (!result) return null
-    return JSON.parse(result.metadata_json) as FunctionMetadata
+    return validateFunctionMetadata(JSON.parse(result.metadata_json))
   }
 
   /**

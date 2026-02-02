@@ -1,6 +1,7 @@
 import type { FunctionMetadata } from './types'
 import { compareVersions } from './types'
 import { ValidationError, NotFoundError } from './errors'
+import { validateFunctionMetadata } from './validation'
 
 /**
  * KVFunctionRegistry manages function metadata in the FUNCTIONS_REGISTRY
@@ -53,7 +54,8 @@ export class KVFunctionRegistry {
 
     const key = `registry:${functionId}`
     const result = await this.kv.get(key, 'json')
-    return result as FunctionMetadata | null
+    if (result === null) return null
+    return validateFunctionMetadata(result)
   }
 
   /**
@@ -103,7 +105,7 @@ export class KVFunctionRegistry {
     for (const key of keysToFetch) {
       const metadata = await this.kv.get(key.name, 'json')
       if (metadata) {
-        functions.push(metadata as FunctionMetadata)
+        functions.push(validateFunctionMetadata(metadata))
       }
     }
 
@@ -176,7 +178,8 @@ export class KVFunctionRegistry {
   async getVersion(functionId: string, version: string): Promise<FunctionMetadata | null> {
     const key = `registry:${functionId}:v:${version}`
     const result = await this.kv.get(key, 'json')
-    return result as FunctionMetadata | null
+    if (result === null) return null
+    return validateFunctionMetadata(result)
   }
 
   /**

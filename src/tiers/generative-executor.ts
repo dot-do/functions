@@ -700,7 +700,7 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
     latencyMs: number
   }> {
     const abortController = new AbortController()
-    let timeoutId: NodeJS.Timeout | undefined
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
     let timedOut = false
 
     // Set up timeout

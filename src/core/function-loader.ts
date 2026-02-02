@@ -190,10 +190,7 @@ export class FunctionLoadError extends Error {
     this.timestamp = Date.now()
     this.isCoalescedRequest = options.isCoalescedRequest ?? false
 
-    // Maintain proper stack trace for debugging
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, FunctionLoadError)
-    }
+    // Stack trace is automatically captured by the Error constructor in V8/Workers
   }
 
   /**

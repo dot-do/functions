@@ -872,7 +872,7 @@ describe('CodeExecutor', () => {
       expect(result.output).toEqual({ typed: '123' })
     })
 
-    it('should dispatch Rust to WASM compiler', async () => {
+    it('should throw for Rust (not yet supported)', async () => {
       const fn = createTestCodeFunction<{ n: number }, { factorial: number }>(
         'rust-factorial',
         `
@@ -884,12 +884,7 @@ describe('CodeExecutor', () => {
         { language: 'rust' }
       )
 
-      const result = await executor.execute(fn, { n: 5 })
-
-      expect(result.status).toBe('completed')
-      expect(result.codeExecution.language).toBe('rust')
-      expect(result.codeExecution.isolateType).toBe('wasm')
-      expect(result.output).toEqual({ factorial: 120 })
+      await expect(executor.execute(fn, { n: 5 })).rejects.toThrow(/not yet supported|not supported|unsupported language/i)
     })
 
     it('should dispatch Python to Pyodide', async () => {
@@ -909,7 +904,7 @@ describe('CodeExecutor', () => {
       expect(result.output).toEqual({ sorted: ['a', 'b', 'c'] })
     })
 
-    it('should dispatch Go to TinyGo WASM', async () => {
+    it('should throw for Go (not yet supported)', async () => {
       const fn = createTestCodeFunction<{ text: string }, { upper: string }>(
         'go-upper',
         `
@@ -927,12 +922,7 @@ describe('CodeExecutor', () => {
         { language: 'go' }
       )
 
-      const result = await executor.execute(fn, { text: 'hello' })
-
-      expect(result.status).toBe('completed')
-      expect(result.codeExecution.language).toBe('go')
-      expect(result.codeExecution.isolateType).toBe('wasm')
-      expect(result.output).toEqual({ upper: 'HELLO' })
+      await expect(executor.execute(fn, { text: 'hello' })).rejects.toThrow(/not yet supported|not supported|unsupported language/i)
     })
 
     it('should throw for unsupported language', async () => {
@@ -945,7 +935,7 @@ describe('CodeExecutor', () => {
       await expect(executor.execute(fn, {})).rejects.toThrow(/unsupported language/i)
     })
 
-    it('should support AssemblyScript', async () => {
+    it('should throw for AssemblyScript (not yet supported)', async () => {
       const fn = createTestCodeFunction<{ a: number; b: number }, { product: number }>(
         'asc-multiply',
         `
@@ -956,14 +946,10 @@ describe('CodeExecutor', () => {
         { language: 'assemblyscript' }
       )
 
-      const result = await executor.execute(fn, { a: 7, b: 6 })
-
-      expect(result.status).toBe('completed')
-      expect(result.codeExecution.language).toBe('assemblyscript')
-      expect(result.codeExecution.isolateType).toBe('wasm')
+      await expect(executor.execute(fn, { a: 7, b: 6 })).rejects.toThrow(/not yet supported|not supported|unsupported language/i)
     })
 
-    it('should support Zig', async () => {
+    it('should throw for Zig (not yet supported)', async () => {
       const fn = createTestCodeFunction<{ x: number }, { squared: number }>(
         'zig-square',
         `
@@ -974,14 +960,10 @@ describe('CodeExecutor', () => {
         { language: 'zig' }
       )
 
-      const result = await executor.execute(fn, { x: 9 })
-
-      expect(result.status).toBe('completed')
-      expect(result.codeExecution.language).toBe('zig')
-      expect(result.codeExecution.isolateType).toBe('wasm')
+      await expect(executor.execute(fn, { x: 9 })).rejects.toThrow(/not yet supported|not supported|unsupported language/i)
     })
 
-    it('should support C#', async () => {
+    it('should throw for C# (not yet supported)', async () => {
       const fn = createTestCodeFunction<{ name: string }, { greeting: string }>(
         'csharp-greet',
         `
@@ -995,10 +977,7 @@ describe('CodeExecutor', () => {
         { language: 'csharp' }
       )
 
-      const result = await executor.execute(fn, { name: 'Developer' })
-
-      expect(result.status).toBe('completed')
-      expect(result.codeExecution.language).toBe('csharp')
+      await expect(executor.execute(fn, { name: 'Developer' })).rejects.toThrow(/not yet supported|not supported|unsupported language/i)
     })
   })
 
@@ -1316,7 +1295,7 @@ describe('CodeExecutor', () => {
       expect(result.codeExecution.deterministic).toBe(true)
     })
 
-    it('should return codeExecution.compilationTimeMs for compiled languages', async () => {
+    it('should throw for compiled languages (not yet supported)', async () => {
       const fn = createTestCodeFunction(
         'metrics-compilation',
         `
@@ -1326,11 +1305,7 @@ describe('CodeExecutor', () => {
         { language: 'rust' }
       )
 
-      const result = await executor.execute(fn, {})
-
-      expect(result.codeExecution).toBeDefined()
-      expect(typeof result.codeExecution.compilationTimeMs).toBe('number')
-      expect(result.codeExecution.compilationTimeMs).toBeGreaterThanOrEqual(0)
+      await expect(executor.execute(fn, {})).rejects.toThrow(/not yet supported|not supported|unsupported language/i)
     })
 
     it('should track metrics across multiple executions', async () => {
@@ -1971,238 +1946,19 @@ describe('CodeExecutor', () => {
     // These tests validate the Worker Loaders approach with LOADER.put().
     // ========================================================================
 
-    it('should load WASM from static assets and prepare for worker_loaders execution', async () => {
-      // Create mock WASM binary (minimal valid WASM module magic bytes + version)
-      const wasmBytes = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
+    // NOTE: WASM source loading tests are skipped because WASM languages (Rust, Go, etc.)
+    // are not yet supported. The fake regex-based compilers were removed in favor of honest
+    // "not yet supported" errors. These tests will be re-enabled when real WASM compilation
+    // is implemented. See: src/core/__tests__/honest-language-support.test.ts
 
-      // Mock ASSETS binding
-      const mockAssets = {
-        fetch: vi.fn().mockImplementation(async (request: Request) => {
-          const url = new URL(request.url)
-          if (url.pathname === '/wasm/my-wasm-function/latest.wasm') {
-            return new Response(wasmBytes, {
-              status: 200,
-              headers: { 'Content-Type': 'application/wasm' },
-            })
-          }
-          return new Response('Not Found', { status: 404 })
-        }),
-      } as unknown as Fetcher
-
-      const executorWithAssets = new CodeExecutor({
-        ...mockEnv,
-        ASSETS: mockAssets,
-      })
-
+    it('should throw for WASM asset sources (language not yet supported)', async () => {
       const fn = createTestCodeFunctionWithSource(
         'assets-source',
         { type: 'assets', functionId: toFunctionId('my-wasm-function') },
         { language: 'rust' }
       )
 
-      // The loadSource method returns a marker string: __WASM_ASSETS__:{functionId}:{version}
-      // This marker is used by executeCode to load the binary and execute via worker_loaders
-      const result = await executorWithAssets.execute(fn, {})
-
-      // Verify the ASSETS binding was called with the correct path
-      expect(mockAssets.fetch).toHaveBeenCalled()
-      const fetchCall = vi.mocked(mockAssets.fetch).mock.calls[0][0] as Request
-      expect(fetchCall.url).toContain('/wasm/my-wasm-function/latest.wasm')
-    })
-
-    it('should load versioned WASM from static assets', async () => {
-      const wasmBytes = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
-
-      const mockAssets = {
-        fetch: vi.fn().mockImplementation(async (request: Request) => {
-          const url = new URL(request.url)
-          if (url.pathname === '/wasm/my-wasm-function/2.0.0.wasm') {
-            return new Response(wasmBytes, {
-              status: 200,
-              headers: { 'Content-Type': 'application/wasm' },
-            })
-          }
-          return new Response('Not Found', { status: 404 })
-        }),
-      } as unknown as Fetcher
-
-      const executorWithAssets = new CodeExecutor({
-        ...mockEnv,
-        ASSETS: mockAssets,
-      })
-
-      const fn = createTestCodeFunctionWithSource(
-        'versioned-assets-source',
-        { type: 'assets', functionId: toFunctionId('my-wasm-function'), version: '2.0.0' },
-        { language: 'rust' }
-      )
-
-      await executorWithAssets.execute(fn, {})
-
-      expect(mockAssets.fetch).toHaveBeenCalled()
-      const fetchCall = vi.mocked(mockAssets.fetch).mock.calls[0][0] as Request
-      expect(fetchCall.url).toContain('/wasm/my-wasm-function/2.0.0.wasm')
-    })
-
-    it('should throw for missing ASSETS binding', async () => {
-      const executorNoAssets = new CodeExecutor({
-        ...mockEnv,
-        ASSETS: undefined,
-      })
-
-      const fn = createTestCodeFunctionWithSource(
-        'no-assets-binding',
-        { type: 'assets', functionId: toFunctionId('my-wasm-function') },
-        { language: 'rust' }
-      )
-
-      await expect(executorNoAssets.execute(fn, {})).rejects.toThrow(/assets|binding|not configured/i)
-    })
-
-    it('should throw for WASM not found in assets', async () => {
-      const mockAssets = {
-        fetch: vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 })),
-      } as unknown as Fetcher
-
-      const executorWithAssets = new CodeExecutor({
-        ...mockEnv,
-        ASSETS: mockAssets,
-      })
-
-      const fn = createTestCodeFunctionWithSource(
-        'missing-wasm',
-        { type: 'assets', functionId: toFunctionId('non-existent-function') },
-        { language: 'rust' }
-      )
-
-      await expect(executorWithAssets.execute(fn, {})).rejects.toThrow(/not found|assets/i)
-    })
-
-    it('should throw for assets fetch error', async () => {
-      const mockAssets = {
-        fetch: vi.fn().mockResolvedValue(new Response('Internal Server Error', { status: 500, statusText: 'Internal Server Error' })),
-      } as unknown as Fetcher
-
-      const executorWithAssets = new CodeExecutor({
-        ...mockEnv,
-        ASSETS: mockAssets,
-      })
-
-      const fn = createTestCodeFunctionWithSource(
-        'assets-error',
-        { type: 'assets', functionId: toFunctionId('error-function') },
-        { language: 'rust' }
-      )
-
-      await expect(executorWithAssets.execute(fn, {})).rejects.toThrow(/500|Internal Server Error|fetch/i)
-    })
-
-    it('should execute WASM via worker_loaders when LOADER.put is available', async () => {
-      // Create mock WASM binary (minimal valid WASM module)
-      const wasmBytes = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
-
-      // Mock ASSETS binding
-      const mockAssets = {
-        fetch: vi.fn().mockImplementation(async (request: Request) => {
-          const url = new URL(request.url)
-          if (url.pathname.includes('/wasm/wasm-loader-test/')) {
-            return new Response(wasmBytes, {
-              status: 200,
-              headers: { 'Content-Type': 'application/wasm' },
-            })
-          }
-          return new Response('Not Found', { status: 404 })
-        }),
-      } as unknown as Fetcher
-
-      // Mock LOADER binding with put() method (WorkerLoaderBinding)
-      const mockWorkerStub = {
-        fetch: vi.fn().mockResolvedValue(
-          new Response(JSON.stringify({ output: { result: 42 } }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          })
-        ),
-      }
-
-      const mockLoader = {
-        put: vi.fn().mockResolvedValue(mockWorkerStub),
-      }
-
-      const executorWithLoader = new CodeExecutor({
-        ...mockEnv,
-        ASSETS: mockAssets,
-        LOADER: mockLoader as unknown as Fetcher,
-      })
-
-      const fn = createTestCodeFunctionWithSource(
-        'wasm-loader-test',
-        { type: 'assets', functionId: toFunctionId('wasm-loader-test') },
-        { language: 'rust' }
-      )
-
-      const result = await executorWithLoader.execute(fn, { input: 'test' })
-
-      // Verify LOADER.put was called with the correct parameters
-      expect(mockLoader.put).toHaveBeenCalledWith(
-        'wasm-loader-test',
-        expect.stringContaining('import wasmModule from "./module.wasm"'),
-        expect.objectContaining({
-          modules: expect.arrayContaining([
-            expect.objectContaining({
-              name: 'module.wasm',
-              type: 'compiled',
-              content: wasmBytes,
-            }),
-          ]),
-        })
-      )
-
-      // Verify the worker was invoked
-      expect(mockWorkerStub.fetch).toHaveBeenCalled()
-
-      // Verify the result
-      expect(result.status).toBe('completed')
-      expect(result.output).toEqual({ result: 42 })
-    })
-
-    it('should fail gracefully when LOADER.put is not available for WASM', async () => {
-      // Create mock WASM binary
-      const wasmBytes = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
-
-      // Mock ASSETS binding
-      const mockAssets = {
-        fetch: vi.fn().mockImplementation(async (request: Request) => {
-          const url = new URL(request.url)
-          if (url.pathname.includes('/wasm/no-loader-wasm/')) {
-            return new Response(wasmBytes, {
-              status: 200,
-              headers: { 'Content-Type': 'application/wasm' },
-            })
-          }
-          return new Response('Not Found', { status: 404 })
-        }),
-      } as unknown as Fetcher
-
-      // NO LOADER binding - WASM execution should fail
-      const executorNoLoader = new CodeExecutor({
-        ...mockEnv,
-        ASSETS: mockAssets,
-        LOADER: undefined,
-      })
-
-      const fn = createTestCodeFunctionWithSource(
-        'no-loader-wasm',
-        { type: 'assets', functionId: toFunctionId('no-loader-wasm') },
-        { language: 'rust' }
-      )
-
-      const result = await executorNoLoader.execute(fn, {})
-
-      // Should fail with a clear error about worker_loaders requirement
-      expect(result.status).toBe('failed')
-      expect(result.error).toBeDefined()
-      expect(result.error?.message).toMatch(/worker_loaders|LOADER\.put|WASM/i)
+      await expect(executor.execute(fn, {})).rejects.toThrow(/not yet supported|not supported|unsupported language/i)
     })
 
     it('documents the Cloudflare Workers WASM limitation', () => {

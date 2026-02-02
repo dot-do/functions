@@ -17,8 +17,9 @@ import { authValidateHandler, authMeHandler, authOrgsHandler } from './handlers/
 import { createAuthMiddleware, authMiddleware, AuthMiddlewareResult } from './middleware/auth'
 import { createRateLimitMiddleware, rateLimitMiddleware, RateLimitResult } from './middleware/rate-limit'
 import { createCSRFMiddleware, csrfMiddleware, generateCSRFToken, createCSRFCookie } from './middleware/csrf'
-import { InMemoryRateLimiter, CompositeRateLimiter, RateLimitConfig } from '../core/rate-limiter'
+import { RateLimitConfig, InMemoryRateLimiter } from '../core/rate-limiter'
 import { jsonResponse } from './http-utils'
+import type { RateLimiterDO } from '../do/rate-limiter'
 
 /**
  * esbuild-compiler RPC interface for TypeScript compilation via Service Binding.
@@ -78,8 +79,10 @@ export interface WorkersAI {
 }
 
 export interface Env {
-  FUNCTIONS_REGISTRY: KVNamespace
-  FUNCTIONS_CODE: KVNamespace
+  /** @deprecated Use USER_STORAGE Durable Object instead. Kept for backward compat. */
+  FUNCTIONS_REGISTRY?: KVNamespace
+  /** @deprecated Use USER_STORAGE Durable Object instead. Kept for backward compat. */
+  FUNCTIONS_CODE?: KVNamespace
   FUNCTIONS_API_KEYS?: KVNamespace
   FUNCTION_LOGS?: DurableObjectNamespace
   LOADER?: unknown
@@ -105,6 +108,12 @@ export interface Env {
    * Replaces KV-based storage with strong consistency and per-user isolation.
    */
   USER_STORAGE?: DurableObjectNamespace
+  /**
+   * Rate Limiter Durable Object namespace.
+   * Provides distributed rate limiting that persists across Worker isolates.
+   * Replaces in-memory rate limiting which resets on each isolate.
+   */
+  RATE_LIMITER?: DurableObjectNamespace<RateLimiterDO>
 }
 
 /**
@@ -285,7 +294,9 @@ function parseRouteArgs(method: string, pattern: string, args: (Middleware | Han
 export function createRouter(): Router {
   const routes: Route[] = []
   const globalMiddleware: Middleware[] = []
-  let rateLimiter: CompositeRateLimiter | null = null
+  let rateLimitConfig: { ip?: RateLimitConfig; function?: RateLimitConfig } | null = null
+  let fallbackIpLimiter: InMemoryRateLimiter | null = null
+  let fallbackFuncLimiter: InMemoryRateLimiter | null = null
 
   const router: Router = {
     get(pattern: string, ...args: (Middleware | Handler)[]): Router {
@@ -337,17 +348,13 @@ export function createRouter(): Router {
     },
 
     configureRateLimit(config: { ip?: RateLimitConfig; function?: RateLimitConfig }): void {
-      rateLimiter = new CompositeRateLimiter()
-      if (config.ip) {
-        rateLimiter.addLimiter('ip', new InMemoryRateLimiter(config.ip))
-      }
-      if (config.function) {
-        rateLimiter.addLimiter('function', new InMemoryRateLimiter(config.function))
-      }
+      rateLimitConfig = config
     },
 
     resetRateLimit(): void {
-      rateLimiter = null
+      rateLimitConfig = null
+      fallbackIpLimiter = null
+      fallbackFuncLimiter = null
     },
 
     async handle(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -424,35 +431,121 @@ export function createRouter(): Router {
           }
         }
 
-        // Apply rate limiting if configured
-        if (rateLimiter && !isPublicEndpoint) {
+        // Apply rate limiting via Durable Object (distributed, persistent)
+        if (!isPublicEndpoint && (rateLimitConfig || env.RATE_LIMITER)) {
           const ip = request.headers.get('CF-Connecting-IP') ||
                      request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() ||
                      'unknown'
 
-          const keys: Record<string, string> = { ip }
-          if (context.functionId) {
-            keys['function'] = context.functionId
-          }
-
-          const rateLimitResult = await rateLimiter.checkAndIncrementAll(keys)
-          if (!rateLimitResult.allowed) {
-            const blockingResult = rateLimitResult.results[rateLimitResult.blockingCategory || 'ip']!
-            const retryAfter = Math.ceil((blockingResult.resetAt - Date.now()) / 1000)
-            return new Response(
-              JSON.stringify({
-                error: 'Too Many Requests',
-                retryAfter,
-                correlationId: requestId,
-              }),
-              {
-                status: 429,
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Retry-After': String(retryAfter),
-                },
-              }
+          if (env.RATE_LIMITER) {
+            // Use the RateLimiterDO for distributed rate limiting
+            const rateLimiterStub = env.RATE_LIMITER.get(
+              env.RATE_LIMITER.idFromName(ip)
             )
+
+            // Check IP rate limit
+            const ipConfig = rateLimitConfig?.ip ?? { windowMs: 60_000, maxRequests: 100 }
+            const ipResult = await rateLimiterStub.checkAndIncrement(
+              `ip:${ip}`,
+              ipConfig.maxRequests,
+              ipConfig.windowMs
+            )
+
+            if (!ipResult.allowed) {
+              const retryAfter = Math.ceil((ipResult.resetAt - Date.now()) / 1000)
+              return new Response(
+                JSON.stringify({
+                  error: 'Too Many Requests',
+                  retryAfter,
+                  correlationId: requestId,
+                }),
+                {
+                  status: 429,
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Retry-After': String(retryAfter),
+                  },
+                }
+              )
+            }
+
+            // Check function rate limit if applicable
+            if (context.functionId && rateLimitConfig?.function) {
+              const funcResult = await rateLimiterStub.checkAndIncrement(
+                `fn:${context.functionId}`,
+                rateLimitConfig.function.maxRequests,
+                rateLimitConfig.function.windowMs
+              )
+
+              if (!funcResult.allowed) {
+                const retryAfter = Math.ceil((funcResult.resetAt - Date.now()) / 1000)
+                return new Response(
+                  JSON.stringify({
+                    error: 'Too Many Requests',
+                    retryAfter,
+                    correlationId: requestId,
+                  }),
+                  {
+                    status: 429,
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Retry-After': String(retryAfter),
+                    },
+                  }
+                )
+              }
+            }
+          } else if (rateLimitConfig) {
+            // Fallback: in-memory rate limiter (for tests / when DO not configured)
+            if (!fallbackIpLimiter && rateLimitConfig.ip) {
+              fallbackIpLimiter = new InMemoryRateLimiter(rateLimitConfig.ip)
+            }
+            if (fallbackIpLimiter) {
+              const ipResult = await fallbackIpLimiter.check(`ip:${ip}`)
+              if (!ipResult.allowed) {
+                const retryAfter = Math.ceil((ipResult.resetAt - Date.now()) / 1000)
+                return new Response(
+                  JSON.stringify({
+                    error: 'Too Many Requests',
+                    retryAfter,
+                    correlationId: requestId,
+                  }),
+                  {
+                    status: 429,
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Retry-After': String(retryAfter),
+                    },
+                  }
+                )
+              }
+              await fallbackIpLimiter.increment(`ip:${ip}`)
+            }
+
+            if (context.functionId && rateLimitConfig.function) {
+              if (!fallbackFuncLimiter) {
+                fallbackFuncLimiter = new InMemoryRateLimiter(rateLimitConfig.function)
+              }
+              const funcResult = await fallbackFuncLimiter.check(`fn:${context.functionId}`)
+              if (!funcResult.allowed) {
+                const retryAfter = Math.ceil((funcResult.resetAt - Date.now()) / 1000)
+                return new Response(
+                  JSON.stringify({
+                    error: 'Too Many Requests',
+                    retryAfter,
+                    correlationId: requestId,
+                  }),
+                  {
+                    status: 429,
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Retry-After': String(retryAfter),
+                    },
+                  }
+                )
+              }
+              await fallbackFuncLimiter.increment(`fn:${context.functionId}`)
+            }
           }
         }
 

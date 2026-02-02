@@ -262,9 +262,23 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig) {
     const kv = apiKeysKV || (env['FUNCTIONS_API_KEYS'] as KVNamespace | undefined)
     const oauth = oauthService || (env['OAUTH'] as OAuthService | undefined)
 
-    // If neither auth method is available, allow through (auth disabled)
+    // SECURITY: Default-deny when no auth backend is configured.
+    // If neither API_KEYS KV nor OAuth service is available, deny the request.
+    // This prevents a critical vulnerability where unconfigured auth silently
+    // allows all requests through.
     if (!kv && !oauth) {
-      return { shouldContinue: true }
+      console.warn(
+        'Auth middleware: no auth backend configured (neither API_KEYS KV nor OAuth service). ' +
+        'Denying request to', path, '- configure FUNCTIONS_API_KEYS or OAUTH to enable authentication.'
+      )
+      return {
+        shouldContinue: false,
+        response: jsonResponse(
+          { error: 'Authentication not configured. Please contact the service administrator.' },
+          401,
+          { 'WWW-Authenticate': 'Bearer realm="Functions.do"' }
+        ),
+      }
     }
 
     // Extract credentials

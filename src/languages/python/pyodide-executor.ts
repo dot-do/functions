@@ -608,17 +608,18 @@ function pyToJs(pyValue: unknown, pyodide: PyodideInterface): unknown {
 let pyodideLoaderPromise: Promise<PyodideInterface> | null = null
 
 /**
- * Load Pyodide using CommonJS require (for Node.js compatibility)
+ * Load Pyodide using dynamic import (for Node.js compatibility)
+ *
+ * CLI-only: This function is only called in Node.js environments.
+ * It is NOT used in the Cloudflare Workers runtime.
  */
-async function loadPyodideCommonJS(indexURL?: string): Promise<PyodideInterface> {
-  // Use dynamic require to avoid bundler issues
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const pyodideModule = require('pyodide')
+async function loadPyodideNode(indexURL?: string): Promise<PyodideInterface> {
+  const pyodideModule = await import('pyodide')
   const loadOptions: { indexURL?: string } = {}
   if (indexURL && !indexURL.startsWith('http')) {
     loadOptions.indexURL = indexURL
   }
-  return pyodideModule.loadPyodide(loadOptions)
+  return (pyodideModule as any).loadPyodide(loadOptions)
 }
 
 /**
@@ -646,12 +647,11 @@ export async function loadPyodideRuntime(
 
       // Check if we're in Node.js environment
       const isNode = typeof process !== 'undefined' &&
-                     process.versions?.node &&
-                     typeof require !== 'undefined'
+                     process.versions?.node !== undefined
 
       if (isNode) {
-        // Use CommonJS require for Node.js to avoid ESM path resolution issues
-        return loadPyodideCommonJS(indexURL)
+        // Use dynamic import for Node.js
+        return loadPyodideNode(indexURL)
       }
 
       // Try dynamic import for bundler environment

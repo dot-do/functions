@@ -61,14 +61,20 @@ export { isValidVersion, parseVersion } from '../../core/types'
  */
 import type { Result } from '../../core/errors'
 import type { ValidationError } from '../../core/errors'
+import { ValidationError as ValidationErrorClass } from '../../core/errors'
 import {
   validateFunctionIdSafe,
   validateLanguageSafe,
   validateEntryPointSafe,
   validateDependenciesSafe,
   validateVersionSafe,
+  validateFunctionId,
+  validateLanguage,
+  validateEntryPoint,
+  validateDependencies,
 } from '../../core/function-registry'
 import { ok, err, isErr } from '../../core/errors'
+import { isValidVersion } from '../../core/types'
 
 /**
  * Input type for function validation
@@ -126,7 +132,7 @@ export class FunctionValidator {
 
     // Validate code if provided
     if (metadata.code !== undefined && metadata.code === '') {
-      return err(new (require('../../core/errors').ValidationError)('Code cannot be empty', { field: 'code' }))
+      return err(new ValidationErrorClass('Code cannot be empty', { field: 'code' }))
     }
 
     // Validate entry point if provided
@@ -155,15 +161,6 @@ export class FunctionValidator {
    */
   static validate(metadata: FunctionValidationInput): { valid: boolean; errors: string[] } {
     const errors: string[] = []
-
-    // Import validation functions
-    const {
-      validateFunctionId,
-      validateLanguage,
-      validateEntryPoint,
-      validateDependencies,
-    } = require('../../core/function-registry')
-    const { isValidVersion } = require('../../core/types')
 
     // Validate ID
     try {

@@ -14,8 +14,7 @@
 
 import type { RouteContext, Handler } from '../router'
 import type { CascadeEnv } from './cascade-types'
-import { KVFunctionRegistry } from '../../core/kv-function-registry'
-import { KVCodeStorage } from '../../core/code-storage'
+import { getStorageClientCompat } from './storage-compat'
 import { validateFunctionId } from '../../core/function-registry'
 import { getErrorMessage } from '../../core/errors'
 import { jsonResponse, jsonErrorResponse } from '../http-utils'
@@ -365,9 +364,10 @@ export const cascadeHandler: Handler = async (
   const input = body.input ?? {}
   const options = body.options ?? {}
 
-  // Get function metadata
-  const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
-  const metadata = await registry.get(functionId) as ExtendedMetadata | null
+  // Get function metadata from UserStorage DO
+  const userId = context?.authContext?.userId || 'anonymous'
+  const storageClient = getStorageClientCompat(env, userId)
+  const metadata = await storageClient.registry.get(functionId) as ExtendedMetadata | null
 
   if (!metadata) {
     return jsonErrorResponse('FUNCTION_NOT_FOUND', `Function not found: ${functionId}`)
@@ -416,8 +416,7 @@ export const cascadeHandler: Handler = async (
   }
 
   // Get function code for code tier
-  const codeStorage = new KVCodeStorage(env.FUNCTIONS_CODE)
-  const code = await codeStorage.get(functionId)
+  const code = await storageClient.code.get(functionId)
 
   // Generate cascade ID
   const cascadeId = `cascade_${functionId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
@@ -780,13 +779,12 @@ function buildCascadeDefinition(
  */
 function createTierDispatcher(env: CascadeEnv): TierDispatcher {
   const dispatcherEnv: TierDispatcherEnv = {
-    FUNCTIONS_REGISTRY: env.FUNCTIONS_REGISTRY,
-    FUNCTIONS_CODE: env.FUNCTIONS_CODE,
     LOADER: env.LOADER,
     USER_FUNCTIONS: env.USER_FUNCTIONS,
     AI_CLIENT: env.AI_CLIENT,
     HUMAN_TASKS: env.HUMAN_TASKS,
     CODE_STORAGE: env.CODE_STORAGE,
+    USER_STORAGE: env.USER_STORAGE,
   }
   return new TierDispatcher(dispatcherEnv)
 }
