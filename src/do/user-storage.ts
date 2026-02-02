@@ -23,6 +23,9 @@
  */
 
 import { DurableObject } from 'cloudflare:workers'
+
+/** Schema version for user storage SQLite tables. Increment when schema changes. */
+export const USER_STORAGE_SCHEMA_VERSION = 1
 import type { FunctionMetadata } from '../core/types'
 import { compareVersions } from '../core/types'
 import { validateFunctionId } from '../core/function-registry'

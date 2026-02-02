@@ -22,6 +22,9 @@
 
 import { DurableObject } from 'cloudflare:workers'
 
+/** Schema version for rate limiter SQLite tables. Increment when schema changes. */
+export const RATE_LIMITER_SCHEMA_VERSION = 1
+
 // ============================================================================
 // TYPES
 // ============================================================================
