@@ -241,8 +241,20 @@ async function parseOpenAICompatibleResponse(
     throw new Error(`${providerName} API error: ${response.status} ${response.statusText} - ${errorBody}`)
   }
 
-  const data = (await response.json()) as OpenAICompatibleResponse
-  const text = data.choices?.[0]?.message?.content || ''
+  const data = await response.json()
+
+  // Validate response structure
+  if (!data || typeof data !== 'object') {
+    throw new Error(`${providerName}: Invalid response - expected object`)
+  }
+  if (!Array.isArray(data.choices) || data.choices.length === 0) {
+    throw new Error(`${providerName}: Invalid response - missing choices array`)
+  }
+  if (!data.choices[0]?.message?.content) {
+    throw new Error(`${providerName}: Invalid response - missing message content`)
+  }
+
+  const text = data.choices[0].message.content as string
   return parseClassificationResponse(text)
 }
 
@@ -263,9 +275,22 @@ async function parseAnthropicCompatibleResponse(
     throw new Error(`${providerName} API error: ${response.status} ${response.statusText} - ${errorBody}`)
   }
 
-  const data = (await response.json()) as AnthropicCompatibleResponse
-  const textContent = data.content?.find((c) => c.type === 'text')
-  const text = textContent?.text || ''
+  const data = await response.json()
+
+  // Validate response structure
+  if (!data || typeof data !== 'object') {
+    throw new Error(`${providerName}: Invalid response - expected object`)
+  }
+  if (!Array.isArray(data.content) || data.content.length === 0) {
+    throw new Error(`${providerName}: Invalid response - missing content array`)
+  }
+
+  const textContent = data.content.find((c: { type?: string; text?: string }) => c.type === 'text')
+  if (!textContent?.text) {
+    throw new Error(`${providerName}: Invalid response - missing text content`)
+  }
+
+  const text = textContent.text as string
   return parseClassificationResponse(text)
 }
 
@@ -282,11 +307,24 @@ async function parseBedrockResponse(
   providerName: string
 ): Promise<{ type: FunctionType; confidence: number; reasoning: string }> {
   if (!response.ok) {
-    throw new Error(`${providerName} API error: ${response.status} ${response.statusText}`)
+    const errorBody = await response.text().catch(() => '')
+    throw new Error(`${providerName} API error: ${response.status} ${response.statusText} - ${errorBody}`)
   }
 
-  const data = (await response.json()) as { content?: Array<{ text?: string }> }
-  const text = data.content?.[0]?.text || ''
+  const data = await response.json()
+
+  // Validate response structure
+  if (!data || typeof data !== 'object') {
+    throw new Error(`${providerName}: Invalid response - expected object`)
+  }
+  if (!Array.isArray(data.content) || data.content.length === 0) {
+    throw new Error(`${providerName}: Invalid response - missing content array`)
+  }
+  if (!data.content[0]?.text) {
+    throw new Error(`${providerName}: Invalid response - missing text in content`)
+  }
+
+  const text = data.content[0].text as string
   return parseClassificationResponse(text)
 }
 
@@ -296,18 +334,31 @@ async function parseBedrockResponse(
  * @param response - The fetch Response object
  * @param providerName - Name of the provider for error messages
  * @returns The response text to be further parsed
- * @throws Error if response is not OK
+ * @throws Error if response is not OK or invalid structure
  */
 async function parseWorkersAIResponse(
   response: Response,
   providerName: string
 ): Promise<string> {
   if (!response.ok) {
-    throw new Error(`${providerName} API error: ${response.status} ${response.statusText}`)
+    const errorBody = await response.text().catch(() => '')
+    throw new Error(`${providerName} API error: ${response.status} ${response.statusText} - ${errorBody}`)
   }
 
-  const data = (await response.json()) as WorkersAIResponse
-  return data.result?.response || ''
+  const data = await response.json()
+
+  // Validate response structure
+  if (!data || typeof data !== 'object') {
+    throw new Error(`${providerName}: Invalid response - expected object`)
+  }
+  if (!data.result || typeof data.result !== 'object') {
+    throw new Error(`${providerName}: Invalid response - missing result object`)
+  }
+  if (typeof data.result.response !== 'string') {
+    throw new Error(`${providerName}: Invalid response - missing response string`)
+  }
+
+  return data.result.response
 }
 
 // =============================================================================
@@ -320,6 +371,13 @@ async function parseWorkersAIResponse(
 export interface WorkersAIBinding {
   run(model: string, input: unknown): Promise<unknown>
 }
+
+/**
+ * Type alias for the AI client expected by FunctionClassifier.
+ * This is the Cloudflare Workers AI binding that provides the `run` method.
+ * Export this type for use in handlers that need to pass an AI client.
+ */
+export type ClassifierAIClient = WorkersAIBinding
 
 /**
  * Cloudflare Workers AI provider - uses the AI binding directly

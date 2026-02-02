@@ -482,10 +482,11 @@ describe('cascadeHandler input validation', () => {
 
     expect(response.status).toBe(400)
     const body = (await response.json()) as JsonBody
-    expect(body.error).toBe('Input validation failed')
-    expect(body.validationErrors).toBeDefined()
-    expect(Array.isArray(body.validationErrors)).toBe(true)
-    const errors = body.validationErrors as string[]
+    const error = body.error as { code: string; message: string; details: { validationErrors: string[] } }
+    expect(error.message).toBe('Input validation failed')
+    expect(error.details.validationErrors).toBeDefined()
+    expect(Array.isArray(error.details.validationErrors)).toBe(true)
+    const errors = error.details.validationErrors
     expect(errors.length).toBeGreaterThan(0)
     expect(errors[0]).toContain("missing required field 'query'")
   })
@@ -514,8 +515,9 @@ describe('cascadeHandler input validation', () => {
 
     expect(response.status).toBe(400)
     const body = (await response.json()) as JsonBody
-    expect(body.error).toBe('Input validation failed')
-    const errors = body.validationErrors as string[]
+    const error = body.error as { code: string; message: string; details: { validationErrors: string[] } }
+    expect(error.message).toBe('Input validation failed')
+    const errors = error.details.validationErrors
     expect(errors[0]).toContain("expected type 'object'")
     expect(errors[0]).toContain("got 'string'")
   })
@@ -546,7 +548,8 @@ describe('cascadeHandler input validation', () => {
 
     expect(response.status).toBe(400)
     const body = (await response.json()) as JsonBody
-    const errors = body.validationErrors as string[]
+    const error = body.error as { code: string; message: string; details: { validationErrors: string[] } }
+    const errors = error.details.validationErrors
     expect(errors.length).toBe(2)
     expect(errors).toEqual(
       expect.arrayContaining([
@@ -556,7 +559,7 @@ describe('cascadeHandler input validation', () => {
     )
   })
 
-  it('includes _meta with functionId and schemaType in validation error response', async () => {
+  it('includes functionId and schemaType in validation error details', async () => {
     await registerFunction('meta-function', {
       type: 'object',
       required: ['data'],
@@ -580,9 +583,9 @@ describe('cascadeHandler input validation', () => {
 
     expect(response.status).toBe(400)
     const body = (await response.json()) as JsonBody
-    const meta = body._meta as JsonBody
-    expect(meta.functionId).toBe('meta-function')
-    expect(meta.schemaType).toBe('inputSchema')
+    const error = body.error as { code: string; message: string; details: { functionId: string; schemaType: string } }
+    expect(error.details.functionId).toBe('meta-function')
+    expect(error.details.schemaType).toBe('inputSchema')
   })
 
   it('skips validation when function has no inputSchema', async () => {
@@ -634,8 +637,9 @@ describe('cascadeHandler input validation', () => {
 
     expect(response.status).toBe(400)
     const body = (await response.json()) as JsonBody
-    expect(body.error).toBe('Input validation failed')
-    const errors = body.validationErrors as string[]
+    const error = body.error as { code: string; message: string; details: { validationErrors: string[] } }
+    expect(error.message).toBe('Input validation failed')
+    const errors = error.details.validationErrors
     expect(errors[0]).toContain("field 'priority' must be one of")
   })
 
@@ -669,7 +673,8 @@ describe('cascadeHandler input validation', () => {
 
     expect(response.status).toBe(400)
     const body = (await response.json()) as JsonBody
-    const errors = body.validationErrors as string[]
+    const error = body.error as { code: string; message: string; details: { validationErrors: string[] } }
+    const errors = error.details.validationErrors
     expect(errors[0]).toContain('config')
     expect(errors[0]).toContain("missing required field 'timeout'")
   })

@@ -56,8 +56,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Agentic Function Error Handling', () => {
             implementation: {
               type: 'inline',
               code: `
-                const start = Date.now();
-                while (Date.now() - start < 2000) {} // Busy wait 2 seconds
+                await new Promise(resolve => setTimeout(resolve, 2000))
                 return { done: true }
               `,
             },
@@ -99,8 +98,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Agentic Function Error Handling', () => {
             implementation: {
               type: 'inline',
               code: `
-                const start = Date.now();
-                while (Date.now() - start < 1000) {} // 1 second
+                await new Promise(resolve => setTimeout(resolve, 1000))
                 return { item: Date.now() }
               `,
             },
@@ -136,7 +134,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Agentic Function Error Handling', () => {
             inputSchema: { type: 'object', properties: {} },
             implementation: {
               type: 'inline',
-              code: 'const start = Date.now(); while (Date.now() - start < 500) {}; return { worked: true }',
+              code: 'await new Promise(resolve => setTimeout(resolve, 500)); return { worked: true }',
             },
           },
         ],
@@ -167,7 +165,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Agentic Function Error Handling', () => {
             inputSchema: { type: 'object', properties: {} },
             implementation: {
               type: 'inline',
-              code: 'const start = Date.now(); while (Date.now() - start < 10000) {}; return { done: true }',
+              code: 'await new Promise(resolve => setTimeout(resolve, 10000)); return { done: true }',
             },
           },
         ],

@@ -17,6 +17,7 @@ import type { CascadeEnv } from './cascade-types'
 import { KVFunctionRegistry } from '../../core/kv-function-registry'
 import { KVCodeStorage } from '../../core/code-storage'
 import { validateFunctionId } from '../../core/function-registry'
+import { getErrorMessage } from '../../core/errors'
 import { jsonResponse, jsonErrorResponse } from '../http-utils'
 import { CascadeExecutor, createCascadeExecutor } from '../../core/cascade-executor'
 import type {
@@ -29,7 +30,12 @@ import type {
   FunctionType,
 } from '@dotdo/functions'
 import { TierDispatcher, type ExtendedMetadata, type TierDispatcherEnv } from '../tier-dispatcher'
-import { FunctionClassifier, type ClassificationResult } from '../../core/function-classifier'
+import {
+  FunctionClassifier,
+  createClassifierFromBinding,
+  type ClassificationResult,
+  type ClassifierAIClient,
+} from '../../core/function-classifier'
 import type { AuthContext } from '../middleware/auth'
 
 // =============================================================================
@@ -338,8 +344,7 @@ export const cascadeHandler: Handler = async (
   try {
     validateFunctionId(functionId)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Invalid function ID'
-    return jsonErrorResponse('INVALID_FUNCTION_ID', message)
+    return jsonErrorResponse('INVALID_FUNCTION_ID', getErrorMessage(error, 'Invalid function ID'))
   }
 
   // Parse request body
@@ -385,10 +390,7 @@ export const cascadeHandler: Handler = async (
   // Auto-classify the start tier if requested
   let classificationMeta: ClassificationResult | undefined
   if (options.startTier === 'auto' && env.AI_CLIENT) {
-    const classifier = new FunctionClassifier(
-      env.AI_CLIENT as Parameters<typeof FunctionClassifier.prototype.classify>[0] extends never ? undefined : any,
-      { maxCacheSize: 500 },
-    )
+    const classifier = createClassifierFromBinding(env.AI_CLIENT as ClassifierAIClient)
     const description = metadata.userPrompt || metadata.goal || metadata.systemPrompt
     const result = await classifier.classify(
       functionId,
@@ -502,7 +504,7 @@ export const cascadeHandler: Handler = async (
     })
   } catch (error) {
     const totalDurationMs = Date.now() - startedAt
-    const message = error instanceof Error ? error.message : 'Cascade execution failed'
+    const message = getErrorMessage(error, 'Cascade execution failed')
 
     // Check for tier authorization error - return 403
     if (error instanceof TierAuthorizationError) {

@@ -264,26 +264,28 @@ export class CompositeRateLimiter {
    * Check and increment all rate limits atomically
    * @param keys - Map of category to key
    * @returns Combined result with all individual results
+   *
+   * Note: This uses a sequential check-and-increment approach. Each limiter is
+   * checked and incremented atomically before moving to the next. If any limiter
+   * fails, we return immediately without incrementing remaining limiters.
+   * This avoids the race condition where a two-phase check-then-increment
+   * approach could leave state inconsistent if increment fails after check passes.
    */
   async checkAndIncrementAll(keys: Record<string, string>): Promise<{
     allowed: boolean
     results: Record<string, RateLimitResult>
     blockingCategory?: string
   }> {
-    // First check all without incrementing
-    const checkResult = await this.checkAll(keys)
-
-    // If any check fails, return without incrementing
-    if (!checkResult.allowed) {
-      return checkResult
-    }
-
-    // All checks passed, now increment all
     const results: Record<string, RateLimitResult> = {}
+
     for (const [category, key] of Object.entries(keys)) {
       const limiter = this.limiters.get(category)
       if (limiter) {
-        results[category] = await limiter.checkAndIncrement(key)
+        const result = await limiter.checkAndIncrement(key)
+        results[category] = result
+        if (!result.allowed) {
+          return { allowed: false, results, blockingCategory: category }
+        }
       }
     }
 

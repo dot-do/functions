@@ -46,3 +46,26 @@ export { FunctionValidator } from './validation/function-validator'
 
 // HTTP Utilities
 export { jsonResponse } from './http-utils'
+
+// Cache Metrics
+export {
+  recordCacheHit,
+  recordCacheMiss,
+  recordCacheError,
+  getCacheStats,
+  resetCacheStats,
+  type CacheMetrics,
+} from './cache-metrics'
+
+// Caching Layer
+export {
+  CACHE_TTL_SECONDS,
+  type CacheType,
+  getCachedMetadata,
+  cacheMetadata,
+  getCachedCompiledCode,
+  cacheCompiledCode,
+  getCachedSourceCode,
+  cacheSourceCode,
+  invalidateFunctionCache,
+} from './caching'

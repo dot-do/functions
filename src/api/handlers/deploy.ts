@@ -38,6 +38,7 @@ import type { RouteContext, Env, Handler } from '../router'
 import { compileTypeScript } from '../../core/ts-compiler'
 import { logAuditEvent, getClientIp } from '../../core/audit-logger'
 import { invalidateFunctionCache } from './invoke'
+import { getErrorMessage } from '../../core/errors'
 
 /**
  * Extended route context for deploy handler.
@@ -87,6 +88,31 @@ type WasmLanguage = (typeof WASM_LANGUAGES)[number]
  */
 function isWasmLanguage(language: string): language is WasmLanguage {
   return WASM_LANGUAGES.includes(language as WasmLanguage)
+}
+
+/**
+ * Validate JSON schema for safety
+ * - Max size 100KB
+ * - No circular references
+ */
+function validateJsonSchema(schema: unknown): { valid: boolean; error?: string } {
+  if (typeof schema !== 'object' || schema === null) {
+    return { valid: false, error: 'Schema must be an object' }
+  }
+
+  // Check size
+  let serialized: string
+  try {
+    serialized = JSON.stringify(schema)
+  } catch {
+    return { valid: false, error: 'Schema contains circular references' }
+  }
+
+  if (serialized.length > 100000) {
+    return { valid: false, error: 'Schema exceeds 100KB limit' }
+  }
+
+  return { valid: true }
 }
 
 // WASM compilers are dynamically imported to avoid issues with Node.js modules in Workers
@@ -199,8 +225,7 @@ async function uploadToDispatchNamespace(
 
     return { success: true }
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error'
-    return { success: false, error: `Upload failed: ${message}` }
+    return { success: false, error: `Upload failed: ${getErrorMessage(error)}` }
   }
 }
 
@@ -238,6 +263,14 @@ async function deployGenerativeFunction(
   const maxTokens = body.maxTokens as number | undefined
   const examples = body.examples as Array<{ input: Record<string, unknown>; output: unknown; explanation?: string }> | undefined
   const inputSchema = body.inputSchema as Record<string, unknown> | undefined
+
+  // Validate inputSchema if provided
+  if (inputSchema !== undefined) {
+    const schemaValidation = validateJsonSchema(inputSchema)
+    if (!schemaValidation.valid) {
+      return jsonErrorResponse('VALIDATION_ERROR', `Invalid inputSchema: ${schemaValidation.error}`)
+    }
+  }
 
   // Validate temperature range if provided
   if (temperature !== undefined && (temperature < 0 || temperature > 2)) {
@@ -363,6 +396,14 @@ async function deployAgenticFunction(
     }
   }
 
+  // Validate inputSchema if provided
+  if (inputSchema !== undefined) {
+    const schemaValidation = validateJsonSchema(inputSchema)
+    if (!schemaValidation.valid) {
+      return jsonErrorResponse('VALIDATION_ERROR', `Invalid inputSchema: ${schemaValidation.error}`)
+    }
+  }
+
   // Create storage instance
   const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
 
@@ -462,6 +503,14 @@ async function deployHumanFunction(
       if (!assignee.value) {
         return jsonErrorResponse('VALIDATION_ERROR', `Invalid assignee at index ${i}: missing 'value'`)
       }
+    }
+  }
+
+  // Validate inputSchema if provided
+  if (inputSchema !== undefined) {
+    const schemaValidation = validateJsonSchema(inputSchema)
+    if (!schemaValidation.valid) {
+      return jsonErrorResponse('VALIDATION_ERROR', `Invalid inputSchema: ${schemaValidation.error}`)
     }
   }
 
@@ -606,8 +655,7 @@ export const deployHandler: Handler = async (
   try {
     validateFunctionId(id)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Invalid function ID'
-    return jsonErrorResponse('INVALID_FUNCTION_ID', message)
+    return jsonErrorResponse('INVALID_FUNCTION_ID', getErrorMessage(error, 'Invalid function ID'))
   }
 
   // Validate version
@@ -668,8 +716,7 @@ export const deployHandler: Handler = async (
   try {
     validateLanguage(language)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Invalid language'
-    return jsonErrorResponse('INVALID_LANGUAGE', message)
+    return jsonErrorResponse('INVALID_LANGUAGE', getErrorMessage(error, 'Invalid language'))
   }
 
   // Validate entry point if provided
@@ -677,16 +724,14 @@ export const deployHandler: Handler = async (
   try {
     validateEntryPoint(resolvedEntryPoint)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Invalid entry point'
-    return jsonErrorResponse('VALIDATION_ERROR', message)
+    return jsonErrorResponse('VALIDATION_ERROR', getErrorMessage(error, 'Invalid entry point'))
   }
 
   // Validate dependencies if provided
   try {
     validateDependencies(dependencies)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Invalid dependencies'
-    return jsonResponse({ error: message }, 400)
+    return jsonResponse({ error: getErrorMessage(error, 'Invalid dependencies') }, 400)
   }
 
   // Load compilers if not already loaded
@@ -823,8 +868,7 @@ export const deployHandler: Handler = async (
         return jsonErrorResponse('INVALID_LANGUAGE', `Compilation not supported for language: ${language}`)
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Compilation failed'
-    return jsonErrorResponse('COMPILATION_ERROR', message)
+    return jsonErrorResponse('COMPILATION_ERROR', getErrorMessage(error, 'Compilation failed'))
   }
 
   // Create storage instances
@@ -871,9 +915,9 @@ export const deployHandler: Handler = async (
     id,
     version,
     type: 'code',
-    name: (body.name as string) || undefined,
-    description: (body.description as string) || undefined,
-    tags: (body.tags as string[]) || undefined,
+    name: body['name'] as string | undefined,
+    description: body['description'] as string | undefined,
+    tags: body['tags'] as string[] | undefined,
     language: language as FunctionMetadata['language'],
     entryPoint: resolvedEntryPoint,
     dependencies: dependencies || {},
@@ -886,10 +930,18 @@ export const deployHandler: Handler = async (
   await invalidateFunctionCache(id)
 
   // Upload to dispatch namespace for TS/JS (use compiled JS if available)
-  let dispatchUploadResult: { success: boolean; error?: string } = { success: true }
-  if ((language === 'typescript' || language === 'javascript') && typeof compiledCode === 'string') {
-    // For TypeScript, upload the compiled JavaScript to dispatch namespace
-    const codeToUpload = tsCompileResult?.compiledJs || compiledCode
+  let dispatchUploadResult: { success: boolean; error?: string; skipped?: boolean; reason?: string } = { success: true }
+
+  // Before uploading to dispatch namespace, validate code type
+  const codeToUpload: string | undefined =
+    language === 'typescript' && tsCompileResult?.compiledJs
+      ? tsCompileResult.compiledJs
+      : typeof compiledCode === 'string' ? compiledCode : undefined
+
+  if (!codeToUpload) {
+    // Skip dispatch upload for WASM/binary code
+    dispatchUploadResult = { success: true, skipped: true, reason: 'Binary code not uploaded to dispatch' }
+  } else if (language === 'typescript' || language === 'javascript') {
     dispatchUploadResult = await uploadToDispatchNamespace(codeToUpload, id, env)
   }
 

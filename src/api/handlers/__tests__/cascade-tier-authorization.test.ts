@@ -336,9 +336,10 @@ describe('cascadeHandler tier authorization', () => {
 
       expect(response.status).toBe(403)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBe('Insufficient permissions for tier escalation')
-      expect(body.tier).toBe('generative')
-      expect(body.requiredScope).toBe('functions:tier:generative')
+      const error = body.error as { code: string; message: string; details: { tier: string; requiredScope: string } }
+      expect(error.message).toBe('Insufficient permissions for tier escalation')
+      expect(error.details.tier).toBe('generative')
+      expect(error.details.requiredScope).toBe('functions:tier:generative')
     })
 
     it('allows generative tier with correct scope', async () => {
@@ -405,9 +406,10 @@ describe('cascadeHandler tier authorization', () => {
 
       expect(response.status).toBe(403)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBe('Insufficient permissions for tier escalation')
-      expect(body.tier).toBe('agentic')
-      expect(body.requiredScope).toBe('functions:tier:agentic')
+      const error = body.error as { code: string; message: string; details: { tier: string; requiredScope: string } }
+      expect(error.message).toBe('Insufficient permissions for tier escalation')
+      expect(error.details.tier).toBe('agentic')
+      expect(error.details.requiredScope).toBe('functions:tier:agentic')
     })
 
     it('allows agentic tier with correct scope', async () => {
@@ -480,9 +482,10 @@ describe('cascadeHandler tier authorization', () => {
 
       expect(response.status).toBe(403)
       const body = (await response.json()) as JsonBody
-      expect(body.error).toBe('Insufficient permissions for tier escalation')
-      expect(body.tier).toBe('human')
-      expect(body.requiredScope).toBe('functions:tier:human')
+      const error = body.error as { code: string; message: string; details: { tier: string; requiredScope: string } }
+      expect(error.message).toBe('Insufficient permissions for tier escalation')
+      expect(error.details.tier).toBe('human')
+      expect(error.details.requiredScope).toBe('functions:tier:human')
     })
   })
 

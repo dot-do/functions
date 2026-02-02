@@ -447,3 +447,29 @@ export function unwrapOr<T, E>(result: Result<T, E>, defaultValue: T): T {
   }
   return defaultValue
 }
+
+/**
+ * Safely extract error message from unknown error type.
+ *
+ * Handles the common pattern of extracting a string message from an unknown
+ * error value, which may be an Error instance, a string, or any other type.
+ *
+ * @param error - The unknown error value to extract a message from
+ * @param fallback - Fallback message if no message can be extracted (default: 'Unknown error')
+ * @returns The extracted error message or fallback
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   await riskyOperation()
+ * } catch (error) {
+ *   console.log(getErrorMessage(error))
+ *   // Returns error.message if Error, the string if string, or 'Unknown error'
+ * }
+ * ```
+ */
+export function getErrorMessage(error: unknown, fallback = 'Unknown error'): string {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  return fallback
+}

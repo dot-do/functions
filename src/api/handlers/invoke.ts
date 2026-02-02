@@ -30,6 +30,7 @@ import type { RouteContext, Env, Handler } from '../router'
 import { KVFunctionRegistry } from '../../core/kv-function-registry'
 import { KVCodeStorage } from '../../core/code-storage'
 import { validateFunctionId } from '../../core/function-registry'
+import { getErrorMessage } from '../../core/errors'
 import type { FunctionMetadata } from '../../core/types'
 import { jsonResponse } from '../http-utils'
 import { stripTypeScriptSync } from '../../core/ts-compiler'
@@ -41,6 +42,17 @@ import {
   createClassifier,
 } from '../../core/function-classifier'
 import { INVOKE } from '../../config/defaults'
+import {
+  getCachedMetadata,
+  cacheMetadata,
+  getCachedCompiledCode,
+  cacheCompiledCode,
+  getCachedSourceCode,
+  cacheSourceCode,
+} from '../caching'
+
+// Re-export invalidateFunctionCache for callers that need cache invalidation
+export { invalidateFunctionCache } from '../caching'
 
 // =============================================================================
 // TYPES
@@ -122,175 +134,6 @@ interface WorkerLoaderResult {
 }
 
 // =============================================================================
-// CLOUDFLARE CACHE API FOR FUNCTION DATA
-// =============================================================================
-// Reduces KV request amplification by caching function metadata and code using
-// Cloudflare's Cache API (free, edge-distributed, shared across worker instances).
-// Each invoke was previously doing 3 KV requests (metadata, compiled, source).
-// With Cache API, most requests hit the edge cache first.
-// Issue: functions-1277
-
-/** Cache TTL in seconds (1 minute) for Cache-Control headers */
-const CACHE_TTL_SECONDS = 60
-
-/** Internal cache domain for creating cache keys */
-const CACHE_DOMAIN = 'https://cache.internal'
-
-/**
- * Cache key types for different function data.
- */
-type CacheType = 'metadata' | 'compiled' | 'source'
-
-/**
- * Create a cache key Request for function data.
- * Uses a synthetic URL that uniquely identifies the cached resource.
- */
-function createCacheKey(functionId: string, type: CacheType, version?: string): Request {
-  const versionPath = version ? `/${version}` : '/latest'
-  return new Request(`${CACHE_DOMAIN}/functions/${functionId}${versionPath}/${type}`)
-}
-
-/**
- * Get cached metadata from Cloudflare Cache API.
- */
-async function getCachedMetadata(functionId: string, version?: string): Promise<FunctionMetadata | null> {
-  try {
-    const cache = caches.default
-    const cacheKey = createCacheKey(functionId, 'metadata', version)
-    const cached = await cache.match(cacheKey)
-    if (cached) {
-      return await cached.json() as FunctionMetadata
-    }
-  } catch {
-    // Cache miss or error - fall through to KV
-  }
-  return null
-}
-
-/**
- * Cache function metadata using Cloudflare Cache API.
- */
-async function cacheMetadata(functionId: string, metadata: FunctionMetadata, version?: string): Promise<void> {
-  try {
-    const cache = caches.default
-    const cacheKey = createCacheKey(functionId, 'metadata', version)
-    const response = new Response(JSON.stringify(metadata), {
-      headers: {
-        'Content-Type': 'application/json',
-        'Cache-Control': `max-age=${CACHE_TTL_SECONDS}`,
-      },
-    })
-    await cache.put(cacheKey, response)
-  } catch {
-    // Cache put failed - non-fatal, will just hit KV next time
-  }
-}
-
-/**
- * Get cached compiled code from Cloudflare Cache API.
- */
-async function getCachedCompiledCode(functionId: string, version?: string): Promise<string | null> {
-  try {
-    const cache = caches.default
-    const cacheKey = createCacheKey(functionId, 'compiled', version)
-    const cached = await cache.match(cacheKey)
-    if (cached) {
-      return await cached.text()
-    }
-  } catch {
-    // Cache miss or error - fall through to KV
-  }
-  return null
-}
-
-/**
- * Cache compiled code using Cloudflare Cache API.
- */
-async function cacheCompiledCode(functionId: string, code: string, version?: string): Promise<void> {
-  try {
-    const cache = caches.default
-    const cacheKey = createCacheKey(functionId, 'compiled', version)
-    const response = new Response(code, {
-      headers: {
-        'Content-Type': 'application/javascript',
-        'Cache-Control': `max-age=${CACHE_TTL_SECONDS}`,
-      },
-    })
-    await cache.put(cacheKey, response)
-  } catch {
-    // Cache put failed - non-fatal
-  }
-}
-
-/**
- * Get cached source code from Cloudflare Cache API.
- */
-async function getCachedSourceCode(functionId: string, version?: string): Promise<string | null> {
-  try {
-    const cache = caches.default
-    const cacheKey = createCacheKey(functionId, 'source', version)
-    const cached = await cache.match(cacheKey)
-    if (cached) {
-      return await cached.text()
-    }
-  } catch {
-    // Cache miss or error - fall through to KV
-  }
-  return null
-}
-
-/**
- * Cache source code using Cloudflare Cache API.
- */
-async function cacheSourceCode(functionId: string, code: string, version?: string): Promise<void> {
-  try {
-    const cache = caches.default
-    const cacheKey = createCacheKey(functionId, 'source', version)
-    const response = new Response(code, {
-      headers: {
-        'Content-Type': 'text/plain',
-        'Cache-Control': `max-age=${CACHE_TTL_SECONDS}`,
-      },
-    })
-    await cache.put(cacheKey, response)
-  } catch {
-    // Cache put failed - non-fatal
-  }
-}
-
-/**
- * Invalidate all cached data for a function using Cloudflare Cache API.
- * Called on deploy/delete to ensure cache consistency.
- * @param functionId - The function ID to invalidate cache for
- * @param version - Optional specific version to invalidate (if not provided, invalidates 'latest')
- */
-export async function invalidateFunctionCache(functionId: string, version?: string): Promise<void> {
-  try {
-    const cache = caches.default
-    const cacheTypes: CacheType[] = ['metadata', 'compiled', 'source']
-
-    // Delete cached entries for the specified version (or 'latest')
-    const deletePromises = cacheTypes.map(type => {
-      const cacheKey = createCacheKey(functionId, type, version)
-      return cache.delete(cacheKey)
-    })
-
-    // If invalidating a specific version, also invalidate 'latest' since it may have changed
-    if (version) {
-      const latestDeletePromises = cacheTypes.map(type => {
-        const cacheKey = createCacheKey(functionId, type, undefined)
-        return cache.delete(cacheKey)
-      })
-      deletePromises.push(...latestDeletePromises)
-    }
-
-    await Promise.all(deletePromises)
-  } catch {
-    // Cache invalidation failed - entries will expire naturally via TTL
-  }
-}
-
-// =============================================================================
 // HELPER FUNCTIONS
 // =============================================================================
 
@@ -354,10 +197,9 @@ export async function validateInvokeRequest(
   try {
     validateFunctionId(functionId)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Invalid function ID'
     return {
       valid: false,
-      errorResponse: jsonResponse({ error: message }, 400),
+      errorResponse: jsonResponse({ error: getErrorMessage(error, 'Invalid function ID') }, 400),
     }
   }
 
@@ -405,8 +247,7 @@ export async function validateInvokeRequest(
       requestData = Object.fromEntries(formData.entries())
     } catch (formError) {
       // Log error for debugging but continue with empty data to not break cascade flow
-      const message = formError instanceof Error ? formError.message : String(formError)
-      console.warn(`[invoke] Failed to parse multipart/form-data for ${functionId}: ${message}`)
+      console.warn(`[invoke] Failed to parse multipart/form-data for ${functionId}: ${getErrorMessage(formError)}`)
     }
   } else if (contentType?.includes('text/plain')) {
     requestData = { text: await request.text() }
@@ -552,7 +393,7 @@ async function executeWithWorkerLoader(
       ),
     }
   } catch (loaderError) {
-    const message = loaderError instanceof Error ? loaderError.message : String(loaderError)
+    const message = getErrorMessage(loaderError)
     console.error(`[invoke] Worker loader error for ${functionId}: ${message}`)
     return { success: false, error: message }
   }
@@ -644,8 +485,7 @@ async function executeWithDispatchNamespace(
       { 'X-Execution-Time': String(duration) }
     )
   } catch (dispatchError) {
-    const message = dispatchError instanceof Error ? dispatchError.message : 'Dispatch error'
-    return jsonResponse({ error: `Dispatch namespace error: ${message}` }, 500)
+    return jsonResponse({ error: `Dispatch namespace error: ${getErrorMessage(dispatchError, 'Dispatch error')}` }, 500)
   }
 }
 
@@ -714,9 +554,8 @@ export async function executeCodeFunction(
         try {
           jsCode = stripTypeScriptSync(sourceCode)
         } catch (stripError) {
-          const message = stripError instanceof Error ? stripError.message : String(stripError)
           return jsonResponse({
-            error: `TypeScript compilation failed at runtime: ${message}. ` +
+            error: `TypeScript compilation failed at runtime: ${getErrorMessage(stripError)}. ` +
                    `Please redeploy this function to compile with esbuild.`,
             _meta: {
               executorType: 'code',

@@ -875,8 +875,7 @@ describe.skipIf(!shouldRunE2E())('E2E: Cascade Execution', () => {
             code: `
               export default async function() {
                 // Simulate some work
-                const start = Date.now()
-                while (Date.now() - start < 100) {} // 100ms busy wait
+                await new Promise(resolve => setTimeout(resolve, 100))
                 return { processed: true }
               }
             `,
