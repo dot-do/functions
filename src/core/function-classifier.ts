@@ -8,12 +8,17 @@
  * - Human: Requires human judgment, creativity, approval (content review, expense approval)
  *
  * The classifier analyzes the function name, description, and input schema to determine
- * the appropriate tier. It uses the same AIClient pattern as the generative executor.
+ * the appropriate tier. It supports multiple AI providers with automatic fallback:
+ * - Cloudflare Workers AI (primary)
+ * - OpenRouter
+ * - AWS Bedrock
+ * - Anthropic API
+ * - OpenAI API
  *
  * @module core/function-classifier
  */
 
-import type { AIClient } from '../tiers/generative-executor'
+import { CLASSIFIER_CACHE } from '../config/defaults'
 
 // =============================================================================
 // TYPES
@@ -34,18 +39,54 @@ export interface ClassificationResult {
   confidence: number
   /** Reasoning behind the classification */
   reasoning: string
+  /** Which AI provider was used */
+  provider?: string
+  /** Latency of the classification call in ms */
+  latencyMs?: number
+}
+
+/**
+ * Supported AI provider types
+ */
+export type AIProviderType =
+  | 'cloudflare-workers-ai'
+  | 'openrouter'
+  | 'bedrock'
+  | 'anthropic'
+  | 'openai'
+
+/**
+ * Configuration for an AI provider
+ */
+export interface AIProviderConfig {
+  /** Provider type */
+  type: AIProviderType
+  /** API key or credentials */
+  apiKey?: string
+  /** Model to use (provider-specific) */
+  model?: string
+  /** Base URL override */
+  baseUrl?: string
+  /** AWS region (for Bedrock) */
+  region?: string
+  /** Cloudflare account ID (for Workers AI) */
+  accountId?: string
+  /** Request timeout in ms */
+  timeoutMs?: number
 }
 
 /**
  * Options for the classifier
  */
 export interface ClassifierOptions {
-  /** AI model to use for classification (default: 'claude-3-haiku') */
-  model?: string
-  /** Temperature for the AI call (default: 0 for deterministic) */
+  /** AI providers in priority order (first = primary, rest = fallbacks) */
+  providers: AIProviderConfig[]
+  /** Temperature for AI calls (default: 0 for deterministic) */
   temperature?: number
-  /** Timeout in milliseconds (default: 10000) */
+  /** Default timeout in milliseconds (default: 10000) */
   timeoutMs?: number
+  /** Maximum retries per provider before fallback (default: 1) */
+  maxRetriesPerProvider?: number
 }
 
 /**
@@ -57,11 +98,23 @@ interface ClassificationCacheEntry {
   ttl: number
 }
 
+/**
+ * AI provider interface - abstraction over different AI APIs
+ */
+interface AIProvider {
+  readonly type: AIProviderType
+  classify(
+    prompt: string,
+    systemPrompt: string,
+    options: { temperature: number; timeoutMs: number }
+  ): Promise<{ type: FunctionType; confidence: number; reasoning: string }>
+}
+
 // =============================================================================
 // SYSTEM PROMPT
 // =============================================================================
 
-const CLASSIFICATION_SYSTEM_PROMPT = `You are a function type classifier for the Functions.do platform. Your job is to analyze a function's name, description, and input schema to determine what execution tier it belongs to.
+const CLASSIFICATION_SYSTEM_PROMPT = `You are a function type classifier for the Functions.do platform. Your job is to analyze a function's name, description, and input to determine what execution tier it belongs to.
 
 There are exactly four function types:
 
@@ -119,157 +172,532 @@ Guidelines for confidence scoring:
 - Below 0.5: Very uncertain, defaulting to best guess`
 
 // =============================================================================
-// CLASSIFIER
+// SHARED FETCH UTILITIES
 // =============================================================================
 
 /**
- * Classify a function into one of the four execution tiers using AI analysis.
+ * Performs a fetch request with timeout support.
  *
- * The classifier sends the function's name, description, and input schema to an
- * AI model which returns a structured classification with confidence score and
- * reasoning.
- *
- * @param name - The function name (e.g., "calculateTax", "summarizeArticle")
- * @param description - Optional description of what the function does
- * @param inputSchema - Optional JSON Schema describing the function's input
- * @param aiClient - The AI client to use for classification (Claude or GPT-compatible)
- * @param options - Optional classifier configuration
- * @returns Classification result with type, confidence, and reasoning
- *
- * @example
- * ```typescript
- * const result = await classifyFunction(
- *   'calculateTax',
- *   'Calculates sales tax for a given amount and rate',
- *   { type: 'object', properties: { amount: { type: 'number' }, rate: { type: 'number' } } },
- *   aiClient
- * )
- * // { type: 'code', confidence: 0.95, reasoning: 'Tax calculation is a deterministic arithmetic operation.' }
- * ```
+ * @param url - The URL to fetch
+ * @param options - Fetch request options (headers, body, method, etc.)
+ * @param timeoutMs - Timeout in milliseconds
+ * @returns The fetch Response
+ * @throws Error if the request times out or fails
  */
-export async function classifyFunction(
-  name: string,
-  description?: string,
-  inputSchema?: Record<string, unknown>,
-  aiClient?: AIClient,
-  options?: ClassifierOptions,
-): Promise<ClassificationResult> {
-  // If no AI client provided, fall back to heuristic classification
-  if (!aiClient) {
-    return classifyByHeuristic(name, description)
-  }
-
-  const model = options?.model ?? 'claude-3-haiku'
-  const temperature = options?.temperature ?? 0
-  const timeoutMs = options?.timeoutMs ?? 10000
-
-  // Build the user message describing the function
-  const userMessage = buildUserMessage(name, description, inputSchema)
-
-  // Set up timeout
-  const abortController = new AbortController()
-  let timeoutId: ReturnType<typeof setTimeout> | undefined
-  let timedOut = false
-
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => {
-      timedOut = true
-      abortController.abort()
-      reject(new Error('Classification timeout'))
-    }, timeoutMs)
-  })
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
-    // Try Claude-style API first
-    const responsePromise = aiClient.messages.create({
-      model,
-      messages: [{ role: 'user', content: userMessage }],
-      system: CLASSIFICATION_SYSTEM_PROMPT,
-      max_tokens: 256,
-      temperature,
-      signal: abortController.signal,
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
     })
-
-    const response = await Promise.race([responsePromise, timeoutPromise])
-
-    // Extract text content from response
-    const textContent = response.content.find((c) => c.type === 'text')
-    const rawResponse = textContent?.text ?? ''
-
-    return parseClassificationResponse(rawResponse, name, description)
-  } catch (error) {
-    if (timedOut) {
-      // On timeout, fall back to heuristic
-      return classifyByHeuristic(name, description)
-    }
-
-    // On any AI error, fall back to heuristic
-    return classifyByHeuristic(name, description)
+    return response
   } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId)
+    clearTimeout(timeoutId)
+  }
+}
+
+/**
+ * Response format for OpenAI-compatible APIs (OpenAI, OpenRouter)
+ */
+interface OpenAICompatibleResponse {
+  choices?: Array<{ message?: { content?: string } }>
+}
+
+/**
+ * Response format for Anthropic-compatible APIs (Anthropic, Bedrock)
+ */
+interface AnthropicCompatibleResponse {
+  content?: Array<{ type?: string; text?: string }>
+}
+
+/**
+ * Response format for Cloudflare Workers AI
+ */
+interface WorkersAIResponse {
+  result?: { response?: string }
+}
+
+/**
+ * Parses response from OpenAI-compatible APIs and returns classification.
+ *
+ * @param response - The fetch Response object
+ * @param providerName - Name of the provider for error messages
+ * @returns Parsed classification result
+ * @throws Error if response is not OK or cannot be parsed
+ */
+async function parseOpenAICompatibleResponse(
+  response: Response,
+  providerName: string
+): Promise<{ type: FunctionType; confidence: number; reasoning: string }> {
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => '')
+    throw new Error(`${providerName} API error: ${response.status} ${response.statusText} - ${errorBody}`)
+  }
+
+  const data = (await response.json()) as OpenAICompatibleResponse
+  const text = data.choices?.[0]?.message?.content || ''
+  return parseClassificationResponse(text)
+}
+
+/**
+ * Parses response from Anthropic-compatible APIs and returns classification.
+ *
+ * @param response - The fetch Response object
+ * @param providerName - Name of the provider for error messages
+ * @returns Parsed classification result
+ * @throws Error if response is not OK or cannot be parsed
+ */
+async function parseAnthropicCompatibleResponse(
+  response: Response,
+  providerName: string
+): Promise<{ type: FunctionType; confidence: number; reasoning: string }> {
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => '')
+    throw new Error(`${providerName} API error: ${response.status} ${response.statusText} - ${errorBody}`)
+  }
+
+  const data = (await response.json()) as AnthropicCompatibleResponse
+  const textContent = data.content?.find((c) => c.type === 'text')
+  const text = textContent?.text || ''
+  return parseClassificationResponse(text)
+}
+
+/**
+ * Parses response from Bedrock API (similar to Anthropic but slightly different structure).
+ *
+ * @param response - The fetch Response object
+ * @param providerName - Name of the provider for error messages
+ * @returns Parsed classification result
+ * @throws Error if response is not OK or cannot be parsed
+ */
+async function parseBedrockResponse(
+  response: Response,
+  providerName: string
+): Promise<{ type: FunctionType; confidence: number; reasoning: string }> {
+  if (!response.ok) {
+    throw new Error(`${providerName} API error: ${response.status} ${response.statusText}`)
+  }
+
+  const data = (await response.json()) as { content?: Array<{ text?: string }> }
+  const text = data.content?.[0]?.text || ''
+  return parseClassificationResponse(text)
+}
+
+/**
+ * Parses response from Cloudflare Workers AI REST API.
+ *
+ * @param response - The fetch Response object
+ * @param providerName - Name of the provider for error messages
+ * @returns The response text to be further parsed
+ * @throws Error if response is not OK
+ */
+async function parseWorkersAIResponse(
+  response: Response,
+  providerName: string
+): Promise<string> {
+  if (!response.ok) {
+    throw new Error(`${providerName} API error: ${response.status} ${response.statusText}`)
+  }
+
+  const data = (await response.json()) as WorkersAIResponse
+  return data.result?.response || ''
+}
+
+// =============================================================================
+// AI PROVIDER IMPLEMENTATIONS
+// =============================================================================
+
+/**
+ * Workers AI binding interface (from @cloudflare/workers-types)
+ */
+export interface WorkersAIBinding {
+  run(model: string, input: unknown): Promise<unknown>
+}
+
+/**
+ * Cloudflare Workers AI provider - uses the AI binding directly
+ */
+class CloudflareWorkersAIProvider implements AIProvider {
+  readonly type: AIProviderType = 'cloudflare-workers-ai'
+
+  constructor(
+    private config: AIProviderConfig,
+    private binding?: WorkersAIBinding
+  ) {}
+
+  async classify(
+    prompt: string,
+    systemPrompt: string,
+    options: { temperature: number; timeoutMs: number }
+  ): Promise<{ type: FunctionType; confidence: number; reasoning: string }> {
+    const model = this.config.model || '@cf/meta/llama-3.1-8b-instruct'
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: prompt },
+    ]
+
+    let responseText: string
+
+    if (this.binding) {
+      // Use direct binding (preferred in Workers environment)
+      const response = await this.binding.run(model, {
+        messages,
+        temperature: options.temperature,
+        max_tokens: 256,
+      })
+      responseText = (response as { response?: string })?.response || ''
+    } else if (this.config.accountId && this.config.apiKey) {
+      // Fallback to REST API if no binding
+      const url = `https://api.cloudflare.com/client/v4/accounts/${this.config.accountId}/ai/run/${model}`
+      const res = await fetchWithTimeout(
+        url,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.config.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messages,
+            temperature: options.temperature,
+            max_tokens: 256,
+          }),
+        },
+        options.timeoutMs
+      )
+      responseText = await parseWorkersAIResponse(res, 'Workers AI')
+    } else {
+      throw new Error('Cloudflare Workers AI requires either a binding or accountId + apiKey')
     }
+
+    return parseClassificationResponse(responseText)
+  }
+}
+
+/**
+ * OpenRouter provider (supports many models)
+ */
+class OpenRouterProvider implements AIProvider {
+  readonly type: AIProviderType = 'openrouter'
+
+  constructor(private config: AIProviderConfig) {}
+
+  async classify(
+    prompt: string,
+    systemPrompt: string,
+    options: { temperature: number; timeoutMs: number }
+  ): Promise<{ type: FunctionType; confidence: number; reasoning: string }> {
+    const model = this.config.model || 'anthropic/claude-3-haiku'
+    const baseUrl = this.config.baseUrl || 'https://openrouter.ai/api/v1'
+
+    const res = await fetchWithTimeout(
+      `${baseUrl}/chat/completions`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.config.apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://functions.do',
+          'X-Title': 'Functions.do Classifier',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: prompt },
+          ],
+          temperature: options.temperature,
+          max_tokens: 256,
+        }),
+      },
+      options.timeoutMs
+    )
+
+    return parseOpenAICompatibleResponse(res, 'OpenRouter')
+  }
+}
+
+/**
+ * AWS Bedrock provider
+ */
+class BedrockProvider implements AIProvider {
+  readonly type: AIProviderType = 'bedrock'
+
+  constructor(private config: AIProviderConfig) {}
+
+  async classify(
+    prompt: string,
+    systemPrompt: string,
+    options: { temperature: number; timeoutMs: number }
+  ): Promise<{ type: FunctionType; confidence: number; reasoning: string }> {
+    const model = this.config.model || 'anthropic.claude-3-haiku-20240307-v1:0'
+    const region = this.config.region || 'us-east-1'
+
+    // Bedrock uses AWS Signature V4 - in a real implementation you'd use @aws-sdk/client-bedrock-runtime
+    // Note: In production, this would use proper AWS Signature V4 signing
+    // For Workers, you'd typically use a service binding or pre-signed credentials
+    const endpoint = `https://bedrock-runtime.${region}.amazonaws.com/model/${model}/invoke`
+
+    const res = await fetchWithTimeout(
+      endpoint,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // AWS credentials would be added here via signing
+        },
+        body: JSON.stringify({
+          anthropic_version: 'bedrock-2023-05-31',
+          max_tokens: 256,
+          temperature: options.temperature,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      },
+      options.timeoutMs
+    )
+
+    return parseBedrockResponse(res, 'Bedrock')
+  }
+}
+
+/**
+ * Anthropic API provider
+ */
+class AnthropicProvider implements AIProvider {
+  readonly type: AIProviderType = 'anthropic'
+
+  constructor(private config: AIProviderConfig) {}
+
+  async classify(
+    prompt: string,
+    systemPrompt: string,
+    options: { temperature: number; timeoutMs: number }
+  ): Promise<{ type: FunctionType; confidence: number; reasoning: string }> {
+    const model = this.config.model || 'claude-3-haiku-20240307'
+    const baseUrl = this.config.baseUrl || 'https://api.anthropic.com'
+
+    const res = await fetchWithTimeout(
+      `${baseUrl}/v1/messages`,
+      {
+        method: 'POST',
+        headers: {
+          'x-api-key': this.config.apiKey || '',
+          'anthropic-version': '2023-06-01',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 256,
+          temperature: options.temperature,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      },
+      options.timeoutMs
+    )
+
+    return parseAnthropicCompatibleResponse(res, 'Anthropic')
+  }
+}
+
+/**
+ * OpenAI API provider
+ */
+class OpenAIProvider implements AIProvider {
+  readonly type: AIProviderType = 'openai'
+
+  constructor(private config: AIProviderConfig) {}
+
+  async classify(
+    prompt: string,
+    systemPrompt: string,
+    options: { temperature: number; timeoutMs: number }
+  ): Promise<{ type: FunctionType; confidence: number; reasoning: string }> {
+    const model = this.config.model || 'gpt-4o-mini'
+    const baseUrl = this.config.baseUrl || 'https://api.openai.com/v1'
+
+    const res = await fetchWithTimeout(
+      `${baseUrl}/chat/completions`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.config.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: prompt },
+          ],
+          temperature: options.temperature,
+          max_tokens: 256,
+        }),
+      },
+      options.timeoutMs
+    )
+
+    return parseOpenAICompatibleResponse(res, 'OpenAI')
+  }
+}
+
+/**
+ * Create an AI provider instance from config
+ */
+function createProvider(
+  config: AIProviderConfig,
+  workersAIBinding?: WorkersAIBinding
+): AIProvider {
+  switch (config.type) {
+    case 'cloudflare-workers-ai':
+      return new CloudflareWorkersAIProvider(config, workersAIBinding)
+    case 'openrouter':
+      return new OpenRouterProvider(config)
+    case 'bedrock':
+      return new BedrockProvider(config)
+    case 'anthropic':
+      return new AnthropicProvider(config)
+    case 'openai':
+      return new OpenAIProvider(config)
+    default:
+      throw new Error(`Unknown AI provider type: ${(config as AIProviderConfig).type}`)
   }
 }
 
 // =============================================================================
-// FUNCTION CLASSIFIER CLASS (stateful, with caching)
+// FUNCTION CLASSIFIER CLASS
 // =============================================================================
 
 /**
- * Stateful function classifier with built-in caching.
+ * Multi-provider function classifier with caching and automatic fallback.
  *
- * Use this class when you need to classify multiple functions and want to
- * benefit from cached results. The cache uses function name + description
- * as the key.
+ * The classifier tries providers in order until one succeeds. Results are cached
+ * to avoid repeated classification calls for the same function.
+ *
+ * @example
+ * ```typescript
+ * // With Workers AI binding (preferred in Cloudflare Workers)
+ * const classifier = new FunctionClassifier({
+ *   providers: [{ type: 'cloudflare-workers-ai' }],
+ * }, env.AI)
+ *
+ * // With multiple providers for fallback
+ * const classifier = new FunctionClassifier({
+ *   providers: [
+ *     { type: 'cloudflare-workers-ai' },
+ *     { type: 'openrouter', apiKey: '...' },
+ *     { type: 'anthropic', apiKey: '...' },
+ *   ],
+ * }, env.AI)
+ *
+ * const result = await classifier.classify('calculateTax', 'Computes sales tax')
+ * // { type: 'code', confidence: 0.95, reasoning: '...', provider: 'cloudflare-workers-ai' }
+ * ```
  */
 export class FunctionClassifier {
+  private providers: AIProvider[]
   private cache: Map<string, ClassificationCacheEntry> = new Map()
   private maxCacheSize: number
   private defaultCacheTtlMs: number
+  private temperature: number
+  private timeoutMs: number
+  private maxRetriesPerProvider: number
 
   constructor(
-    private aiClient?: AIClient,
-    private options?: ClassifierOptions & {
-      /** Maximum cache entries (default: 500) */
-      maxCacheSize?: number
-      /** Default cache TTL in milliseconds (default: 3600000 = 1 hour) */
-      defaultCacheTtlMs?: number
-    },
+    options: ClassifierOptions,
+    workersAIBinding?: WorkersAIBinding
   ) {
-    this.maxCacheSize = options?.maxCacheSize ?? 500
-    this.defaultCacheTtlMs = options?.defaultCacheTtlMs ?? 3600000
+    if (!options.providers || options.providers.length === 0) {
+      throw new Error('FunctionClassifier requires at least one AI provider')
+    }
+
+    this.providers = options.providers.map((config) =>
+      createProvider(
+        config,
+        config.type === 'cloudflare-workers-ai' ? workersAIBinding : undefined
+      )
+    )
+    this.temperature = options.temperature ?? 0
+    this.timeoutMs = options.timeoutMs ?? 10000
+    this.maxRetriesPerProvider = options.maxRetriesPerProvider ?? 1
+    this.maxCacheSize = CLASSIFIER_CACHE.MAX_SIZE
+    this.defaultCacheTtlMs = CLASSIFIER_CACHE.TTL_MS
   }
 
   /**
-   * Classify a function, using cached result if available.
+   * Classify a function into one of the four execution tiers.
+   *
+   * @param name - The function name (e.g., "calculateTax", "summarizeArticle")
+   * @param description - Optional description of what the function does
+   * @param inputSchema - Optional JSON Schema describing the function's input
+   * @returns Classification result with type, confidence, reasoning, and provider used
+   * @throws Error if all providers fail
    */
   async classify(
     name: string,
     description?: string,
-    inputSchema?: Record<string, unknown>,
+    inputSchema?: Record<string, unknown>
   ): Promise<ClassificationResult> {
     const cacheKey = this.computeCacheKey(name, description, inputSchema)
 
-    // Check cache
+    // Check cache first
     const cached = this.getFromCache(cacheKey)
     if (cached) {
       return cached
     }
 
-    // Classify
-    const result = await classifyFunction(
-      name,
-      description,
-      inputSchema,
-      this.aiClient,
-      this.options,
+    // Build the classification prompt
+    const prompt = buildUserMessage(name, description, inputSchema)
+    const startTime = Date.now()
+
+    // Try each provider in order
+    const errors: Array<{ provider: string; error: string }> = []
+
+    for (const provider of this.providers) {
+      for (let attempt = 0; attempt < this.maxRetriesPerProvider; attempt++) {
+        try {
+          const classification = await provider.classify(prompt, CLASSIFICATION_SYSTEM_PROMPT, {
+            temperature: this.temperature,
+            timeoutMs: this.timeoutMs,
+          })
+
+          const result: ClassificationResult = {
+            ...classification,
+            provider: provider.type,
+            latencyMs: Date.now() - startTime,
+          }
+
+          // Cache the result
+          this.setInCache(cacheKey, result)
+
+          return result
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error)
+          errors.push({ provider: provider.type, error: errorMessage })
+
+          // If this was the last retry for this provider, move to next provider
+          if (attempt === this.maxRetriesPerProvider - 1) {
+            break
+          }
+
+          // Brief delay before retry
+          await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)))
+        }
+      }
+    }
+
+    // All providers failed
+    throw new Error(
+      `All AI providers failed to classify function "${name}". Errors: ${JSON.stringify(errors)}`
     )
-
-    // Cache the result
-    this.setInCache(cacheKey, result)
-
-    return result
   }
 
   /**
@@ -292,16 +720,23 @@ export class FunctionClassifier {
   invalidate(
     name: string,
     description?: string,
-    inputSchema?: Record<string, unknown>,
+    inputSchema?: Record<string, unknown>
   ): boolean {
     const cacheKey = this.computeCacheKey(name, description, inputSchema)
     return this.cache.delete(cacheKey)
   }
 
+  /**
+   * Get the list of configured providers (for diagnostics)
+   */
+  getProviders(): AIProviderType[] {
+    return this.providers.map((p) => p.type)
+  }
+
   private computeCacheKey(
     name: string,
     description?: string,
-    inputSchema?: Record<string, unknown>,
+    inputSchema?: Record<string, unknown>
   ): string {
     const parts = [name]
     if (description) parts.push(description)
@@ -344,119 +779,34 @@ export class FunctionClassifier {
 }
 
 // =============================================================================
-// HEURISTIC CLASSIFICATION (fallback when no AI client)
+// CONVENIENCE FUNCTION
 // =============================================================================
 
 /**
- * Keyword patterns that strongly indicate a function type.
- * Used as a fallback when AI classification is unavailable.
- */
-const CODE_PATTERNS = [
-  /^(calculate|compute|convert|format|parse|validate|sort|filter|transform|encode|decode|hash|generate(?:UUID|Id|Hash|Token)|compress|decompress|encrypt|decrypt|serialize|deserialize|merge|split|trim|pad|round|clamp|normalize|sanitize|escape|unescape|count|sum|average|min|max|diff|compare(?!Products|Options|Alternatives|Vendors|Competitors)|check|is[A-Z]|has[A-Z]|get[A-Z]|set[A-Z]|to[A-Z]|from[A-Z])/i,
-  /^(math|string|array|object|date|time|number|json|csv|xml|url|base64|hex|binary|regex|uuid|slug|camelCase|snakeCase|capitalize)/i,
-]
-
-const GENERATIVE_PATTERNS = [
-  /^(summarize|translate|generate(?!UUID|Id|Hash|Token)|write|rewrite|compose|draft|describe|explain|classify(?!Function)|categorize|extract|analyze(?!Code)|answer|complete|suggest|recommend|paraphrase|simplify|elaborate|rephrase)/i,
-  /^(create(?:Content|Text|Copy|Email|Response|Summary|Description|Title|Tagline|Headline|Caption))/i,
-  /(sentiment|tone|language|nlp|text|article|email|message|post|comment|feedback)/i,
-]
-
-const AGENTIC_PATTERNS = [
-  /^(research|investigate|analyze(?:Code|System|Codebase)|audit|plan|orchestrate|coordinate|build(?:Report|Pipeline|Workflow)|debug|diagnose|troubleshoot|monitor|scan|crawl|scrape|index)/i,
-  /^(compare(?:Products|Options|Alternatives|Vendors))/i,
-  /^(evaluate(?!Candidate|Application|Submission|Job)(?:Options|System|Performance|Risk)|assess(?:Risk|Impact|Performance)|review(?:Code|PR|Architecture))/i,
-  /(multi.?step|pipeline|workflow|complex|iterative|comprehensive|thorough|detailed.?analysis)/i,
-]
-
-const HUMAN_PATTERNS = [
-  /^(approve|reject|moderate|verify|confirm|authorize|sign|certify|validate(?:Human|Manual)|escalate|assign(?:Priority|Task|To))/i,
-  /^(review(?!Code|PR|Architecture)(?:Content|For|User|Submission|Application))/i,
-  /^(evaluate(?:Candidate|Application|Submission|Job))/i,
-  /(approval|human|manual|judgment|decision|opinion|subjective|creative.?direction|editorial|policy|compliance|legal)/i,
-  /(?:moderate|review).?(?:content|user|post|submission)/i,
-]
-
-/**
- * Classify a function using name/description pattern matching.
+ * Standalone classification function for one-off use.
  *
- * This is the fallback classifier used when no AI client is available.
- * It uses keyword patterns to determine the most likely function type.
+ * For repeated classifications, prefer using the FunctionClassifier class
+ * which provides caching and connection reuse.
  *
  * @param name - The function name
  * @param description - Optional description
- * @returns Classification result based on heuristics
+ * @param inputSchema - Optional input schema
+ * @param options - Classifier options with provider configuration
+ * @returns Classification result
+ * @throws Error if all providers fail
  */
-export function classifyByHeuristic(
+export async function classifyFunction(
   name: string,
   description?: string,
-): ClassificationResult {
-  const text = description ? `${name} ${description}` : name
-
-  // Score each type
-  const scores: Record<FunctionType, number> = {
-    code: 0,
-    generative: 0,
-    agentic: 0,
-    human: 0,
+  inputSchema?: Record<string, unknown>,
+  options?: ClassifierOptions
+): Promise<ClassificationResult> {
+  if (!options || !options.providers || options.providers.length === 0) {
+    throw new Error('classifyFunction requires at least one AI provider in options')
   }
 
-  for (const pattern of CODE_PATTERNS) {
-    if (pattern.test(name)) scores.code += 2
-    if (description && pattern.test(description)) scores.code += 1
-  }
-
-  for (const pattern of GENERATIVE_PATTERNS) {
-    if (pattern.test(name)) scores.generative += 2
-    if (description && pattern.test(description)) scores.generative += 1
-  }
-
-  for (const pattern of AGENTIC_PATTERNS) {
-    if (pattern.test(name)) scores.agentic += 2
-    if (description && pattern.test(description)) scores.agentic += 1
-  }
-
-  for (const pattern of HUMAN_PATTERNS) {
-    if (pattern.test(name)) scores.human += 2
-    if (description && pattern.test(description)) scores.human += 1
-  }
-
-  // Find the winning type
-  const entries = Object.entries(scores) as [FunctionType, number][]
-  entries.sort((a, b) => b[1] - a[1])
-
-  const bestEntry = entries[0]!
-  const secondEntry = entries[1]!
-  const bestType: FunctionType = bestEntry[0]
-  const bestScore: number = bestEntry[1]
-  const secondScore: number = secondEntry[1]
-
-  // If no patterns matched, default to 'code' with low confidence
-  if (bestScore === 0) {
-    return {
-      type: 'code',
-      confidence: 0.3,
-      reasoning: `No strong indicators found for function "${name}". Defaulting to code tier.`,
-    }
-  }
-
-  // Calculate confidence based on score margin
-  const margin = bestScore - secondScore
-  const totalScore = entries.reduce((sum, entry) => sum + entry[1], 0)
-  const confidence = Math.min(0.9, 0.5 + (margin / Math.max(totalScore, 1)) * 0.4)
-
-  const typeLabels: Record<FunctionType, string> = {
-    code: 'deterministic computation',
-    generative: 'AI content generation',
-    agentic: 'multi-step AI reasoning',
-    human: 'human judgment or approval',
-  }
-
-  return {
-    type: bestType,
-    confidence: Math.round(confidence * 100) / 100,
-    reasoning: `Function name "${name}" matches patterns for ${typeLabels[bestType]} (heuristic classification).`,
-  }
+  const classifier = new FunctionClassifier(options)
+  return classifier.classify(name, description, inputSchema)
 }
 
 // =============================================================================
@@ -469,7 +819,7 @@ export function classifyByHeuristic(
 function buildUserMessage(
   name: string,
   description?: string,
-  inputSchema?: Record<string, unknown>,
+  inputSchema?: Record<string, unknown>
 ): string {
   const parts = [`Function name: ${name}`]
 
@@ -487,14 +837,14 @@ function buildUserMessage(
 }
 
 /**
- * Parse the AI response into a ClassificationResult.
- * Handles malformed responses gracefully by falling back to heuristic.
+ * Parse the AI response into a classification result.
+ * Throws if the response cannot be parsed into a valid classification.
  */
-function parseClassificationResponse(
-  rawResponse: string,
-  name: string,
-  description?: string,
-): ClassificationResult {
+function parseClassificationResponse(rawResponse: string): {
+  type: FunctionType
+  confidence: number
+  reasoning: string
+} {
   let content = rawResponse.trim()
 
   // Strip markdown code blocks if present
@@ -509,24 +859,26 @@ function parseClassificationResponse(
     // Validate the parsed result
     const validTypes: FunctionType[] = ['code', 'generative', 'agentic', 'human']
     if (!validTypes.includes(parsed.type)) {
-      return classifyByHeuristic(name, description)
+      throw new Error(`Invalid function type in response: ${parsed.type}`)
     }
 
-    const confidence = typeof parsed.confidence === 'number'
-      ? Math.max(0, Math.min(1, parsed.confidence))
-      : 0.5
+    const confidence =
+      typeof parsed.confidence === 'number'
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : 0.5
 
-    const reasoning = typeof parsed.reasoning === 'string'
-      ? parsed.reasoning
-      : `Classified as ${parsed.type} by AI analysis.`
+    const reasoning =
+      typeof parsed.reasoning === 'string'
+        ? parsed.reasoning
+        : `Classified as ${parsed.type} by AI analysis.`
 
     return {
       type: parsed.type,
       confidence,
       reasoning,
     }
-  } catch {
-    // If JSON parsing fails, try to extract the type from the text
+  } catch (parseError) {
+    // Try to extract the type from the text as a last resort
     const typeMatch = content.match(/\b(code|generative|agentic|human)\b/i)
     if (typeMatch && typeMatch[1] !== undefined) {
       const type = typeMatch[1].toLowerCase() as FunctionType
@@ -537,7 +889,165 @@ function parseClassificationResponse(
       }
     }
 
-    // Complete fallback to heuristic
-    return classifyByHeuristic(name, description)
+    // Cannot parse response at all
+    throw new Error(
+      `Failed to parse AI classification response: ${parseError instanceof Error ? parseError.message : String(parseError)}. Raw response: ${content.substring(0, 200)}`
+    )
   }
+}
+
+// =============================================================================
+// FACTORY HELPERS
+// =============================================================================
+
+/**
+ * Create a classifier from a Workers AI binding.
+ *
+ * This is the primary way to create a classifier in Cloudflare Workers.
+ * The Workers AI binding is always available and provides the most reliable
+ * classification.
+ *
+ * @param aiBinding - The Workers AI binding (env.AI)
+ * @param model - Optional model override (default: '@cf/meta/llama-3.1-8b-instruct')
+ * @returns A configured FunctionClassifier instance
+ *
+ * @example
+ * ```typescript
+ * // In a Cloudflare Worker
+ * const classifier = createClassifierFromBinding(env.AI)
+ * const result = await classifier.classify('calculateTax')
+ * ```
+ */
+export function createClassifierFromBinding(
+  aiBinding: WorkersAIBinding,
+  model?: string
+): FunctionClassifier {
+  return new FunctionClassifier(
+    {
+      providers: [
+        {
+          type: 'cloudflare-workers-ai',
+          model: model || '@cf/meta/llama-3.1-8b-instruct',
+        },
+      ],
+      temperature: 0,
+      timeoutMs: 10000,
+    },
+    aiBinding
+  )
+}
+
+/**
+ * Create classifier options from environment variables with optional Workers AI binding.
+ *
+ * Priority order:
+ * 1. Workers AI binding (if provided) - always available in Cloudflare Workers
+ * 2. OpenRouter - good fallback with many models
+ * 3. Anthropic direct
+ * 4. OpenAI
+ * 5. AWS Bedrock
+ *
+ * @param env - Environment variables
+ * @param aiBinding - Optional Workers AI binding for primary provider
+ * @returns ClassifierOptions with configured providers
+ */
+export function createClassifierOptionsFromEnv(
+  env: Record<string, string | undefined>,
+  aiBinding?: WorkersAIBinding
+): ClassifierOptions {
+  const providers: AIProviderConfig[] = []
+
+  // Workers AI binding is always the primary provider when available
+  if (aiBinding) {
+    providers.push({
+      type: 'cloudflare-workers-ai',
+      model: env.WORKERS_AI_MODEL || '@cf/meta/llama-3.1-8b-instruct',
+    })
+  } else if (env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN) {
+    // Fallback to REST API if no binding
+    providers.push({
+      type: 'cloudflare-workers-ai',
+      accountId: env.CLOUDFLARE_ACCOUNT_ID,
+      apiKey: env.CLOUDFLARE_API_TOKEN,
+      model: env.WORKERS_AI_MODEL || '@cf/meta/llama-3.1-8b-instruct',
+    })
+  }
+
+  // OpenRouter (good fallback with many models)
+  if (env.OPENROUTER_API_KEY) {
+    providers.push({
+      type: 'openrouter',
+      apiKey: env.OPENROUTER_API_KEY,
+      model: env.OPENROUTER_MODEL || 'anthropic/claude-3-haiku',
+    })
+  }
+
+  // Anthropic direct
+  if (env.ANTHROPIC_API_KEY) {
+    providers.push({
+      type: 'anthropic',
+      apiKey: env.ANTHROPIC_API_KEY,
+      model: env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+    })
+  }
+
+  // OpenAI
+  if (env.OPENAI_API_KEY) {
+    providers.push({
+      type: 'openai',
+      apiKey: env.OPENAI_API_KEY,
+      model: env.OPENAI_MODEL || 'gpt-4o-mini',
+    })
+  }
+
+  // Bedrock (requires AWS credentials configured externally)
+  if (env.AWS_REGION && env.USE_BEDROCK === 'true') {
+    providers.push({
+      type: 'bedrock',
+      region: env.AWS_REGION,
+      model: env.BEDROCK_MODEL || 'anthropic.claude-3-haiku-20240307-v1:0',
+    })
+  }
+
+  if (providers.length === 0) {
+    throw new Error(
+      'No AI providers configured. Ensure the AI binding is available or set OPENROUTER_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY'
+    )
+  }
+
+  return {
+    providers,
+    temperature: 0,
+    timeoutMs: 10000,
+  }
+}
+
+/**
+ * Create a classifier from environment with Workers AI binding.
+ *
+ * This is the recommended factory function for Cloudflare Workers.
+ * It uses the AI binding as the primary provider with optional fallbacks.
+ *
+ * @param aiBinding - The Workers AI binding (env.AI)
+ * @param env - Optional environment variables for fallback providers
+ * @returns A configured FunctionClassifier instance
+ *
+ * @example
+ * ```typescript
+ * // In a Cloudflare Worker - just use the binding
+ * const classifier = createClassifier(env.AI)
+ *
+ * // With fallback providers
+ * const classifier = createClassifier(env.AI, {
+ *   OPENROUTER_API_KEY: '...',
+ *   ANTHROPIC_API_KEY: '...',
+ * })
+ * ```
+ */
+export function createClassifier(
+  aiBinding: WorkersAIBinding,
+  env?: Record<string, string | undefined>
+): FunctionClassifier {
+  const options = createClassifierOptionsFromEnv(env || {}, aiBinding)
+  return new FunctionClassifier(options, aiBinding)
 }

@@ -109,6 +109,12 @@ export interface AIClient {
 type AgenticExecutorAIClient = ConstructorParameters<typeof AgenticExecutor>[1]
 
 /**
+ * Extract the AI client type that GenerativeExecutor expects.
+ * This ensures type compatibility between the dispatcher's AIClient and the executor's expected type.
+ */
+type GenerativeExecutorAIClient = GenerativeExecutorOptions['aiClient']
+
+/**
  * Dispatch result with execution info
  */
 export interface DispatchResult<TOutput = unknown> {
@@ -253,10 +259,13 @@ export class TierDispatcher {
     this.codeExecutor = new CodeExecutor(codeEnv)
 
     // Initialize generative executor if AI client is available
-    if (env.AI_CLIENT) {
-      this.generativeExecutor = new GenerativeExecutor({
-        aiClient: env.AI_CLIENT as unknown as GenerativeExecutorOptions['aiClient'],
-      })
+    if (env.AI_CLIENT?.messages) {
+      // TierDispatcherEnv.AIClient and GenerativeExecutor.AIClient are structurally compatible
+      // at runtime (both have messages.create returning the same shape), but their type definitions
+      // differ (messages is optional here, required there; param types differ).
+      // We verify messages exists above, then use unknown bridge cast for the structural compatibility.
+      const aiClient = env.AI_CLIENT as unknown as GenerativeExecutorAIClient
+      this.generativeExecutor = new GenerativeExecutor({ aiClient })
     }
   }
 
@@ -571,9 +580,12 @@ export class TierDispatcher {
     // Get or create agentic executor for this function
     let executor = this.agenticExecutors.get(metadata.id)
     if (!executor) {
-      // Cast AI_CLIENT to the shape AgenticExecutor expects - the dispatcher has already
-      // verified AI_CLIENT.chat exists, so this structural cast is safe.
-      executor = new AgenticExecutor(definition, this.env.AI_CLIENT as unknown as AgenticExecutorAIClient)
+      // TierDispatcherEnv.AIClient.chat and AgenticExecutor.AIClient are structurally compatible
+      // at runtime (both have chat method returning similar AIResponse shapes), but their type
+      // definitions differ. We've verified AI_CLIENT.chat exists above via the guard on line 549.
+      // Use unknown bridge cast for the structural compatibility between separate type systems.
+      const aiClient = this.env.AI_CLIENT as unknown as AgenticExecutorAIClient
+      executor = new AgenticExecutor(definition, aiClient)
 
       // Register tool handlers based on each tool's implementation type
       for (const tool of definition.tools) {

@@ -186,9 +186,9 @@ describe('Function Deployment via FunctionRegistry', () => {
       expect(() => validateFunctionId('my$function')).toThrow('Invalid function ID')
     })
 
-    it('should reject function ID exceeding 255 characters', () => {
-      const longId = 'a'.repeat(256)
-      expect(() => validateFunctionId(longId)).toThrow('Invalid function ID: ID must be 255 characters or less')
+    it('should reject function ID exceeding 64 characters', () => {
+      const longId = 'a'.repeat(65)
+      expect(() => validateFunctionId(longId)).toThrow('Invalid function ID: ID must be 64 characters or less')
     })
 
     it('should reject empty function ID', () => {

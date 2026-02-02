@@ -8,7 +8,7 @@
 
 import type { RouteContext, Env, Handler } from '../router'
 import { validateFunctionId } from '../../core/function-registry'
-import { jsonResponse } from '../http-utils'
+import { jsonResponse, jsonErrorResponse } from '../http-utils'
 
 /**
  * Logs handler - retrieves function execution logs.
@@ -39,7 +39,7 @@ export const logsHandler: Handler = async (
   const functionId = context?.functionId || context?.params?.['id']
 
   if (!functionId) {
-    return jsonResponse({ error: 'Function ID required' }, 400)
+    return jsonErrorResponse('MISSING_REQUIRED', 'Function ID required')
   }
 
   // Validate function ID
@@ -47,12 +47,12 @@ export const logsHandler: Handler = async (
     validateFunctionId(functionId)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid function ID'
-    return jsonResponse({ error: message }, 400)
+    return jsonErrorResponse('INVALID_FUNCTION_ID', message)
   }
 
   // Check if logs DO is configured
   if (!env.FUNCTION_LOGS) {
-    return jsonResponse({ error: 'Function logs not configured' }, 503)
+    return jsonErrorResponse('SERVICE_UNAVAILABLE', 'Function logs not configured')
   }
 
   // Parse query parameters
@@ -62,14 +62,14 @@ export const logsHandler: Handler = async (
 
   const limit = limitParam ? parseInt(limitParam, 10) : 100
   if (isNaN(limit) || limit < 1 || limit > 1000) {
-    return jsonResponse({ error: 'Invalid limit parameter. Must be between 1 and 1000.' }, 400)
+    return jsonErrorResponse('INVALID_PARAMETER', 'Invalid limit parameter. Must be between 1 and 1000.')
   }
 
   let startTime: number | undefined
   if (sinceParam) {
     const parsedDate = Date.parse(sinceParam)
     if (isNaN(parsedDate)) {
-      return jsonResponse({ error: 'Invalid since parameter. Must be an ISO 8601 timestamp.' }, 400)
+      return jsonErrorResponse('INVALID_PARAMETER', 'Invalid since parameter. Must be an ISO 8601 timestamp.')
     }
     startTime = parsedDate
   }
@@ -92,7 +92,7 @@ export const logsHandler: Handler = async (
 
     if (!doResponse.ok) {
       const errorText = await doResponse.text()
-      return jsonResponse({ error: `Failed to retrieve logs: ${errorText}` }, doResponse.status)
+      return jsonErrorResponse('INTERNAL_ERROR', `Failed to retrieve logs: ${errorText}`, doResponse.status)
     }
 
     // Parse and transform response
@@ -121,6 +121,6 @@ export const logsHandler: Handler = async (
     return jsonResponse(logs)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to retrieve logs'
-    return jsonResponse({ error: message }, 500)
+    return jsonErrorResponse('INTERNAL_ERROR', message)
   }
 }

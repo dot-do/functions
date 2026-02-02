@@ -66,6 +66,16 @@ export const CACHE = {
 } as const
 
 /**
+ * Classifier cache configuration for FunctionClassifier
+ */
+export const CLASSIFIER_CACHE = {
+  /** Maximum number of cached classification results */
+  MAX_SIZE: 1000,
+  /** TTL for classification cache entries - 1 hour */
+  TTL_MS: 3600000,
+} as const
+
+/**
  * Compiled code cache configuration for CodeExecutor
  */
 export const CODE_CACHE = {
@@ -303,6 +313,20 @@ export const DETERMINISTIC = {
   RANDOM_SEED: 0.5,
   /** Fixed date value (2024-01-01T00:00:00.000Z) */
   FIXED_DATE_MS: 1704067200000,
+} as const
+
+// =============================================================================
+// INVOKE HANDLER CONFIGURATION
+// =============================================================================
+
+/**
+ * Configuration for the invoke handler.
+ */
+export const INVOKE = {
+  /** Maximum allowed request body size - 10 MB */
+  MAX_BODY_SIZE: 10 * 1024 * 1024,
+  /** Compatibility date for worker loaders */
+  COMPATIBILITY_DATE: '2024-01-01',
 } as const
 
 // =============================================================================

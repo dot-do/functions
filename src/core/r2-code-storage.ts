@@ -9,7 +9,8 @@ import type { CodeWithFallback, PaginationOptions, PaginatedVersions } from './c
 type CompressionEncoding = 'gzip' | 'none'
 
 /**
- * Metadata stored with R2 objects for code storage
+ * Metadata stored with R2 objects for code storage.
+ * This is the typed interface used internally.
  */
 interface CodeObjectMetadata {
   functionId: string
@@ -21,6 +22,61 @@ interface CodeObjectMetadata {
   originalSize?: string
   /** Compression encoding used (gzip or none) */
   encoding?: CompressionEncoding
+}
+
+/**
+ * R2 customMetadata is always Record<string, string>, so we serialize
+ * our typed metadata to/from this format.
+ */
+type R2CustomMetadata = Record<string, string>
+
+/**
+ * Serialize CodeObjectMetadata to R2-compatible string Record.
+ * Converts numeric sizeBytes to string for R2 storage.
+ */
+function serializeMetadata(metadata: CodeObjectMetadata): R2CustomMetadata {
+  const result: R2CustomMetadata = {
+    functionId: metadata.functionId,
+    contentType: metadata.contentType,
+    createdAt: metadata.createdAt,
+    sizeBytes: String(metadata.sizeBytes),
+  }
+  if (metadata.version !== undefined) {
+    result.version = metadata.version
+  }
+  if (metadata.originalSize !== undefined) {
+    result.originalSize = metadata.originalSize
+  }
+  if (metadata.encoding !== undefined) {
+    result.encoding = metadata.encoding
+  }
+  return result
+}
+
+/**
+ * Deserialize R2 customMetadata back to typed CodeObjectMetadata.
+ * Returns undefined if the metadata doesn't have required fields.
+ */
+function deserializeMetadata(raw: R2CustomMetadata | undefined): CodeObjectMetadata | undefined {
+  if (!raw || !raw.functionId || !raw.contentType || !raw.createdAt || !raw.sizeBytes) {
+    return undefined
+  }
+  const metadata: CodeObjectMetadata = {
+    functionId: raw.functionId,
+    contentType: raw.contentType as 'code' | 'source-map',
+    createdAt: raw.createdAt,
+    sizeBytes: parseInt(raw.sizeBytes, 10),
+  }
+  if (raw.version !== undefined) {
+    metadata.version = raw.version
+  }
+  if (raw.originalSize !== undefined) {
+    metadata.originalSize = raw.originalSize
+  }
+  if (raw.encoding !== undefined) {
+    metadata.encoding = raw.encoding as CompressionEncoding
+  }
+  return metadata
 }
 
 /**
@@ -163,9 +219,9 @@ export class R2CodeStorage implements CodeStorage {
       return null
     }
 
-    // Check metadata for encoding information
-    const metadata = object.customMetadata as unknown as CodeObjectMetadata | undefined
-    const encoding = metadata?.encoding as CompressionEncoding | undefined
+    // Check metadata for encoding information using type-safe deserialization
+    const metadata = deserializeMetadata(object.customMetadata)
+    const encoding = metadata?.encoding
 
     // Get the raw data
     const data = await object.arrayBuffer()
@@ -213,7 +269,7 @@ export class R2CodeStorage implements CodeStorage {
     }
 
     await this.bucket.put(key, compressed, {
-      customMetadata: metadata as unknown as Record<string, string>,
+      customMetadata: serializeMetadata(metadata),
     })
   }
 
@@ -318,7 +374,7 @@ export class R2CodeStorage implements CodeStorage {
     }
 
     await this.bucket.put(key, compressed, {
-      customMetadata: metadata as unknown as Record<string, string>,
+      customMetadata: serializeMetadata(metadata),
     })
   }
 
@@ -339,9 +395,9 @@ export class R2CodeStorage implements CodeStorage {
       return null
     }
 
-    // Check metadata for encoding information
-    const metadata = object.customMetadata as unknown as CodeObjectMetadata | undefined
-    const encoding = metadata?.encoding as CompressionEncoding | undefined
+    // Check metadata for encoding information using type-safe deserialization
+    const metadata = deserializeMetadata(object.customMetadata)
+    const encoding = metadata?.encoding
 
     // Get the raw data
     const data = await object.arrayBuffer()
@@ -516,7 +572,7 @@ export class R2CodeStorage implements CodeStorage {
     }
 
     await this.bucket.put(key, data, {
-      customMetadata: metadata as unknown as Record<string, string>,
+      customMetadata: serializeMetadata(metadata),
     })
   }
 
@@ -557,7 +613,7 @@ export class R2CodeStorage implements CodeStorage {
       return null
     }
 
-    return head.customMetadata as unknown as CodeObjectMetadata
+    return deserializeMetadata(head.customMetadata) ?? null
   }
 
   /**

@@ -243,7 +243,13 @@ export class KVCodeStorage implements CodeStorage {
 
     if (metaStr) {
       // Compressed data - stored as base64 in KV
-      const meta = JSON.parse(metaStr) as CompressionMetadata
+      let meta: CompressionMetadata
+      try {
+        meta = JSON.parse(metaStr) as CompressionMetadata
+      } catch {
+        // Corrupted metadata, fall back to uncompressed retrieval
+        return this.kv.get(key, 'text')
+      }
       const base64Data = await this.kv.get(key, 'text')
       if (!base64Data) {
         return null
@@ -433,7 +439,13 @@ export class KVCodeStorage implements CodeStorage {
 
     if (metaStr) {
       // Compressed data
-      const meta = JSON.parse(metaStr) as CompressionMetadata
+      let meta: CompressionMetadata
+      try {
+        meta = JSON.parse(metaStr) as CompressionMetadata
+      } catch {
+        // Corrupted metadata, fall back to uncompressed retrieval
+        return this.kv.get(key, 'text')
+      }
       const base64Data = await this.kv.get(key, 'text')
       if (!base64Data) {
         return null
@@ -560,7 +572,13 @@ export class KVCodeStorage implements CodeStorage {
 
     if (metaStr) {
       // Compressed data
-      const meta = JSON.parse(metaStr) as CompressionMetadata
+      let meta: CompressionMetadata
+      try {
+        meta = JSON.parse(metaStr) as CompressionMetadata
+      } catch {
+        // Corrupted metadata, fall back to uncompressed retrieval
+        return this.kv.get(key, 'text')
+      }
       const base64Data = await this.kv.get(key, 'text')
       if (!base64Data) {
         return null
@@ -651,7 +669,13 @@ export class KVCodeStorage implements CodeStorage {
       return this.kv.get(baseKey, 'text')
     }
 
-    const metadata = JSON.parse(metadataStr) as ChunkMetadata
+    let metadata: ChunkMetadata
+    try {
+      metadata = JSON.parse(metadataStr) as ChunkMetadata
+    } catch {
+      // Corrupted chunk metadata, fall back to direct retrieval
+      return this.kv.get(baseKey, 'text')
+    }
 
     if (!metadata.chunked) {
       return this.kv.get(baseKey, 'text')
@@ -684,7 +708,15 @@ export class KVCodeStorage implements CodeStorage {
     const metadataStr = await this.kv.get(`${baseKey}:meta`, 'text')
 
     if (metadataStr) {
-      const metadata = JSON.parse(metadataStr) as ChunkMetadata
+      let metadata: ChunkMetadata
+      try {
+        metadata = JSON.parse(metadataStr) as ChunkMetadata
+      } catch {
+        // Corrupted metadata, just delete metadata key and main key
+        await this.kv.delete(`${baseKey}:meta`)
+        await this.kv.delete(baseKey)
+        return
+      }
 
       // Delete all chunks
       for (let i = 0; i < metadata.totalChunks; i++) {
@@ -754,7 +786,15 @@ export class KVCodeStorage implements CodeStorage {
 
     // Get metadata
     const metadataStr = await this.kv.get(`${baseKey}:meta`, 'text')
-    const metadata = metadataStr ? (JSON.parse(metadataStr) as WasmMetadata) : undefined
+    let metadata: WasmMetadata | undefined
+    if (metadataStr) {
+      try {
+        metadata = JSON.parse(metadataStr) as WasmMetadata
+      } catch {
+        // Corrupted metadata, continue without it
+        metadata = undefined
+      }
+    }
 
     // Decode base64 to Uint8Array
     const binary = this.base64ToUint8Array(base64)
@@ -966,7 +1006,13 @@ export class KVCodeStorage implements CodeStorage {
       return null
     }
 
-    const meta = JSON.parse(metaStr) as CompressionMetadata
+    let meta: CompressionMetadata
+    try {
+      meta = JSON.parse(metaStr) as CompressionMetadata
+    } catch {
+      // Corrupted metadata
+      return null
+    }
 
     return {
       originalSize: meta.originalSize,

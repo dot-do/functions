@@ -9,7 +9,7 @@
 import type { RouteContext, Env, Handler } from '../router'
 import { KVFunctionRegistry } from '../../core/kv-function-registry'
 import { validateFunctionId } from '../../core/function-registry'
-import { jsonResponse } from '../http-utils'
+import { jsonResponse, jsonErrorResponse } from '../http-utils'
 
 /**
  * Info handler - returns function metadata.
@@ -40,7 +40,7 @@ export const infoHandler: Handler = async (
   const functionId = context?.functionId || context?.params?.['id']
 
   if (!functionId) {
-    return jsonResponse({ error: 'Function ID required' }, 400)
+    return jsonErrorResponse('MISSING_REQUIRED', 'Function ID required')
   }
 
   // Validate function ID
@@ -48,14 +48,14 @@ export const infoHandler: Handler = async (
     validateFunctionId(functionId)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid function ID'
-    return jsonResponse({ error: message }, 400)
+    return jsonErrorResponse('INVALID_FUNCTION_ID', message)
   }
 
   const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
   const metadata = await registry.get(functionId)
 
   if (!metadata) {
-    return jsonResponse({ error: `Function not found: ${functionId}` }, 404)
+    return jsonErrorResponse('FUNCTION_NOT_FOUND', `Function not found: ${functionId}`)
   }
 
   return jsonResponse({

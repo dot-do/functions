@@ -8,7 +8,7 @@
  */
 
 import type { RouteContext, Env, Handler } from '../router'
-import { jsonResponse } from '../http-utils'
+import { jsonResponse, jsonErrorResponse } from '../http-utils'
 import {
   OAuthClient,
   extractBearerToken,
@@ -144,8 +144,8 @@ async function buildAuthContext(
     return { context: null, error: 'OAuth service not configured', status: 501 }
   }
 
-  // Use OAuth service
-  const oauthClient = new OAuthClient(env.OAUTH as unknown as OAuthService)
+  // Use OAuth service - env.OAUTH is typed as OAuthServiceBinding which is an alias for OAuthService
+  const oauthClient = new OAuthClient(env.OAUTH)
   const context = await oauthClient.buildContext(token, orgHeader)
 
   if (!context) {
@@ -220,7 +220,8 @@ export const authMeHandler: Handler = async (
   const { context, error, status } = await buildAuthContext(request, env)
 
   if (!context) {
-    return jsonResponse({ error: error || 'Authentication failed' }, status || 401)
+    const errorCode = status === 501 ? 'NOT_IMPLEMENTED' : 'UNAUTHORIZED'
+    return jsonErrorResponse(errorCode, error || 'Authentication failed', status || 401)
   }
 
   // For API key auth, we have limited info
@@ -252,7 +253,7 @@ export const authMeHandler: Handler = async (
   }
 
   // Get detailed user info from OAuth service
-  const oauthClient = new OAuthClient(env.OAUTH as unknown as OAuthService)
+  const oauthClient = new OAuthClient(env.OAUTH)
   const userInfo = await oauthClient.getUserInfo(token)
 
   if (!userInfo) {
@@ -293,7 +294,7 @@ export const authMeHandler: Handler = async (
  *
  * Response:
  * - 200: { organizations: Organization[] }
- * - 401: { error: string }
+ * - 401: { error: { code: string, message: string } }
  */
 export const authOrgsHandler: Handler = async (
   request: Request,
@@ -304,7 +305,8 @@ export const authOrgsHandler: Handler = async (
   const { context, error, status } = await buildAuthContext(request, env)
 
   if (!context) {
-    return jsonResponse({ error: error || 'Authentication failed' }, status || 401)
+    const errorCode = status === 501 ? 'NOT_IMPLEMENTED' : 'UNAUTHORIZED'
+    return jsonErrorResponse(errorCode, error || 'Authentication failed', status || 401)
   }
 
   // API key auth doesn't have org info
@@ -342,7 +344,7 @@ export const authOrgsHandler: Handler = async (
     return jsonResponse({ organizations: [] })
   }
 
-  const oauthClient = new OAuthClient(env.OAUTH as unknown as OAuthService)
+  const oauthClient = new OAuthClient(env.OAUTH)
   const orgs = await oauthClient.getOrganizations(token)
 
   if (!orgs) {

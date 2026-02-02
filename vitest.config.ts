@@ -10,7 +10,7 @@ export default defineWorkersProject({
     // CRITICAL: Aggressive RAM limits - multiple agents can spawn vitest concurrently
     maxConcurrency: 1,  // Only 1 test at a time
     maxWorkers: 1,      // Only 1 worker process
-    isolate: false,     // Reduce memory by not isolating each test
+    isolate: true,      // Enable test isolation to prevent state leakage between tests
     include: ['src/**/*.test.ts', 'core/src/**/*.test.ts'],
     exclude: [
       'node_modules/**',
@@ -92,10 +92,10 @@ export default defineWorkersProject({
       ],
       // Coverage thresholds
       thresholds: {
-        lines: 50,
-        functions: 50,
-        branches: 50,
-        statements: 50,
+        lines: 70,
+        functions: 70,
+        branches: 60,
+        statements: 70,
       },
     },
   },

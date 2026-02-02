@@ -164,8 +164,9 @@ export function createRateLimitMiddleware(config: RateLimitMiddlewareConfig) {
   let lastCleanup = Date.now()
 
   /**
-   * Evict oldest entries when the limiters Map exceeds MAX_LIMITERS.
-   * Map iteration order is insertion order, so we delete the first entries.
+   * Evict least recently used entries when the limiters Map exceeds MAX_LIMITERS.
+   * Map iteration order is insertion order, and accessed entries are moved to the end,
+   * so deleting the first entries implements proper LRU eviction.
    */
   const evictIfNeeded = (): void => {
     if (limiters.size <= MAX_LIMITERS) return
@@ -204,6 +205,10 @@ export function createRateLimitMiddleware(config: RateLimitMiddlewareConfig) {
       limiter = new InMemoryRateLimiter(limitConfig)
       limiters.set(key, limiter)
       evictIfNeeded()
+    } else {
+      // Move to end of Map for proper LRU ordering
+      limiters.delete(key)
+      limiters.set(key, limiter)
     }
     return limiter
   }
@@ -215,6 +220,10 @@ export function createRateLimitMiddleware(config: RateLimitMiddlewareConfig) {
       limiter = new InMemoryRateLimiter(limitConfig)
       limiters.set(fullKey, limiter)
       evictIfNeeded()
+    } else {
+      // Move to end of Map for proper LRU ordering
+      limiters.delete(fullKey)
+      limiters.set(fullKey, limiter)
     }
     return limiter
   }

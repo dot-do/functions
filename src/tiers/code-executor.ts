@@ -1445,10 +1445,16 @@ export class CodeExecutor {
     }
 
     try {
-      // Create SandboxEnv from LOADER binding if available
-      const sandboxEnv: SandboxEnv | undefined = this.env.LOADER
-        ? { LOADER: this.env.LOADER } as unknown as SandboxEnv
-        : undefined
+      // Create SandboxEnv from LOADER binding if available.
+      // CodeExecutorEnv.LOADER (WorkerLoaderBinding | Fetcher) is structurally compatible with
+      // ai-evaluate's WorkerLoader interface - both have a `get(id, loader)` method that returns
+      // an object with a `fetch` method. The type systems are defined in different packages,
+      // so we need to bridge them with a typed intersection.
+      let sandboxEnv: SandboxEnv | undefined
+      if (this.env.LOADER && typeof (this.env.LOADER as { get?: unknown }).get === 'function') {
+        // LOADER has a get method, so it's compatible with WorkerLoader interface
+        sandboxEnv = { LOADER: this.env.LOADER as SandboxEnv['LOADER'] }
+      }
 
       // Use ai-evaluate for sandboxed execution
       const result: EvaluateResult = await evaluate(

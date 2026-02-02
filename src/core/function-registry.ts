@@ -1,6 +1,6 @@
 import type { FunctionMetadata, DeploymentRecord, VersionHistory } from './types'
 import { compareVersions, isValidVersion } from './types'
-import { ValidationError, NotFoundError, FunctionsDoError, ok, err, type Result } from './errors'
+import { ValidationError, NotFoundError, FunctionsDoError, ok, err, unwrap, type Result } from './errors'
 
 /**
  * Valid programming languages for function metadata
@@ -14,47 +14,7 @@ const VALID_LANGUAGES = ['typescript', 'javascript', 'rust', 'python', 'go', 'zi
 const SEMVER_RANGE_PATTERN = /^(\^|~|>=?|<=?|=)?(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z0-9.-]+))?(?:\+([a-zA-Z0-9.-]+))?$|^(\d+)\.(\d+)\.(\d+)\s*-\s*(\d+)\.(\d+)\.(\d+)$|^\*$|^latest$/
 
 /**
- * Validate function ID format.
- * Must be 1-64 characters, start with a letter, alphanumeric with single hyphens and underscores,
- * no leading/trailing/consecutive hyphens or underscores.
- *
- * @param id - The function ID to validate
- * @throws ValidationError if the ID format is invalid
- */
-export function validateFunctionId(id: string): void {
-  if (!id) {
-    throw new ValidationError('Invalid function ID: ID is required', { field: 'id' })
-  }
-
-  if (id.length > 64) {
-    throw new ValidationError('Invalid function ID: ID must be 64 characters or less', { field: 'id', length: id.length })
-  }
-
-  // Must start with a letter (not a number)
-  if (!/^[a-zA-Z]/.test(id)) {
-    throw new ValidationError('Invalid function ID: must start with a letter', { field: 'id', value: id })
-  }
-
-  // Must not start or end with hyphen or underscore
-  if (/^[-_]|[-_]$/.test(id)) {
-    throw new ValidationError('Invalid function ID: cannot start or end with hyphen or underscore', { field: 'id', value: id })
-  }
-
-  // Must not have consecutive hyphens or underscores
-  if (/--|__/.test(id)) {
-    throw new ValidationError('Invalid function ID: cannot have consecutive hyphens or underscores', { field: 'id', value: id })
-  }
-
-  // Must only contain alphanumeric, hyphens, and underscores
-  if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(id)) {
-    throw new ValidationError('Invalid function ID: must contain only letters, numbers, hyphens, and underscores', { field: 'id', value: id })
-  }
-}
-
-/**
  * Validate function ID format and return a Result.
- * This is the Result-returning version of validateFunctionId.
- *
  * Must be 1-64 characters, start with a letter, alphanumeric with single hyphens and underscores,
  * no leading/trailing/consecutive hyphens or underscores.
  *
@@ -103,37 +63,19 @@ export function validateFunctionIdSafe(id: string): Result<string, ValidationErr
 }
 
 /**
- * Validate entry point file path format.
- * Must be a valid file path with a supported extension.
+ * Validate function ID format (throwing version).
+ * Delegates to validateFunctionIdSafe and throws on error.
  *
- * @param entryPoint - The entry point path to validate
- * @throws ValidationError if the entry point format is invalid
+ * @param id - The function ID to validate
+ * @throws ValidationError if the ID format is invalid
  */
-export function validateEntryPoint(entryPoint: string): void {
-  if (!entryPoint) {
-    throw new ValidationError('Invalid entry point: entry point is required', { field: 'entryPoint' })
-  }
-
-  // Should not start with / (relative paths only) or contain ..
-  if (entryPoint.startsWith('/') || entryPoint.includes('..')) {
-    throw new ValidationError('Invalid entry point: must be a relative path without parent directory references', { field: 'entryPoint', value: entryPoint })
-  }
-
-  // Should not have double slashes
-  if (entryPoint.includes('//')) {
-    throw new ValidationError('Invalid entry point: path contains invalid double slashes', { field: 'entryPoint', value: entryPoint })
-  }
-
-  // Check for valid file path format (basic validation)
-  // Should not contain invalid characters and should have a file extension
-  if (!/^[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+$/.test(entryPoint)) {
-    throw new ValidationError('Invalid entry point: must be a valid file path with extension', { field: 'entryPoint', value: entryPoint })
-  }
+export function validateFunctionId(id: string): void {
+  unwrap(validateFunctionIdSafe(id))
 }
 
 /**
  * Validate entry point file path format and return a Result.
- * This is the Result-returning version of validateEntryPoint.
+ * Must be a valid file path with a supported extension.
  *
  * @param entryPoint - The entry point path to validate
  * @returns Result with the validated entry point or a ValidationError
@@ -163,24 +105,18 @@ export function validateEntryPointSafe(entryPoint: string): Result<string, Valid
 }
 
 /**
- * Validate programming language is a supported enum value.
+ * Validate entry point file path format (throwing version).
+ * Delegates to validateEntryPointSafe and throws on error.
  *
- * @param language - The language to validate
- * @throws ValidationError if the language is not supported
+ * @param entryPoint - The entry point path to validate
+ * @throws ValidationError if the entry point format is invalid
  */
-export function validateLanguage(language: string): void {
-  if (!language) {
-    throw new ValidationError('Invalid language: language is required', { field: 'language' })
-  }
-
-  if (!VALID_LANGUAGES.includes(language as (typeof VALID_LANGUAGES)[number])) {
-    throw new ValidationError(`Invalid language: must be one of ${VALID_LANGUAGES.join(', ')}`, { field: 'language', value: language, allowedValues: [...VALID_LANGUAGES] })
-  }
+export function validateEntryPoint(entryPoint: string): void {
+  unwrap(validateEntryPointSafe(entryPoint))
 }
 
 /**
  * Validate programming language and return a Result.
- * This is the Result-returning version of validateLanguage.
  *
  * @param language - The language to validate
  * @returns Result with the validated language or a ValidationError
@@ -195,6 +131,17 @@ export function validateLanguageSafe(language: string): Result<string, Validatio
   }
 
   return ok(language)
+}
+
+/**
+ * Validate programming language is a supported enum value (throwing version).
+ * Delegates to validateLanguageSafe and throws on error.
+ *
+ * @param language - The language to validate
+ * @throws ValidationError if the language is not supported
+ */
+export function validateLanguage(language: string): void {
+  unwrap(validateLanguageSafe(language))
 }
 
 /**
@@ -216,19 +163,14 @@ export function validateVersionSafe(version: string): Result<string, ValidationE
 }
 
 /**
- * Validate semantic version format.
+ * Validate semantic version format (throwing version).
+ * Delegates to validateVersionSafe and throws on error.
  *
  * @param version - The version string to validate
  * @throws ValidationError if the version is invalid
  */
 export function validateVersion(version: string): void {
-  if (!version) {
-    throw new ValidationError('Invalid version: version is required', { field: 'version' })
-  }
-
-  if (!isValidVersion(version)) {
-    throw new ValidationError(`Invalid semantic version: ${version}`, { field: 'version', value: version })
-  }
+  unwrap(validateVersionSafe(version))
 }
 
 /**
@@ -282,44 +224,8 @@ function isValidSemverRange(version: string): boolean {
 }
 
 /**
- * Validate dependencies format.
- * Must be Record<string, string> with valid semver versions.
- *
- * @param dependencies - The dependencies object to validate
- * @throws ValidationError if dependencies format is invalid
- */
-export function validateDependencies(dependencies: unknown): void {
-  if (dependencies === undefined || dependencies === null) {
-    return // Dependencies are optional
-  }
-
-  if (typeof dependencies !== 'object' || Array.isArray(dependencies)) {
-    throw new ValidationError('Invalid dependencies: must be an object', { field: 'dependencies', type: typeof dependencies })
-  }
-
-  const deps = dependencies as Record<string, unknown>
-
-  for (const [name, version] of Object.entries(deps)) {
-    // Validate package name (basic npm package name validation)
-    if (!name || typeof name !== 'string') {
-      throw new ValidationError('Dependency package name must be a non-empty string', { field: 'dependencies', packageName: name })
-    }
-
-    // Validate version is a string
-    if (typeof version !== 'string') {
-      throw new ValidationError(`Invalid dependencies: version for "${name}" must be a string`, { field: 'dependencies', packageName: name, versionType: typeof version })
-    }
-
-    // Validate version is valid semver or semver range
-    if (!isValidSemverRange(version)) {
-      throw new ValidationError(`Invalid dependencies: "${name}" has invalid semver version "${version}"`, { field: 'dependencies', packageName: name, version })
-    }
-  }
-}
-
-/**
  * Validate dependencies format and return a Result.
- * This is the Result-returning version of validateDependencies.
+ * Must be Record<string, string> with valid semver versions.
  *
  * @param dependencies - The dependencies object to validate
  * @returns Result with the validated dependencies or a ValidationError
@@ -356,6 +262,17 @@ export function validateDependenciesSafe(dependencies: unknown): Result<Record<s
 }
 
 /**
+ * Validate dependencies format (throwing version).
+ * Delegates to validateDependenciesSafe and throws on error.
+ *
+ * @param dependencies - The dependencies object to validate
+ * @throws ValidationError if dependencies format is invalid
+ */
+export function validateDependencies(dependencies: unknown): void {
+  unwrap(validateDependenciesSafe(dependencies))
+}
+
+/**
  * Validate all function metadata fields.
  *
  * @param metadata - The function metadata to validate
@@ -388,22 +305,22 @@ export function validateMetadataSafe(
   metadata: Omit<FunctionMetadata, 'createdAt' | 'updatedAt'>
 ): Result<Omit<FunctionMetadata, 'createdAt' | 'updatedAt'>, ValidationError> {
   const idResult = validateFunctionIdSafe(metadata.id)
-  if (!idResult.success) {
+  if (idResult.success === false) {
     return idResult
   }
 
   const entryPointResult = validateEntryPointSafe(metadata.entryPoint)
-  if (!entryPointResult.success) {
+  if (entryPointResult.success === false) {
     return entryPointResult
   }
 
   const languageResult = validateLanguageSafe(metadata.language)
-  if (!languageResult.success) {
+  if (languageResult.success === false) {
     return languageResult
   }
 
   const dependenciesResult = validateDependenciesSafe(metadata.dependencies)
-  if (!dependenciesResult.success) {
+  if (dependenciesResult.success === false) {
     return dependenciesResult
   }
 

@@ -17,7 +17,7 @@ import type { CascadeEnv } from './cascade-types'
 import { KVFunctionRegistry } from '../../core/kv-function-registry'
 import { KVCodeStorage } from '../../core/code-storage'
 import { validateFunctionId } from '../../core/function-registry'
-import { jsonResponse } from '../http-utils'
+import { jsonResponse, jsonErrorResponse } from '../http-utils'
 import { CascadeExecutor, createCascadeExecutor } from '../../core/cascade-executor'
 import type {
   CascadeDefinition,
@@ -30,6 +30,69 @@ import type {
 } from '@dotdo/functions'
 import { TierDispatcher, type ExtendedMetadata, type TierDispatcherEnv } from '../tier-dispatcher'
 import { FunctionClassifier, type ClassificationResult } from '../../core/function-classifier'
+import type { AuthContext } from '../middleware/auth'
+
+// =============================================================================
+// TIER AUTHORIZATION SCOPES
+// =============================================================================
+
+/**
+ * Required scopes for each tier.
+ * Code tier (tier 1) is the default and doesn't require a special scope.
+ * Higher tiers require explicit scope authorization.
+ */
+export const TIER_SCOPES: Record<FunctionType, string | null> = {
+  code: null, // No special scope needed for code tier
+  generative: 'functions:tier:generative',
+  agentic: 'functions:tier:agentic',
+  human: 'functions:tier:human',
+}
+
+/**
+ * Check if auth context has required scope for a tier.
+ * Returns true if:
+ * - The tier doesn't require a special scope (code tier)
+ * - The auth context has the wildcard scope '*'
+ * - The auth context has the specific tier scope
+ * - No auth context is provided (auth may be disabled)
+ */
+export function hasTierScope(authContext: AuthContext | undefined, tier: FunctionType): boolean {
+  const requiredScope = TIER_SCOPES[tier]
+
+  // Code tier doesn't require special scope
+  if (!requiredScope) {
+    return true
+  }
+
+  // If no auth context, we can't check scopes - allow through (auth may be disabled)
+  // However, handlers should typically have auth context in production
+  if (!authContext) {
+    return true
+  }
+
+  // Check for wildcard scope
+  if (authContext.scopes.includes('*')) {
+    return true
+  }
+
+  // Check for specific tier scope
+  return authContext.scopes.includes(requiredScope)
+}
+
+/**
+ * Custom error for tier authorization failures
+ */
+export class TierAuthorizationError extends Error {
+  tier: FunctionType
+  requiredScope: string
+
+  constructor(tier: FunctionType, requiredScope: string) {
+    super(`Tier '${tier}' requires scope '${requiredScope}'`)
+    this.name = 'TierAuthorizationError'
+    this.tier = tier
+    this.requiredScope = requiredScope
+  }
+}
 
 // =============================================================================
 // TYPES
@@ -268,7 +331,7 @@ export const cascadeHandler: Handler = async (
   const startedAt = Date.now()
 
   if (!functionId) {
-    return jsonResponse({ error: 'Function ID required' }, 400)
+    return jsonErrorResponse('MISSING_REQUIRED', 'Function ID required')
   }
 
   // Validate function ID
@@ -276,7 +339,7 @@ export const cascadeHandler: Handler = async (
     validateFunctionId(functionId)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid function ID'
-    return jsonResponse({ error: message }, 400)
+    return jsonErrorResponse('INVALID_FUNCTION_ID', message)
   }
 
   // Parse request body
@@ -289,7 +352,7 @@ export const cascadeHandler: Handler = async (
       try {
         body = JSON.parse(bodyText)
       } catch {
-        return jsonResponse({ error: 'Invalid JSON body' }, 400)
+        return jsonErrorResponse('INVALID_JSON', 'Invalid JSON body')
       }
     }
   }
@@ -302,24 +365,20 @@ export const cascadeHandler: Handler = async (
   const metadata = await registry.get(functionId) as ExtendedMetadata | null
 
   if (!metadata) {
-    return jsonResponse({ error: `Function not found: ${functionId}` }, 404)
+    return jsonErrorResponse('FUNCTION_NOT_FOUND', `Function not found: ${functionId}`)
   }
 
   // Validate input against function's inputSchema (fail fast)
   if (metadata.inputSchema) {
     const validation = validateInput(input, metadata.inputSchema as InputJsonSchema)
     if (!validation.valid) {
-      return jsonResponse(
-        {
-          error: 'Input validation failed',
+      return jsonErrorResponse('VALIDATION_ERROR', 'Input validation failed', 400, {
+        details: {
           validationErrors: validation.errors,
-          _meta: {
-            functionId,
-            schemaType: 'inputSchema',
-          },
+          functionId,
+          schemaType: 'inputSchema',
         },
-        400
-      )
+      })
     }
   }
 
@@ -361,6 +420,32 @@ export const cascadeHandler: Handler = async (
   // Generate cascade ID
   const cascadeId = `cascade_${functionId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 
+  // Get auth context from route context
+  const authContext = context?.authContext
+
+  // Pre-execution authorization check for requested start tier
+  // This ensures we fail fast with 403 before any tier execution begins
+  const startTier = (options.startTier && options.startTier !== 'auto')
+    ? options.startTier as FunctionType
+    : 'code'
+
+  if (!hasTierScope(authContext, startTier)) {
+    const requiredScope = TIER_SCOPES[startTier]!
+    return jsonErrorResponse('FORBIDDEN', 'Insufficient permissions for tier escalation', 403, {
+      details: {
+        tier: startTier,
+        requiredScope,
+        cascadeId,
+        functionId,
+        executedAt: new Date(startedAt).toISOString(),
+      },
+      headers: {
+        'X-Cascade-Id': cascadeId,
+        'X-Execution-Time': String(Date.now() - startedAt),
+      },
+    })
+  }
+
   try {
     // Build cascade definition from function metadata
     const cascadeDefinition = buildCascadeDefinition(
@@ -368,7 +453,8 @@ export const cascadeHandler: Handler = async (
       metadata,
       code || undefined,
       env,
-      options as CascadeRequestOptions & { startTier?: FunctionType }
+      options as CascadeRequestOptions & { startTier?: FunctionType },
+      authContext
     )
 
     // Create and execute the cascade
@@ -418,10 +504,77 @@ export const cascadeHandler: Handler = async (
     const totalDurationMs = Date.now() - startedAt
     const message = error instanceof Error ? error.message : 'Cascade execution failed'
 
+    // Check for tier authorization error - return 403
+    if (error instanceof TierAuthorizationError) {
+      return jsonResponse(
+        {
+          error: 'Insufficient permissions for tier escalation',
+          tier: error.tier,
+          requiredScope: error.requiredScope,
+          _meta: {
+            cascadeId,
+            functionId,
+            executedAt: new Date(startedAt).toISOString(),
+          },
+        },
+        403,
+        {
+          'X-Cascade-Id': cascadeId,
+          'X-Execution-Time': String(totalDurationMs),
+        }
+      )
+    }
+
     // Extract history from CascadeExhaustedError if available
     let history: TierAttempt[] = []
     if (error instanceof Error && 'history' in error) {
       history = (error as Error & { history: TierAttempt[] }).history
+    }
+
+    // Check if any tier attempt failed due to authorization
+    // This handles escalation scenarios where TierAuthorizationError is wrapped
+    for (const attempt of history) {
+      if (attempt.error instanceof TierAuthorizationError) {
+        const authError = attempt.error as TierAuthorizationError
+        return jsonResponse(
+          {
+            error: 'Insufficient permissions for tier escalation',
+            tier: authError.tier,
+            requiredScope: authError.requiredScope,
+            _meta: {
+              cascadeId,
+              functionId,
+              executedAt: new Date(startedAt).toISOString(),
+            },
+          },
+          403,
+          {
+            'X-Cascade-Id': cascadeId,
+            'X-Execution-Time': String(totalDurationMs),
+          }
+        )
+      }
+      // Also check by error name in case instanceof doesn't work across modules
+      if (attempt.error?.name === 'TierAuthorizationError') {
+        const authError = attempt.error as unknown as { tier: FunctionType; requiredScope: string }
+        return jsonResponse(
+          {
+            error: 'Insufficient permissions for tier escalation',
+            tier: authError.tier,
+            requiredScope: authError.requiredScope,
+            _meta: {
+              cascadeId,
+              functionId,
+              executedAt: new Date(startedAt).toISOString(),
+            },
+          },
+          403,
+          {
+            'X-Cascade-Id': cascadeId,
+            'X-Execution-Time': String(totalDurationMs),
+          }
+        )
+      }
     }
 
     const response: CascadeResponse = {
@@ -472,12 +625,13 @@ function buildCascadeDefinition(
   metadata: ExtendedMetadata,
   code: string | undefined,
   env: CascadeEnv,
-  requestOptions: CascadeRequestOptions
+  requestOptions: CascadeRequestOptions,
+  authContext?: AuthContext
 ): CascadeDefinition<unknown, unknown> {
   // Build tier handlers based on available executors
   const tiers: CascadeTiers<unknown, unknown> = {}
 
-  // Tier 1: Code handler
+  // Tier 1: Code handler (no special scope required)
   if (code) {
     tiers.code = async (input: unknown, tierContext: TierContext) => {
       const dispatcher = createTierDispatcher(env)
@@ -496,9 +650,14 @@ function buildCascadeDefinition(
     }
   }
 
-  // Tier 2: Generative handler
+  // Tier 2: Generative handler (requires functions:tier:generative scope)
   if (env.AI_CLIENT || metadata.type === 'generative') {
     tiers.generative = async (input: unknown, tierContext: TierContext) => {
+      // Authorization check for generative tier
+      if (!hasTierScope(authContext, 'generative')) {
+        throw new TierAuthorizationError('generative', TIER_SCOPES.generative!)
+      }
+
       const dispatcher = createTierDispatcher(env)
       const result = await dispatcher.dispatch(
         { ...metadata, type: 'generative' },
@@ -514,9 +673,14 @@ function buildCascadeDefinition(
     }
   }
 
-  // Tier 3: Agentic handler
+  // Tier 3: Agentic handler (requires functions:tier:agentic scope)
   if (env.AI_CLIENT || metadata.type === 'agentic') {
     tiers.agentic = async (input: unknown, tierContext: TierContext) => {
+      // Authorization check for agentic tier
+      if (!hasTierScope(authContext, 'agentic')) {
+        throw new TierAuthorizationError('agentic', TIER_SCOPES.agentic!)
+      }
+
       const dispatcher = createTierDispatcher(env)
       const result = await dispatcher.dispatch(
         { ...metadata, type: 'agentic' },
@@ -532,9 +696,14 @@ function buildCascadeDefinition(
     }
   }
 
-  // Tier 4: Human handler
+  // Tier 4: Human handler (requires functions:tier:human scope)
   if (env.HUMAN_TASKS) {
     tiers.human = async (input: unknown, tierContext: TierContext) => {
+      // Authorization check for human tier
+      if (!hasTierScope(authContext, 'human')) {
+        throw new TierAuthorizationError('human', TIER_SCOPES.human!)
+      }
+
       const dispatcher = createTierDispatcher(env)
       const result = await dispatcher.dispatch(
         { ...metadata, type: 'human' },

@@ -206,7 +206,7 @@ describe('Info Handler', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toBe('Function ID required')
+      expect(body['error']).toEqual({ code: 'MISSING_REQUIRED', message: 'Function ID required' })
     })
 
     it('returns 400 when context is undefined', async () => {
@@ -218,7 +218,7 @@ describe('Info Handler', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toBe('Function ID required')
+      expect(body['error']).toEqual({ code: 'MISSING_REQUIRED', message: 'Function ID required' })
     })
 
     it('returns 404 when function does not exist', async () => {
@@ -234,7 +234,7 @@ describe('Info Handler', () => {
 
       expect(response.status).toBe(404)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toBe('Function not found: nonexistent-function')
+      expect(body['error']).toEqual({ code: 'FUNCTION_NOT_FOUND', message: 'Function not found: nonexistent-function' })
     })
 
     it('returns 404 with function ID in error message', async () => {
@@ -250,7 +250,8 @@ describe('Info Handler', () => {
 
       expect(response.status).toBe(404)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toContain('specific-missing-func')
+      const error = body['error'] as { code: string; message: string }
+      expect(error.message).toContain('specific-missing-func')
     })
 
     it('returns 400 for invalid function ID format - starts with number', async () => {
@@ -266,7 +267,9 @@ describe('Info Handler', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toContain('Invalid function ID')
+      const error = body['error'] as { code: string; message: string }
+      expect(error.code).toBe('INVALID_FUNCTION_ID')
+      expect(error.message).toContain('Invalid function ID')
     })
 
     it('returns 400 for invalid function ID format - special characters', async () => {
@@ -282,7 +285,9 @@ describe('Info Handler', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toContain('Invalid function ID')
+      const error = body['error'] as { code: string; message: string }
+      expect(error.code).toBe('INVALID_FUNCTION_ID')
+      expect(error.message).toContain('Invalid function ID')
     })
 
     it('returns 400 for invalid function ID format - too long', async () => {
@@ -299,7 +304,9 @@ describe('Info Handler', () => {
 
       expect(response.status).toBe(400)
       const body = (await response.json()) as JsonBody
-      expect(body['error']).toContain('Invalid function ID')
+      const error = body['error'] as { code: string; message: string }
+      expect(error.code).toBe('INVALID_FUNCTION_ID')
+      expect(error.message).toContain('Invalid function ID')
     })
 
     it('returns 400 for invalid function ID format - starts with hyphen', async () => {

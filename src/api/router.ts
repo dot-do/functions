@@ -11,9 +11,12 @@ import { invokeHandler } from './handlers/invoke'
 import { deleteHandler } from './handlers/delete'
 import { logsHandler } from './handlers/logs'
 import { cascadeHandler } from './handlers/cascade'
+import { listHandler } from './handlers/list'
+import { updateHandler } from './handlers/update'
 import { authValidateHandler, authMeHandler, authOrgsHandler } from './handlers/auth'
 import { createAuthMiddleware, authMiddleware, AuthMiddlewareResult } from './middleware/auth'
 import { createRateLimitMiddleware, rateLimitMiddleware, RateLimitResult } from './middleware/rate-limit'
+import { createCSRFMiddleware, csrfMiddleware, generateCSRFToken, createCSRFCookie } from './middleware/csrf'
 import { InMemoryRateLimiter, CompositeRateLimiter, RateLimitConfig } from '../core/rate-limiter'
 import { jsonResponse } from './http-utils'
 
@@ -59,38 +62,21 @@ export interface AIClient {
 
 /**
  * OAuth.do service binding interface for authentication.
- * See: src/core/oauth.ts for full type definitions.
+ * Re-exported from src/core/oauth.ts to maintain the canonical type definition.
  */
-export interface OAuthServiceBinding {
-  validateToken(token: string): Promise<{
-    active: boolean
-    sub: string
-    clientId: string
-    scopes: string[]
-    exp: number
-    iat: number
-  } | null>
-  getUserInfo(token: string): Promise<{
-    id: string
-    email?: string
-    name?: string
-    organizations?: Array<{
-      organization: { id: string; name: string; slug: string }
-      role: 'owner' | 'admin' | 'member' | 'viewer'
-      joinedAt: string
-    }>
-  } | null>
-  checkScopes(token: string, scopes: string[]): Promise<Record<string, boolean>>
-  getOrganizations(token: string): Promise<Array<{ id: string; name: string; slug: string }> | null>
-  checkPermission(token: string, resource: string, action: string): Promise<{
-    allowed: boolean
-    reason?: string
-  }>
-}
+import type { OAuthService } from '../core/oauth'
+export type OAuthServiceBinding = OAuthService
 
 /**
  * Environment type for the API
  */
+/**
+ * Workers AI binding interface for function classification
+ */
+export interface WorkersAI {
+  run(model: string, input: unknown): Promise<unknown>
+}
+
 export interface Env {
   FUNCTIONS_REGISTRY: KVNamespace
   FUNCTIONS_CODE: KVNamespace
@@ -103,7 +89,9 @@ export interface Env {
   DISPATCH_NAMESPACE?: string
   /** esbuild-wasm compiler service for TypeScript compilation */
   ESBUILD_COMPILER?: EsbuildCompiler
-  /** AI client for generative/agentic cascade tiers */
+  /** Workers AI binding for function classification and generative/agentic execution */
+  AI?: WorkersAI
+  /** AI client for generative/agentic cascade tiers (legacy name, prefer AI) */
   AI_CLIENT?: AIClient
   /** Durable Object for human task execution (cascade tier 4) */
   HUMAN_TASKS?: DurableObjectNamespace
@@ -134,12 +122,20 @@ export type Middleware = (
 ) => Promise<Response>
 
 /**
+ * Auth context for authenticated requests (re-exported from auth middleware)
+ */
+export type { AuthContext } from './middleware/auth'
+import type { AuthContext } from './middleware/auth'
+
+/**
  * Route context passed to handlers
  */
 export interface RouteContext {
   params: Record<string, string>
   functionId?: string
   version?: string
+  /** Authentication context when request is authenticated */
+  authContext?: AuthContext
 }
 
 /**
@@ -158,6 +154,7 @@ export interface Route {
 export interface Router {
   get(pattern: string, ...args: (Middleware | Handler)[]): Router
   post(pattern: string, ...args: (Middleware | Handler)[]): Router
+  patch(pattern: string, ...args: (Middleware | Handler)[]): Router
   delete(pattern: string, ...args: (Middleware | Handler)[]): Router
   use(middleware: Middleware): Router
   handle(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>
@@ -172,6 +169,7 @@ export interface Router {
 export interface RouterGroup {
   get(pattern: string, ...args: (Middleware | Handler)[]): void
   post(pattern: string, ...args: (Middleware | Handler)[]): void
+  patch(pattern: string, ...args: (Middleware | Handler)[]): void
   delete(pattern: string, ...args: (Middleware | Handler)[]): void
 }
 
@@ -296,6 +294,12 @@ export function createRouter(): Router {
       return router
     },
 
+    patch(pattern: string, ...args: (Middleware | Handler)[]): Router {
+      const { handler, middleware } = parseRouteArgs('PATCH', pattern, args)
+      routes.push({ method: 'PATCH', pattern, handler, middleware })
+      return router
+    },
+
     delete(pattern: string, ...args: (Middleware | Handler)[]): Router {
       const { handler, middleware } = parseRouteArgs('DELETE', pattern, args)
       routes.push({ method: 'DELETE', pattern, handler, middleware })
@@ -314,6 +318,9 @@ export function createRouter(): Router {
         },
         post(pattern: string, ...args: (Middleware | Handler)[]): void {
           router.post(prefix + pattern, ...args)
+        },
+        patch(pattern: string, ...args: (Middleware | Handler)[]): void {
+          router.patch(prefix + pattern, ...args)
         },
         delete(pattern: string, ...args: (Middleware | Handler)[]): void {
           router.delete(prefix + pattern, ...args)
@@ -395,9 +402,19 @@ export function createRouter(): Router {
         const isPublicEndpoint = ['/health', '/', '/api/status'].includes(path)
 
         if (!isPublicEndpoint && env.FUNCTIONS_API_KEYS) {
-          const authResult = await authMiddleware(request, env as unknown as Record<string, unknown>, ctx)
+          // Auth middleware expects a generic record type for flexibility with different env shapes.
+          // Env extends Record<string, unknown> so we can safely cast the known properties.
+          const authEnv: Record<string, unknown> = {
+            FUNCTIONS_API_KEYS: env.FUNCTIONS_API_KEYS,
+            OAUTH: env.OAUTH,
+          }
+          const authResult = await authMiddleware(request, authEnv, ctx)
           if (!authResult.shouldContinue) {
             return authResult.response!
+          }
+          // Pass auth context to handlers
+          if (authResult.authContext) {
+            context.authContext = authResult.authContext
           }
         }
 
@@ -479,11 +496,17 @@ export function createRouter(): Router {
   // API v1 Routes (versioned endpoints)
   // ============================================================================
 
+  // List all functions: GET /v1/api/functions
+  router.get('/v1/api/functions', listHandler)
+
   // Deploy function: POST /v1/api/functions
   router.post('/v1/api/functions', deployHandler)
 
   // Function info: GET /v1/api/functions/:id
   router.get('/v1/api/functions/:id', infoHandler)
+
+  // Update function metadata: PATCH /v1/api/functions/:id
+  router.patch('/v1/api/functions/:id', updateHandler)
 
   // Delete function: DELETE /v1/api/functions/:id
   router.delete('/v1/api/functions/:id', deleteHandler)
@@ -506,11 +529,17 @@ export function createRouter(): Router {
   // New integrations should use the /v1/ prefixed endpoints.
   // ============================================================================
 
+  // List all functions (legacy)
+  router.get('/api/functions', listHandler)
+
   // Deploy function (legacy)
   router.post('/api/functions', deployHandler)
 
   // Function info (legacy)
   router.get('/api/functions/:id', infoHandler)
+
+  // Update function metadata (legacy)
+  router.patch('/api/functions/:id', updateHandler)
 
   // Delete function (legacy)
   router.delete('/api/functions/:id', deleteHandler)
@@ -547,3 +576,7 @@ export function createRouter(): Router {
 
   return router
 }
+
+// Re-export CSRF utilities for use by consumers
+export { createCSRFMiddleware, csrfMiddleware, generateCSRFToken, createCSRFCookie }
+export type { CSRFMiddlewareConfig, CSRFMiddlewareResult, CSRFMiddleware } from './middleware/csrf'

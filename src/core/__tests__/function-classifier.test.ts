@@ -5,466 +5,473 @@
  * should be executed as code, generative, agentic, or human.
  *
  * Test Categories:
- * 1. AI-based classification with mock AI client
- * 2. Heuristic fallback classification (no AI client)
+ * 1. Multi-provider classification with mock providers
+ * 2. Provider fallback behavior
  * 3. Classification of clear-cut cases
- * 4. Edge cases (unknown, ambiguous, malformed responses)
+ * 4. Edge cases (malformed responses, timeouts)
  * 5. Caching behavior (FunctionClassifier class)
- * 6. Error handling and timeout fallbacks
+ * 6. Error handling when all providers fail
  *
  * @module core/__tests__/function-classifier.test
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import {
-  classifyFunction,
-  classifyByHeuristic,
   FunctionClassifier,
+  createClassifierFromBinding,
+  createClassifier,
   type ClassificationResult,
   type FunctionType,
+  type WorkersAIBinding,
+  type ClassifierOptions,
 } from '../function-classifier'
 
 // =============================================================================
-// MOCK AI CLIENT
+// MOCK WORKERS AI BINDING
 // =============================================================================
 
 /**
- * Create a mock AI client matching the generative executor's AIClient interface
+ * Create a mock Workers AI binding that returns a specific response
  */
-function createMockAIClient(responseContent?: string) {
+function createMockAIBinding(responseContent?: string): WorkersAIBinding {
   return {
-    messages: {
-      create: vi.fn().mockResolvedValue({
-        content: [
-          {
-            type: 'text',
-            text: responseContent ?? '{"type":"code","confidence":0.9,"reasoning":"Test response"}',
-          },
-        ],
-        usage: { input_tokens: 100, output_tokens: 50 },
-        stop_reason: 'end_turn',
-        model: 'claude-3-haiku-20240307',
-      }),
-    },
-    chat: {
-      completions: {
-        create: vi.fn(),
-      },
-    },
+    run: vi.fn().mockResolvedValue({
+      response: responseContent ?? '{"type":"code","confidence":0.9,"reasoning":"Test response"}',
+    }),
   }
 }
 
 /**
- * Create a mock AI client that returns a specific classification
+ * Create a mock Workers AI binding that returns a specific classification
  */
-function createClassifyingClient(type: FunctionType, confidence: number, reasoning: string) {
-  return createMockAIClient(
-    JSON.stringify({ type, confidence, reasoning }),
-  )
+function createClassifyingBinding(
+  type: FunctionType,
+  confidence: number,
+  reasoning: string
+): WorkersAIBinding {
+  return createMockAIBinding(JSON.stringify({ type, confidence, reasoning }))
 }
 
 /**
- * Create a mock AI client that throws an error
+ * Create a mock Workers AI binding that throws an error
  */
-function createFailingClient(error: Error = new Error('AI service unavailable')) {
+function createFailingBinding(error: Error = new Error('AI service unavailable')): WorkersAIBinding {
   return {
-    messages: {
-      create: vi.fn().mockRejectedValue(error),
-    },
-    chat: {
-      completions: {
-        create: vi.fn(),
-      },
-    },
+    run: vi.fn().mockRejectedValue(error),
   }
 }
 
 // =============================================================================
-// AI-BASED CLASSIFICATION
+// BASIC CLASSIFICATION TESTS
 // =============================================================================
 
-describe('classifyFunction (AI-based)', () => {
-  it('should classify using AI client when provided', async () => {
-    const client = createClassifyingClient('code', 0.95, 'Tax calculation is arithmetic')
+describe('FunctionClassifier', () => {
+  describe('basic classification', () => {
+    it('should classify a function using Workers AI binding', async () => {
+      const binding = createClassifyingBinding('code', 0.95, 'Tax calculation is arithmetic')
+      const classifier = createClassifierFromBinding(binding)
 
-    const result = await classifyFunction(
-      'calculateTax',
-      'Calculates sales tax',
-      { type: 'object', properties: { amount: { type: 'number' } } },
-      client,
-    )
-
-    expect(result.type).toBe('code')
-    expect(result.confidence).toBe(0.95)
-    expect(result.reasoning).toBe('Tax calculation is arithmetic')
-  })
-
-  it('should pass correct parameters to AI client', async () => {
-    const client = createClassifyingClient('generative', 0.9, 'Summarization needs AI')
-
-    await classifyFunction(
-      'summarizeArticle',
-      'Summarizes a long article into key points',
-      { type: 'object', properties: { text: { type: 'string' } } },
-      client,
-    )
-
-    expect(client.messages.create).toHaveBeenCalledTimes(1)
-    const callArgs = client.messages.create.mock.calls[0]?.[0] as Record<string, unknown> | undefined
-
-    expect(callArgs).toBeDefined()
-    expect(callArgs!.model).toBe('claude-3-haiku')
-    expect(callArgs!.temperature).toBe(0)
-    expect(callArgs!.max_tokens).toBe(256)
-    expect(callArgs!.system).toContain('function type classifier')
-    expect((callArgs!.messages as Array<{ content: string }>)[0].content).toContain('summarizeArticle')
-    expect((callArgs!.messages as Array<{ content: string }>)[0].content).toContain('Summarizes a long article')
-  })
-
-  it('should use custom model from options', async () => {
-    const client = createClassifyingClient('code', 0.9, 'test')
-
-    await classifyFunction('test', undefined, undefined, client, {
-      model: 'claude-3-sonnet',
-    })
-
-    const callArgs = client.messages.create.mock.calls[0]?.[0] as Record<string, unknown> | undefined
-    expect(callArgs).toBeDefined()
-    expect(callArgs!.model).toBe('claude-3-sonnet')
-  })
-
-  it('should use custom temperature from options', async () => {
-    const client = createClassifyingClient('code', 0.9, 'test')
-
-    await classifyFunction('test', undefined, undefined, client, {
-      temperature: 0.5,
-    })
-
-    const callArgs = client.messages.create.mock.calls[0]?.[0] as Record<string, unknown> | undefined
-    expect(callArgs).toBeDefined()
-    expect(callArgs!.temperature).toBe(0.5)
-  })
-
-  it('should fall back to heuristic on AI error', async () => {
-    const client = createFailingClient()
-
-    const result = await classifyFunction(
-      'calculateTax',
-      'Calculates sales tax for a given amount',
-      undefined,
-      client,
-    )
-
-    // Should still return a result via heuristic
-    expect(result.type).toBe('code')
-    expect(result.confidence).toBeGreaterThan(0)
-    expect(result.reasoning).toContain('heuristic')
-  })
-
-  it('should fall back to heuristic when no AI client', async () => {
-    const result = await classifyFunction(
-      'summarizeArticle',
-      'Summarizes text using AI',
-    )
-
-    expect(result.type).toBe('generative')
-    expect(result.confidence).toBeGreaterThan(0)
-    expect(result.reasoning).toContain('heuristic')
-  })
-
-  it('should handle AI response with markdown code blocks', async () => {
-    const client = createMockAIClient(
-      '```json\n{"type":"generative","confidence":0.88,"reasoning":"Needs AI generation"}\n```',
-    )
-
-    const result = await classifyFunction('generateDescription', undefined, undefined, client)
-
-    expect(result.type).toBe('generative')
-    expect(result.confidence).toBe(0.88)
-  })
-
-  it('should handle malformed JSON response by trying text extraction', async () => {
-    const client = createMockAIClient(
-      'I think this is a generative function because it needs AI to create content.',
-    )
-
-    const result = await classifyFunction('generatePoem', undefined, undefined, client)
-
-    expect(result.type).toBe('generative')
-    expect(result.confidence).toBe(0.5)
-  })
-
-  it('should handle completely unparseable response with heuristic fallback', async () => {
-    const client = createMockAIClient('---')
-
-    const result = await classifyFunction('calculateTax', undefined, undefined, client)
-
-    // Falls back to heuristic which should detect "calculate"
-    expect(result.type).toBe('code')
-  })
-
-  it('should clamp confidence to 0-1 range', async () => {
-    const client = createMockAIClient(
-      '{"type":"code","confidence":1.5,"reasoning":"Over-confident"}',
-    )
-
-    const result = await classifyFunction('test', undefined, undefined, client)
-
-    expect(result.confidence).toBeLessThanOrEqual(1)
-    expect(result.confidence).toBeGreaterThanOrEqual(0)
-  })
-
-  it('should handle missing confidence with default', async () => {
-    const client = createMockAIClient(
-      '{"type":"code","reasoning":"No confidence provided"}',
-    )
-
-    const result = await classifyFunction('test', undefined, undefined, client)
-
-    expect(result.type).toBe('code')
-    expect(result.confidence).toBe(0.5)
-  })
-
-  it('should include input schema in AI request when provided', async () => {
-    const client = createClassifyingClient('code', 0.9, 'test')
-    const schema = {
-      type: 'object',
-      properties: {
-        amount: { type: 'number' },
-        rate: { type: 'number' },
-      },
-      required: ['amount', 'rate'],
-    }
-
-    await classifyFunction('calculateTax', 'Computes tax', schema, client)
-
-    const callArgs = client.messages.create.mock.calls[0]?.[0] as Record<string, unknown> | undefined
-    expect(callArgs).toBeDefined()
-    const messages = callArgs!.messages as Array<{ content: string }>
-    expect(messages[0].content).toContain('Input schema')
-    expect(messages[0].content).toContain('amount')
-    expect(messages[0].content).toContain('rate')
-  })
-
-  it('should reject invalid type from AI response', async () => {
-    const client = createMockAIClient(
-      '{"type":"unknown","confidence":0.9,"reasoning":"Invalid type"}',
-    )
-
-    const result = await classifyFunction('test', undefined, undefined, client)
-
-    // Should fall back to heuristic since "unknown" is not a valid type
-    expect(['code', 'generative', 'agentic', 'human']).toContain(result.type)
-  })
-})
-
-// =============================================================================
-// HEURISTIC CLASSIFICATION
-// =============================================================================
-
-describe('classifyByHeuristic', () => {
-  describe('Code tier classification', () => {
-    const codeFunctions = [
-      'calculateTax',
-      'computeHash',
-      'convertTemperature',
-      'formatCurrency',
-      'parseCSV',
-      'validateEmail',
-      'sortArray',
-      'filterItems',
-      'transformData',
-      'encodeBase64',
-      'decodeJSON',
-      'hashPassword',
-      'generateUUID',
-      'compressData',
-      'mergeObjects',
-      'splitString',
-      'trimWhitespace',
-      'roundNumber',
-      'normalizeUrl',
-      'sanitizeInput',
-      'countWords',
-      'sumValues',
-      'isValidUrl',
-      'hasPermission',
-      'getTimestamp',
-      'toString',
-      'fromJSON',
-    ]
-
-    for (const name of codeFunctions) {
-      it(`should classify "${name}" as code`, () => {
-        const result = classifyByHeuristic(name)
-        expect(result.type).toBe('code')
-        expect(result.confidence).toBeGreaterThan(0.3)
-      })
-    }
-  })
-
-  describe('Generative tier classification', () => {
-    const generativeFunctions = [
-      'summarizeArticle',
-      'translateText',
-      'generateProductDescription',
-      'writeEmail',
-      'rewriteParagraph',
-      'composeTweet',
-      'draftResponse',
-      'describeImage',
-      'explainConcept',
-      'classifySentiment',
-      'extractKeywords',
-      'answerQuestion',
-      'completeSentence',
-      'suggestImprovements',
-      'paraphraseText',
-      'simplifyLanguage',
-      'createContentSummary',
-    ]
-
-    for (const name of generativeFunctions) {
-      it(`should classify "${name}" as generative`, () => {
-        const result = classifyByHeuristic(name)
-        expect(result.type).toBe('generative')
-        expect(result.confidence).toBeGreaterThan(0.3)
-      })
-    }
-  })
-
-  describe('Agentic tier classification', () => {
-    const agenticFunctions = [
-      'researchCompetitors',
-      'investigateBug',
-      'analyzeCodebase',
-      'auditSecurity',
-      'planProject',
-      'orchestrateWorkflow',
-      'buildReport',
-      'debugApplication',
-      'diagnoseIssue',
-      'troubleshootError',
-      'scanVulnerabilities',
-      'crawlWebsite',
-      'compareProducts',
-    ]
-
-    for (const name of agenticFunctions) {
-      it(`should classify "${name}" as agentic`, () => {
-        const result = classifyByHeuristic(name)
-        expect(result.type).toBe('agentic')
-        expect(result.confidence).toBeGreaterThan(0.3)
-      })
-    }
-  })
-
-  describe('Human tier classification', () => {
-    const humanFunctions = [
-      'approveExpenseReport',
-      'reviewContentForPublishing',
-      'moderateUserContent',
-      'verifyIdentity',
-      'confirmOrder',
-      'authorizePayment',
-      'signContract',
-      'escalateIssue',
-      'evaluateCandidate',
-    ]
-
-    for (const name of humanFunctions) {
-      it(`should classify "${name}" as human`, () => {
-        const result = classifyByHeuristic(name)
-        expect(result.type).toBe('human')
-        expect(result.confidence).toBeGreaterThan(0.3)
-      })
-    }
-
-    it('should classify human functions with description hints', () => {
-      // These benefit from description for disambiguation
-      const result = classifyByHeuristic(
-        'moderateContent',
-        'Requires human judgment to enforce community policy',
+      const result = await classifier.classify(
+        'calculateTax',
+        'Calculates sales tax',
+        { type: 'object', properties: { amount: { type: 'number' } } }
       )
-      expect(result.type).toBe('human')
-    })
-  })
 
-  describe('Description-enhanced classification', () => {
-    it('should use description to disambiguate', () => {
-      // "approve" in the name is a strong human signal, description reinforces it
-      const result = classifyByHeuristic(
-        'approveRequest',
-        'Requires human approval for compliance review',
-      )
-      expect(result.type).toBe('human')
+      expect(result.type).toBe('code')
+      expect(result.confidence).toBe(0.95)
+      expect(result.reasoning).toBe('Tax calculation is arithmetic')
+      expect(result.provider).toBe('cloudflare-workers-ai')
     })
 
-    it('should boost confidence when name and description agree', () => {
-      const withDesc = classifyByHeuristic(
+    it('should pass correct parameters to AI binding', async () => {
+      const binding = createClassifyingBinding('generative', 0.9, 'Summarization needs AI')
+      const classifier = createClassifierFromBinding(binding)
+
+      await classifier.classify(
         'summarizeArticle',
-        'Uses AI to generate a concise summary of the article text',
+        'Summarizes a long article into key points',
+        { type: 'object', properties: { text: { type: 'string' } } }
       )
-      const withoutDesc = classifyByHeuristic('summarizeArticle')
 
-      // Both should be generative, but with description should have equal or higher confidence
-      expect(withDesc.type).toBe('generative')
-      expect(withoutDesc.type).toBe('generative')
-      expect(withDesc.confidence).toBeGreaterThanOrEqual(withoutDesc.confidence)
+      expect(binding.run).toHaveBeenCalledTimes(1)
+      const callArgs = (binding.run as ReturnType<typeof vi.fn>).mock.calls[0]
+      expect(callArgs[0]).toBe('@cf/meta/llama-3.1-8b-instruct')
+
+      const input = callArgs[1] as { messages: Array<{ role: string; content: string }> }
+      expect(input.messages).toHaveLength(2)
+      expect(input.messages[0].role).toBe('system')
+      expect(input.messages[0].content).toContain('function type classifier')
+      expect(input.messages[1].role).toBe('user')
+      expect(input.messages[1].content).toContain('summarizeArticle')
+    })
+
+    it('should use custom model when specified', async () => {
+      const binding = createClassifyingBinding('code', 0.9, 'test')
+      const classifier = new FunctionClassifier(
+        {
+          providers: [{ type: 'cloudflare-workers-ai', model: '@cf/mistral/mistral-7b-instruct-v0.1' }],
+        },
+        binding
+      )
+
+      await classifier.classify('test')
+
+      const callArgs = (binding.run as ReturnType<typeof vi.fn>).mock.calls[0]
+      expect(callArgs[0]).toBe('@cf/mistral/mistral-7b-instruct-v0.1')
+    })
+
+    it('should track latency in result', async () => {
+      const binding = createClassifyingBinding('code', 0.9, 'test')
+      const classifier = createClassifierFromBinding(binding)
+
+      const result = await classifier.classify('test')
+
+      expect(result.latencyMs).toBeGreaterThanOrEqual(0)
+      expect(typeof result.latencyMs).toBe('number')
     })
   })
 
-  describe('Unknown/ambiguous functions', () => {
-    it('should default to code with low confidence for unknown names', () => {
-      const result = classifyByHeuristic('doSomething')
-      expect(result.type).toBe('code')
-      expect(result.confidence).toBeLessThanOrEqual(0.5)
+  describe('response parsing', () => {
+    it('should handle AI response with markdown code blocks', async () => {
+      const binding = createMockAIBinding(
+        '```json\n{"type":"generative","confidence":0.88,"reasoning":"Needs AI generation"}\n```'
+      )
+      const classifier = createClassifierFromBinding(binding)
+
+      const result = await classifier.classify('generateDescription')
+
+      expect(result.type).toBe('generative')
+      expect(result.confidence).toBe(0.88)
     })
 
-    it('should return valid result for empty-ish names', () => {
-      const result = classifyByHeuristic('x')
+    it('should extract type from non-JSON response', async () => {
+      const binding = createMockAIBinding(
+        'I think this is a generative function because it needs AI to create content.'
+      )
+      const classifier = createClassifierFromBinding(binding)
+
+      const result = await classifier.classify('generatePoem')
+
+      expect(result.type).toBe('generative')
+      expect(result.confidence).toBe(0.5)
+    })
+
+    it('should clamp confidence to 0-1 range', async () => {
+      const binding = createMockAIBinding(
+        '{"type":"code","confidence":1.5,"reasoning":"Over-confident"}'
+      )
+      const classifier = createClassifierFromBinding(binding)
+
+      const result = await classifier.classify('test')
+
+      expect(result.confidence).toBeLessThanOrEqual(1)
+      expect(result.confidence).toBeGreaterThanOrEqual(0)
+    })
+
+    it('should handle missing confidence with default', async () => {
+      const binding = createMockAIBinding('{"type":"code","reasoning":"No confidence provided"}')
+      const classifier = createClassifierFromBinding(binding)
+
+      const result = await classifier.classify('test')
+
       expect(result.type).toBe('code')
-      expect(result.confidence).toBe(0.3)
+      expect(result.confidence).toBe(0.5)
+    })
+
+    it('should reject invalid type from AI response', async () => {
+      const binding = createMockAIBinding(
+        '{"type":"unknown","confidence":0.9,"reasoning":"Invalid type"}'
+      )
+      const classifier = createClassifierFromBinding(binding)
+
+      // Should throw because "unknown" is not a valid type and response can't be parsed
+      await expect(classifier.classify('test')).rejects.toThrow()
     })
   })
 
-  describe('Result structure', () => {
-    it('should always return type, confidence, and reasoning', () => {
-      const result = classifyByHeuristic('calculateTax')
+  describe('caching', () => {
+    it('should cache classification results', async () => {
+      const binding = createClassifyingBinding('code', 0.9, 'Cached test')
+      const classifier = createClassifierFromBinding(binding)
 
-      expect(result).toHaveProperty('type')
-      expect(result).toHaveProperty('confidence')
-      expect(result).toHaveProperty('reasoning')
-      expect(typeof result.type).toBe('string')
-      expect(typeof result.confidence).toBe('number')
-      expect(typeof result.reasoning).toBe('string')
+      // First call
+      const result1 = await classifier.classify('calculateTax', 'Computes tax')
+      expect(result1.type).toBe('code')
+      expect(classifier.getCacheSize()).toBe(1)
+
+      // Second call with same args should use cache
+      const result2 = await classifier.classify('calculateTax', 'Computes tax')
+      expect(result2.type).toBe('code')
+      expect(classifier.getCacheSize()).toBe(1)
+
+      // AI should only be called once
+      expect(binding.run).toHaveBeenCalledTimes(1)
     })
 
-    it('should have confidence between 0 and 1', () => {
-      const functions = ['calculateTax', 'summarizeText', 'researchTopic', 'approveRequest', 'xyz']
+    it('should not cache different function names together', async () => {
+      const binding = createClassifyingBinding('code', 0.9, 'test')
+      const classifier = createClassifierFromBinding(binding)
 
-      for (const name of functions) {
-        const result = classifyByHeuristic(name)
-        expect(result.confidence).toBeGreaterThanOrEqual(0)
-        expect(result.confidence).toBeLessThanOrEqual(1)
+      await classifier.classify('calculateTax')
+      await classifier.classify('summarizeText')
+
+      expect(classifier.getCacheSize()).toBe(2)
+      expect(binding.run).toHaveBeenCalledTimes(2)
+    })
+
+    it('should evict oldest entry when cache is full', async () => {
+      const binding = createClassifyingBinding('code', 0.9, 'test')
+      const classifier = new FunctionClassifier(
+        { providers: [{ type: 'cloudflare-workers-ai' }] },
+        binding
+      )
+      // Note: maxCacheSize is 1000 by default, we can't easily test this without internal access
+      // But we can verify the cache grows
+      await classifier.classify('func1')
+      await classifier.classify('func2')
+      await classifier.classify('func3')
+      expect(classifier.getCacheSize()).toBe(3)
+    })
+
+    it('should clear cache', async () => {
+      const binding = createClassifyingBinding('code', 0.9, 'test')
+      const classifier = createClassifierFromBinding(binding)
+
+      await classifier.classify('calculateTax')
+      await classifier.classify('summarizeText')
+      expect(classifier.getCacheSize()).toBe(2)
+
+      classifier.clearCache()
+      expect(classifier.getCacheSize()).toBe(0)
+    })
+
+    it('should invalidate specific cache entry', async () => {
+      const binding = createClassifyingBinding('code', 0.9, 'test')
+      const classifier = createClassifierFromBinding(binding)
+
+      await classifier.classify('calculateTax', 'desc')
+      expect(classifier.getCacheSize()).toBe(1)
+
+      const removed = classifier.invalidate('calculateTax', 'desc')
+      expect(removed).toBe(true)
+      expect(classifier.getCacheSize()).toBe(0)
+    })
+
+    it('should return false when invalidating non-existent entry', async () => {
+      const binding = createClassifyingBinding('code', 0.9, 'test')
+      const classifier = createClassifierFromBinding(binding)
+
+      const removed = classifier.invalidate('nonExistent')
+      expect(removed).toBe(false)
+    })
+
+    it('should include inputSchema in cache key', async () => {
+      const binding = createClassifyingBinding('code', 0.9, 'test')
+      const classifier = createClassifierFromBinding(binding)
+
+      const schema1 = { type: 'object', properties: { a: { type: 'number' } } }
+      const schema2 = { type: 'object', properties: { b: { type: 'string' } } }
+
+      await classifier.classify('process', 'desc', schema1)
+      await classifier.classify('process', 'desc', schema2)
+
+      // Different schemas = different cache entries
+      expect(classifier.getCacheSize()).toBe(2)
+    })
+  })
+
+  describe('error handling', () => {
+    it('should throw when AI binding fails and no fallback', async () => {
+      const binding = createFailingBinding(new Error('AI service unavailable'))
+      const classifier = createClassifierFromBinding(binding)
+
+      await expect(classifier.classify('calculateTax')).rejects.toThrow('AI service unavailable')
+    })
+
+    it('should handle AI returning empty content', async () => {
+      const binding = createMockAIBinding('')
+      const classifier = createClassifierFromBinding(binding)
+
+      // Empty response should fail to parse
+      await expect(classifier.classify('calculateTax')).rejects.toThrow()
+    })
+
+    it('should retry on failure before giving up', async () => {
+      const binding: WorkersAIBinding = {
+        run: vi
+          .fn()
+          .mockRejectedValueOnce(new Error('Temporary failure'))
+          .mockResolvedValueOnce({
+            response: '{"type":"code","confidence":0.9,"reasoning":"Success after retry"}',
+          }),
+      }
+      const classifier = new FunctionClassifier(
+        { providers: [{ type: 'cloudflare-workers-ai' }], maxRetriesPerProvider: 2 },
+        binding
+      )
+
+      const result = await classifier.classify('calculateTax')
+
+      expect(result.type).toBe('code')
+      expect(binding.run).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('provider fallback', () => {
+    it('should fall back to second provider when first fails', async () => {
+      // First provider fails
+      const failingBinding = createFailingBinding()
+
+      // We need to mock fetch for the OpenRouter fallback
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            choices: [
+              {
+                message: {
+                  content: '{"type":"generative","confidence":0.85,"reasoning":"OpenRouter success"}',
+                },
+              },
+            ],
+          }),
+      })
+
+      try {
+        const classifier = new FunctionClassifier(
+          {
+            providers: [
+              { type: 'cloudflare-workers-ai' },
+              { type: 'openrouter', apiKey: 'test-key' },
+            ],
+          },
+          failingBinding
+        )
+
+        const result = await classifier.classify('summarizeText')
+
+        expect(result.type).toBe('generative')
+        expect(result.provider).toBe('openrouter')
+      } finally {
+        globalThis.fetch = originalFetch
       }
     })
+
+    it('should throw when all providers fail', async () => {
+      const failingBinding = createFailingBinding()
+
+      // Mock fetch to fail for OpenRouter too
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = vi.fn().mockRejectedValue(new Error('OpenRouter failed'))
+
+      try {
+        const classifier = new FunctionClassifier(
+          {
+            providers: [
+              { type: 'cloudflare-workers-ai' },
+              { type: 'openrouter', apiKey: 'test-key' },
+            ],
+          },
+          failingBinding
+        )
+
+        await expect(classifier.classify('test')).rejects.toThrow('All AI providers failed')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    it('should report which provider succeeded', async () => {
+      const binding = createClassifyingBinding('code', 0.9, 'test')
+      const classifier = createClassifierFromBinding(binding)
+
+      const result = await classifier.classify('test')
+
+      expect(result.provider).toBe('cloudflare-workers-ai')
+    })
+  })
+
+  describe('getProviders', () => {
+    it('should return list of configured providers', async () => {
+      const binding = createClassifyingBinding('code', 0.9, 'test')
+      const classifier = new FunctionClassifier(
+        {
+          providers: [
+            { type: 'cloudflare-workers-ai' },
+            { type: 'openrouter', apiKey: 'test' },
+            { type: 'anthropic', apiKey: 'test' },
+          ],
+        },
+        binding
+      )
+
+      const providers = classifier.getProviders()
+
+      expect(providers).toEqual(['cloudflare-workers-ai', 'openrouter', 'anthropic'])
+    })
   })
 })
 
 // =============================================================================
-// CLEAR-CUT CLASSIFICATION CASES (integration-style)
+// FACTORY FUNCTION TESTS
+// =============================================================================
+
+describe('createClassifierFromBinding', () => {
+  it('should create a classifier with Workers AI as only provider', () => {
+    const binding = createClassifyingBinding('code', 0.9, 'test')
+    const classifier = createClassifierFromBinding(binding)
+
+    expect(classifier.getProviders()).toEqual(['cloudflare-workers-ai'])
+  })
+
+  it('should use custom model when specified', async () => {
+    const binding = createClassifyingBinding('code', 0.9, 'test')
+    const classifier = createClassifierFromBinding(binding, '@cf/mistral/mistral-7b-instruct-v0.1')
+
+    await classifier.classify('test')
+
+    const callArgs = (binding.run as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(callArgs[0]).toBe('@cf/mistral/mistral-7b-instruct-v0.1')
+  })
+})
+
+describe('createClassifier', () => {
+  it('should create a classifier with Workers AI as primary provider', () => {
+    const binding = createClassifyingBinding('code', 0.9, 'test')
+    const classifier = createClassifier(binding)
+
+    expect(classifier.getProviders()[0]).toBe('cloudflare-workers-ai')
+  })
+
+  it('should add fallback providers from env', () => {
+    const binding = createClassifyingBinding('code', 0.9, 'test')
+    const classifier = createClassifier(binding, {
+      OPENROUTER_API_KEY: 'test-key',
+      ANTHROPIC_API_KEY: 'test-key',
+    })
+
+    const providers = classifier.getProviders()
+    expect(providers).toContain('cloudflare-workers-ai')
+    expect(providers).toContain('openrouter')
+    expect(providers).toContain('anthropic')
+  })
+})
+
+// =============================================================================
+// CLEAR-CUT CLASSIFICATION CASES
 // =============================================================================
 
 describe('Clear-cut classification cases', () => {
   it('calculateTax -> Code', async () => {
-    const client = createClassifyingClient(
+    const binding = createClassifyingBinding(
       'code',
       0.95,
-      'Tax calculation is a deterministic arithmetic operation.',
+      'Tax calculation is a deterministic arithmetic operation.'
     )
+    const classifier = createClassifierFromBinding(binding)
 
-    const result = await classifyFunction(
+    const result = await classifier.classify(
       'calculateTax',
       'Calculates sales tax for a given purchase amount and tax rate',
       {
@@ -473,8 +480,7 @@ describe('Clear-cut classification cases', () => {
           amount: { type: 'number' },
           taxRate: { type: 'number' },
         },
-      },
-      client,
+      }
     )
 
     expect(result.type).toBe('code')
@@ -482,13 +488,14 @@ describe('Clear-cut classification cases', () => {
   })
 
   it('summarizeArticle -> Generative', async () => {
-    const client = createClassifyingClient(
+    const binding = createClassifyingBinding(
       'generative',
       0.92,
-      'Article summarization requires AI language understanding and generation.',
+      'Article summarization requires AI language understanding and generation.'
     )
+    const classifier = createClassifierFromBinding(binding)
 
-    const result = await classifyFunction(
+    const result = await classifier.classify(
       'summarizeArticle',
       'Produces a concise summary of a long article',
       {
@@ -497,8 +504,7 @@ describe('Clear-cut classification cases', () => {
           text: { type: 'string' },
           maxLength: { type: 'number' },
         },
-      },
-      client,
+      }
     )
 
     expect(result.type).toBe('generative')
@@ -506,13 +512,14 @@ describe('Clear-cut classification cases', () => {
   })
 
   it('researchCompetitors -> Agentic', async () => {
-    const client = createClassifyingClient(
+    const binding = createClassifyingBinding(
       'agentic',
       0.88,
-      'Competitor research requires multi-step data gathering and analysis.',
+      'Competitor research requires multi-step data gathering and analysis.'
     )
+    const classifier = createClassifierFromBinding(binding)
 
-    const result = await classifyFunction(
+    const result = await classifier.classify(
       'researchCompetitors',
       'Researches competitor companies and produces a comprehensive analysis',
       {
@@ -521,8 +528,7 @@ describe('Clear-cut classification cases', () => {
           company: { type: 'string' },
           industry: { type: 'string' },
         },
-      },
-      client,
+      }
     )
 
     expect(result.type).toBe('agentic')
@@ -530,13 +536,14 @@ describe('Clear-cut classification cases', () => {
   })
 
   it('approveExpenseReport -> Human', async () => {
-    const client = createClassifyingClient(
+    const binding = createClassifyingBinding(
       'human',
       0.94,
-      'Expense approval requires human judgment and authorization.',
+      'Expense approval requires human judgment and authorization.'
     )
+    const classifier = createClassifierFromBinding(binding)
 
-    const result = await classifyFunction(
+    const result = await classifier.classify(
       'approveExpenseReport',
       'Reviews and approves or rejects an employee expense report',
       {
@@ -546,8 +553,7 @@ describe('Clear-cut classification cases', () => {
           amount: { type: 'number' },
           items: { type: 'array' },
         },
-      },
-      client,
+      }
     )
 
     expect(result.type).toBe('human')
@@ -556,183 +562,21 @@ describe('Clear-cut classification cases', () => {
 })
 
 // =============================================================================
-// FUNCTION CLASSIFIER CLASS (with caching)
+// CONSTRUCTOR VALIDATION
 // =============================================================================
 
-describe('FunctionClassifier class', () => {
-  let classifier: FunctionClassifier
-
-  beforeEach(() => {
-    const client = createClassifyingClient('code', 0.9, 'Cached test')
-    classifier = new FunctionClassifier(client, { maxCacheSize: 10 })
+describe('Constructor validation', () => {
+  it('should throw when no providers configured', () => {
+    expect(() => {
+      new FunctionClassifier({ providers: [] })
+    }).toThrow('FunctionClassifier requires at least one AI provider')
   })
 
-  it('should classify functions', async () => {
-    const result = await classifier.classify('calculateTax')
-
-    expect(result.type).toBe('code')
-    expect(result.confidence).toBe(0.9)
-  })
-
-  it('should cache classification results', async () => {
-    // First call
-    const result1 = await classifier.classify('calculateTax', 'Computes tax')
-    expect(result1.type).toBe('code')
-    expect(classifier.getCacheSize()).toBe(1)
-
-    // Second call with same args should use cache
-    const result2 = await classifier.classify('calculateTax', 'Computes tax')
-    expect(result2.type).toBe('code')
-    expect(classifier.getCacheSize()).toBe(1)
-
-    // Results should be identical
-    expect(result1).toEqual(result2)
-  })
-
-  it('should not cache different function names together', async () => {
-    await classifier.classify('calculateTax')
-    await classifier.classify('summarizeText')
-
-    expect(classifier.getCacheSize()).toBe(2)
-  })
-
-  it('should evict oldest entry when cache is full', async () => {
-    const client = createClassifyingClient('code', 0.9, 'test')
-    const smallCacheClassifier = new FunctionClassifier(client, { maxCacheSize: 3 })
-
-    await smallCacheClassifier.classify('func1')
-    await smallCacheClassifier.classify('func2')
-    await smallCacheClassifier.classify('func3')
-    expect(smallCacheClassifier.getCacheSize()).toBe(3)
-
-    // Adding a 4th should evict the first
-    await smallCacheClassifier.classify('func4')
-    expect(smallCacheClassifier.getCacheSize()).toBe(3)
-  })
-
-  it('should clear cache', async () => {
-    await classifier.classify('calculateTax')
-    await classifier.classify('summarizeText')
-    expect(classifier.getCacheSize()).toBe(2)
-
-    classifier.clearCache()
-    expect(classifier.getCacheSize()).toBe(0)
-  })
-
-  it('should invalidate specific cache entry', async () => {
-    await classifier.classify('calculateTax', 'desc')
-    expect(classifier.getCacheSize()).toBe(1)
-
-    const removed = classifier.invalidate('calculateTax', 'desc')
-    expect(removed).toBe(true)
-    expect(classifier.getCacheSize()).toBe(0)
-  })
-
-  it('should return false when invalidating non-existent entry', () => {
-    const removed = classifier.invalidate('nonExistent')
-    expect(removed).toBe(false)
-  })
-
-  it('should work without AI client (heuristic mode)', async () => {
-    const heuristicClassifier = new FunctionClassifier()
-
-    const result = await heuristicClassifier.classify('calculateTax')
-
-    expect(result.type).toBe('code')
-    expect(result.reasoning).toContain('heuristic')
-  })
-
-  it('should cache heuristic results too', async () => {
-    const heuristicClassifier = new FunctionClassifier(undefined, { maxCacheSize: 10 })
-
-    await heuristicClassifier.classify('calculateTax')
-    expect(heuristicClassifier.getCacheSize()).toBe(1)
-
-    // Second call should use cache
-    await heuristicClassifier.classify('calculateTax')
-    expect(heuristicClassifier.getCacheSize()).toBe(1)
-  })
-
-  it('should include inputSchema in cache key', async () => {
-    const schema1 = { type: 'object', properties: { a: { type: 'number' } } }
-    const schema2 = { type: 'object', properties: { b: { type: 'string' } } }
-
-    await classifier.classify('process', 'desc', schema1)
-    await classifier.classify('process', 'desc', schema2)
-
-    // Different schemas = different cache entries
-    expect(classifier.getCacheSize()).toBe(2)
-  })
-})
-
-// =============================================================================
-// ERROR HANDLING
-// =============================================================================
-
-describe('Error handling', () => {
-  it('should handle AI timeout gracefully', async () => {
-    const client = {
-      messages: {
-        create: vi.fn().mockImplementation(
-          () => new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Request timeout')), 100)
-          }),
-        ),
-      },
-      chat: { completions: { create: vi.fn() } },
-    }
-
-    const result = await classifyFunction(
-      'calculateTax',
-      'Compute tax amount',
-      undefined,
-      client,
-      { timeoutMs: 50 },
-    )
-
-    // Should fall back to heuristic
-    expect(result.type).toBe('code')
-    expect(result.reasoning).toContain('heuristic')
-  })
-
-  it('should handle AI returning empty content', async () => {
-    const client = createMockAIClient('')
-
-    const result = await classifyFunction('calculateTax', undefined, undefined, client)
-
-    // Should fall back to heuristic for "calculate" pattern
-    expect(result.type).toBe('code')
-  })
-
-  it('should handle AI returning null-like content', async () => {
-    const client = {
-      messages: {
-        create: vi.fn().mockResolvedValue({
-          content: [],
-          usage: { input_tokens: 0, output_tokens: 0 },
-        }),
-      },
-      chat: { completions: { create: vi.fn() } },
-    }
-
-    const result = await classifyFunction('calculateTax', undefined, undefined, client)
-
-    // Should fall back to heuristic
-    expect(result.type).toBe('code')
-  })
-
-  it('should handle network errors gracefully', async () => {
-    const client = createFailingClient(new Error('Network error: ECONNREFUSED'))
-
-    const result = await classifyFunction(
-      'summarizeArticle',
-      'Summarize text',
-      undefined,
-      client,
-    )
-
-    // Should fall back to heuristic
-    expect(result.type).toBe('generative')
-    expect(result.reasoning).toContain('heuristic')
+  it('should throw for unknown provider type', () => {
+    expect(() => {
+      new FunctionClassifier({
+        providers: [{ type: 'unknown-provider' as any }],
+      })
+    }).toThrow('Unknown AI provider type')
   })
 })

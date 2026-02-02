@@ -36,6 +36,8 @@
 
 import type { RouteContext, Env, Handler } from '../router'
 import { compileTypeScript } from '../../core/ts-compiler'
+import { logAuditEvent, getClientIp } from '../../core/audit-logger'
+import { invalidateFunctionCache } from './invoke'
 
 /**
  * Extended route context for deploy handler.
@@ -52,7 +54,7 @@ import {
   validateDependencies,
 } from '../../core/function-registry'
 import { isValidVersion, type FunctionMetadata } from '../../core/types'
-import { jsonResponse } from '../http-utils'
+import { jsonResponse, jsonErrorResponse } from '../http-utils'
 
 /**
  * Result from WASM compilation.
@@ -214,6 +216,8 @@ async function deployGenerativeFunction(
   body: Record<string, unknown>,
   env: Env,
   baseUrl: string,
+  request: Request,
+  userId: string,
 ): Promise<Response> {
   const id = body.id as string
   const version = body.version as string
@@ -224,7 +228,7 @@ async function deployGenerativeFunction(
   // Validate generative-specific required fields
   const userPrompt = body.userPrompt as string | undefined
   if (!userPrompt) {
-    return jsonResponse({ error: 'Missing required field for generative function: userPrompt' }, 400)
+    return jsonErrorResponse('MISSING_REQUIRED', 'Missing required field for generative function: userPrompt')
   }
 
   const model = (body.model as string) || 'claude-3-sonnet'
@@ -237,12 +241,12 @@ async function deployGenerativeFunction(
 
   // Validate temperature range if provided
   if (temperature !== undefined && (temperature < 0 || temperature > 2)) {
-    return jsonResponse({ error: 'Invalid temperature: must be between 0 and 2' }, 400)
+    return jsonErrorResponse('VALIDATION_ERROR', 'Invalid temperature: must be between 0 and 2')
   }
 
   // Validate maxTokens if provided
   if (maxTokens !== undefined && (maxTokens < 1 || !Number.isInteger(maxTokens))) {
-    return jsonResponse({ error: 'Invalid maxTokens: must be a positive integer' }, 400)
+    return jsonErrorResponse('VALIDATION_ERROR', 'Invalid maxTokens: must be a positive integer')
   }
 
   // Create storage instance
@@ -269,6 +273,21 @@ async function deployGenerativeFunction(
   await registry.put(metadata)
   await registry.putVersion(id, version, metadata)
 
+  // Invalidate cache to ensure fresh data on next invoke
+  // Issue: functions-1277
+  await invalidateFunctionCache(id)
+
+  // Log audit event for successful deploy
+  logAuditEvent({
+    timestamp: Date.now(),
+    userId,
+    action: 'deploy',
+    resource: id,
+    status: 'success',
+    details: { version, type: 'generative', model },
+    ip: getClientIp(request),
+  })
+
   return jsonResponse({
     id,
     version,
@@ -286,6 +305,8 @@ async function deployAgenticFunction(
   body: Record<string, unknown>,
   env: Env,
   baseUrl: string,
+  request: Request,
+  userId: string,
 ): Promise<Response> {
   const id = body.id as string
   const version = body.version as string
@@ -296,12 +317,12 @@ async function deployAgenticFunction(
   // Validate agentic-specific required fields
   const systemPrompt = body.systemPrompt as string | undefined
   if (!systemPrompt) {
-    return jsonResponse({ error: 'Missing required field for agentic function: systemPrompt' }, 400)
+    return jsonErrorResponse('MISSING_REQUIRED', 'Missing required field for agentic function: systemPrompt')
   }
 
   const goal = body.goal as string | undefined
   if (!goal) {
-    return jsonResponse({ error: 'Missing required field for agentic function: goal' }, 400)
+    return jsonErrorResponse('MISSING_REQUIRED', 'Missing required field for agentic function: goal')
   }
 
   const model = (body.model as string) || 'claude-3-opus'
@@ -321,12 +342,12 @@ async function deployAgenticFunction(
 
   // Validate maxIterations if provided
   if (maxIterations !== undefined && (maxIterations < 1 || !Number.isInteger(maxIterations))) {
-    return jsonResponse({ error: 'Invalid maxIterations: must be a positive integer' }, 400)
+    return jsonErrorResponse('VALIDATION_ERROR', 'Invalid maxIterations: must be a positive integer')
   }
 
   // Validate tokenBudget if provided
   if (tokenBudget !== undefined && (tokenBudget < 1 || !Number.isInteger(tokenBudget))) {
-    return jsonResponse({ error: 'Invalid tokenBudget: must be a positive integer' }, 400)
+    return jsonErrorResponse('VALIDATION_ERROR', 'Invalid tokenBudget: must be a positive integer')
   }
 
   // Validate tools structure if provided
@@ -334,10 +355,10 @@ async function deployAgenticFunction(
     for (let i = 0; i < tools.length; i++) {
       const tool = tools[i]
       if (!tool || !tool.name) {
-        return jsonResponse({ error: `Invalid tool at index ${i}: missing 'name'` }, 400)
+        return jsonErrorResponse('VALIDATION_ERROR', `Invalid tool at index ${i}: missing 'name'`)
       }
       if (!tool.description) {
-        return jsonResponse({ error: `Invalid tool at index ${i}: missing 'description'` }, 400)
+        return jsonErrorResponse('VALIDATION_ERROR', `Invalid tool at index ${i}: missing 'description'`)
       }
     }
   }
@@ -369,6 +390,21 @@ async function deployAgenticFunction(
   await registry.put(metadata)
   await registry.putVersion(id, version, metadata)
 
+  // Invalidate cache to ensure fresh data on next invoke
+  // Issue: functions-1277
+  await invalidateFunctionCache(id)
+
+  // Log audit event for successful deploy
+  logAuditEvent({
+    timestamp: Date.now(),
+    userId,
+    action: 'deploy',
+    resource: id,
+    status: 'success',
+    details: { version, type: 'agentic', model, toolCount: tools?.length || 0 },
+    ip: getClientIp(request),
+  })
+
   return jsonResponse({
     id,
     version,
@@ -388,6 +424,8 @@ async function deployHumanFunction(
   body: Record<string, unknown>,
   env: Env,
   baseUrl: string,
+  request: Request,
+  userId: string,
 ): Promise<Response> {
   const id = body.id as string
   const version = body.version as string
@@ -398,14 +436,12 @@ async function deployHumanFunction(
   // Validate human-specific required fields
   const interactionType = body.interactionType as string | undefined
   if (!interactionType) {
-    return jsonResponse({ error: 'Missing required field for human function: interactionType' }, 400)
+    return jsonErrorResponse('MISSING_REQUIRED', 'Missing required field for human function: interactionType')
   }
 
   const validInteractionTypes = ['approval', 'review', 'input', 'selection', 'annotation', 'verification', 'custom']
   if (!validInteractionTypes.includes(interactionType)) {
-    return jsonResponse({
-      error: `Invalid interactionType: must be one of ${validInteractionTypes.join(', ')}`,
-    }, 400)
+    return jsonErrorResponse('VALIDATION_ERROR', `Invalid interactionType: must be one of ${validInteractionTypes.join(', ')}`)
   }
 
   const uiConfig = body.uiConfig as Record<string, unknown> | undefined
@@ -421,10 +457,10 @@ async function deployHumanFunction(
     for (let i = 0; i < assignees.length; i++) {
       const assignee = assignees[i]
       if (!assignee || !assignee.type) {
-        return jsonResponse({ error: `Invalid assignee at index ${i}: missing 'type'` }, 400)
+        return jsonErrorResponse('VALIDATION_ERROR', `Invalid assignee at index ${i}: missing 'type'`)
       }
       if (!assignee.value) {
-        return jsonResponse({ error: `Invalid assignee at index ${i}: missing 'value'` }, 400)
+        return jsonErrorResponse('VALIDATION_ERROR', `Invalid assignee at index ${i}: missing 'value'`)
       }
     }
   }
@@ -452,6 +488,21 @@ async function deployHumanFunction(
 
   await registry.put(metadata)
   await registry.putVersion(id, version, metadata)
+
+  // Invalidate cache to ensure fresh data on next invoke
+  // Issue: functions-1277
+  await invalidateFunctionCache(id)
+
+  // Log audit event for successful deploy
+  logAuditEvent({
+    timestamp: Date.now(),
+    userId,
+    action: 'deploy',
+    resource: id,
+    status: 'success',
+    details: { version, type: 'human', interactionType },
+    ip: getClientIp(request),
+  })
 
   return jsonResponse({
     id,
@@ -524,10 +575,7 @@ export const deployHandler: Handler = async (
   if (contentLength !== null) {
     const size = parseInt(contentLength, 10)
     if (isNaN(size) || size > DEPLOY_MAX_BODY_SIZE) {
-      return jsonResponse(
-        { error: `Request body too large. Maximum size is ${DEPLOY_MAX_BODY_SIZE} bytes (50MB).` },
-        413
-      )
+      return jsonErrorResponse('PAYLOAD_TOO_LARGE', `Request body too large. Maximum size is ${DEPLOY_MAX_BODY_SIZE} bytes (50MB).`)
     }
   }
 
@@ -537,7 +585,7 @@ export const deployHandler: Handler = async (
   try {
     body = await request.json()
   } catch {
-    return jsonResponse({ error: 'Invalid JSON body' }, 400)
+    return jsonErrorResponse('INVALID_JSON', 'Invalid JSON body')
   }
 
   // Determine function type (default to 'code' for backward compatibility)
@@ -548,10 +596,10 @@ export const deployHandler: Handler = async (
   const version = body.version as string | undefined
 
   if (!id) {
-    return jsonResponse({ error: 'Missing required field: id' }, 400)
+    return jsonErrorResponse('MISSING_REQUIRED', 'Missing required field: id')
   }
   if (!version) {
-    return jsonResponse({ error: 'Missing required field: version' }, 400)
+    return jsonErrorResponse('MISSING_REQUIRED', 'Missing required field: version')
   }
 
   // Validate function ID
@@ -559,31 +607,32 @@ export const deployHandler: Handler = async (
     validateFunctionId(id)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid function ID'
-    return jsonResponse({ error: message }, 400)
+    return jsonErrorResponse('INVALID_FUNCTION_ID', message)
   }
 
   // Validate version
   if (!isValidVersion(version)) {
-    return jsonResponse({ error: `Invalid semantic version: ${version}` }, 400)
+    return jsonErrorResponse('INVALID_VERSION', `Invalid semantic version: ${version}`)
   }
 
   const baseUrl = new URL(request.url).origin
 
+  // Extract userId from auth context (default to 'anonymous' for unauthenticated requests)
+  const userId = _context?.authContext?.userId || 'anonymous'
+
   // Route to type-specific deploy handler
   switch (functionType) {
     case 'generative':
-      return deployGenerativeFunction(body, env, baseUrl)
+      return deployGenerativeFunction(body, env, baseUrl, request, userId)
     case 'agentic':
-      return deployAgenticFunction(body, env, baseUrl)
+      return deployAgenticFunction(body, env, baseUrl, request, userId)
     case 'human':
-      return deployHumanFunction(body, env, baseUrl)
+      return deployHumanFunction(body, env, baseUrl, request, userId)
     case 'code':
       // Fall through to existing code deploy logic below
       break
     default:
-      return jsonResponse({
-        error: `Invalid function type: ${functionType}. Must be one of: code, generative, agentic, human`,
-      }, 400)
+      return jsonErrorResponse('VALIDATION_ERROR', `Invalid function type: ${functionType}. Must be one of: code, generative, agentic, human`)
   }
 
   // =========================================================================
@@ -597,7 +646,7 @@ export const deployHandler: Handler = async (
   const wasmBinary = body.wasmBinary as string | undefined
 
   if (!language) {
-    return jsonResponse({ error: 'Missing required field: language' }, 400)
+    return jsonErrorResponse('MISSING_REQUIRED', 'Missing required field: language')
   }
 
   // For WASM languages, either wasmBinary OR code is required
@@ -607,13 +656,11 @@ export const deployHandler: Handler = async (
 
   if (isWasmLanguage(language)) {
     if (!hasWasmBinary && !hasCode) {
-      return jsonResponse({
-        error: `Missing required field for ${language}: provide either 'wasmBinary' (base64-encoded .wasm) or 'code' (source)`,
-      }, 400)
+      return jsonErrorResponse('MISSING_REQUIRED', `Missing required field for ${language}: provide either 'wasmBinary' (base64-encoded .wasm) or 'code' (source)`)
     }
   } else {
     if (!hasCode) {
-      return jsonResponse({ error: 'Missing required field: code' }, 400)
+      return jsonErrorResponse('MISSING_REQUIRED', 'Missing required field: code')
     }
   }
 
@@ -622,7 +669,7 @@ export const deployHandler: Handler = async (
     validateLanguage(language)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid language'
-    return jsonResponse({ error: message }, 400)
+    return jsonErrorResponse('INVALID_LANGUAGE', message)
   }
 
   // Validate entry point if provided
@@ -631,7 +678,7 @@ export const deployHandler: Handler = async (
     validateEntryPoint(resolvedEntryPoint)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid entry point'
-    return jsonResponse({ error: message }, 400)
+    return jsonErrorResponse('VALIDATION_ERROR', message)
   }
 
   // Validate dependencies if provided
@@ -670,11 +717,12 @@ export const deployHandler: Handler = async (
         })
 
         if (!result.success) {
-          return jsonResponse({
-            error: 'TypeScript compilation failed',
-            errors: result.errors,
-            warnings: result.warnings,
-          }, 400)
+          return jsonErrorResponse('COMPILATION_ERROR', 'TypeScript compilation failed', 400, {
+            details: {
+              errors: result.errors,
+              warnings: result.warnings,
+            },
+          })
         }
 
         // Store source as the main code
@@ -714,17 +762,17 @@ export const deployHandler: Handler = async (
               wasmBytes[i] = binaryString.charCodeAt(i)
             }
           } catch {
-            return jsonResponse({ error: 'Invalid wasmBinary: must be valid base64-encoded data' }, 400)
+            return jsonErrorResponse('VALIDATION_ERROR', 'Invalid wasmBinary: must be valid base64-encoded data')
           }
 
           // Validate the WASM binary
           if (!validateWasmBinary) {
-            return jsonResponse({ error: 'WASM validation not available' }, 500)
+            return jsonErrorResponse('INTERNAL_ERROR', 'WASM validation not available')
           }
 
           const validation = validateWasmBinary(wasmBytes)
           if (!validation.valid) {
-            return jsonResponse({ error: `Invalid WASM binary: ${validation.error}` }, 400)
+            return jsonErrorResponse('VALIDATION_ERROR', `Invalid WASM binary: ${validation.error}`)
           }
 
           // Store exports for metadata
@@ -757,10 +805,11 @@ export const deployHandler: Handler = async (
           }
 
           if (!compiler) {
-            return jsonResponse({
-              error: `${compilerName} compiler not available. Please provide a pre-compiled WASM binary via 'wasmBinary' field.`,
-              hint: `Compile your ${language} code locally and upload the .wasm file as base64-encoded 'wasmBinary'`,
-            }, 400)
+            return jsonErrorResponse('NOT_IMPLEMENTED', `${compilerName} compiler not available. Please provide a pre-compiled WASM binary via 'wasmBinary' field.`, 501, {
+              details: {
+                hint: `Compile your ${language} code locally and upload the .wasm file as base64-encoded 'wasmBinary'`,
+              },
+            })
           }
 
           const result = await compiler(code!)
@@ -771,11 +820,11 @@ export const deployHandler: Handler = async (
       }
 
       default:
-        return jsonResponse({ error: `Compilation not supported for language: ${language}` }, 400)
+        return jsonErrorResponse('INVALID_LANGUAGE', `Compilation not supported for language: ${language}`)
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Compilation failed'
-    return jsonResponse({ error: message }, 400)
+    return jsonErrorResponse('COMPILATION_ERROR', message)
   }
 
   // Create storage instances
@@ -832,6 +881,10 @@ export const deployHandler: Handler = async (
   await registry.put(metadata)
   await registry.putVersion(id, version, metadata)
 
+  // Invalidate cache to ensure fresh data on next invoke
+  // Issue: functions-1277
+  await invalidateFunctionCache(id)
+
   // Upload to dispatch namespace for TS/JS (use compiled JS if available)
   let dispatchUploadResult: { success: boolean; error?: string } = { success: true }
   if ((language === 'typescript' || language === 'javascript') && typeof compiledCode === 'string') {
@@ -883,6 +936,17 @@ export const deployHandler: Handler = async (
     }
     response.compilation = compilation
   }
+
+  // Log audit event for successful code deploy
+  logAuditEvent({
+    timestamp: Date.now(),
+    userId,
+    action: 'deploy',
+    resource: id,
+    status: 'success',
+    details: { version, type: 'code', language },
+    ip: getClientIp(request),
+  })
 
   return jsonResponse(response)
 }

@@ -10,7 +10,9 @@ import type { RouteContext, Env, Handler } from '../router'
 import { KVFunctionRegistry } from '../../core/kv-function-registry'
 import { KVCodeStorage } from '../../core/code-storage'
 import { validateFunctionId } from '../../core/function-registry'
-import { jsonResponse } from '../http-utils'
+import { jsonResponse, jsonErrorResponse } from '../http-utils'
+import { logAuditEvent, getClientIp } from '../../core/audit-logger'
+import { invalidateFunctionCache } from './invoke'
 
 /**
  * Delete handler - removes function code and metadata.
@@ -41,7 +43,7 @@ export const deleteHandler: Handler = async (
   const functionId = context?.functionId || context?.params?.['id']
 
   if (!functionId) {
-    return jsonResponse({ error: 'Function ID required' }, 400)
+    return jsonErrorResponse('MISSING_REQUIRED', 'Function ID required')
   }
 
   // Validate function ID
@@ -49,7 +51,7 @@ export const deleteHandler: Handler = async (
     validateFunctionId(functionId)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid function ID'
-    return jsonResponse({ error: message }, 400)
+    return jsonErrorResponse('INVALID_FUNCTION_ID', message)
   }
 
   const registry = new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
@@ -58,7 +60,7 @@ export const deleteHandler: Handler = async (
   // Check if function exists
   const metadata = await registry.get(functionId)
   if (!metadata) {
-    return jsonResponse({ error: 'Function not found' }, 404)
+    return jsonErrorResponse('FUNCTION_NOT_FOUND', 'Function not found')
   }
 
   // Delete code (including all versions)
@@ -66,6 +68,24 @@ export const deleteHandler: Handler = async (
 
   // Delete metadata (including all version metadata)
   await registry.delete(functionId)
+
+  // Invalidate cache to ensure stale data is not served
+  // Issue: functions-1277
+  await invalidateFunctionCache(functionId)
+
+  // Extract userId from auth context
+  const userId = context?.authContext?.userId || 'anonymous'
+
+  // Log audit event for successful delete
+  logAuditEvent({
+    timestamp: Date.now(),
+    userId,
+    action: 'delete',
+    resource: functionId,
+    status: 'success',
+    details: { type: metadata.type },
+    ip: getClientIp(request),
+  })
 
   return jsonResponse({ success: true, id: functionId, message: 'Function deleted' })
 }

@@ -425,14 +425,24 @@ export class CascadeExecutor<TInput = unknown, TOutput = unknown> {
     const tierDef = this.definition.tiers[tier]
     if (!tierDef) return undefined
 
-    // If it's a function, use it directly
+    // If it's a function (tier handler), use it directly
     if (typeof tierDef === 'function') {
-      return tierDef as (input: TInput, context: TierContext) => Promise<unknown>
+      // CascadeTiers defines tier handlers as (input: TInput, context: TierContext) => Promise<TOutput>
+      // which is assignable to our return type (input: TInput, context: TierContext) => Promise<unknown>
+      return tierDef
     }
 
-    // If it's a definition object with an execute method, wrap it
-    // For now, we assume all tier definitions are functions
-    return tierDef as unknown as (input: TInput, context: TierContext) => Promise<unknown>
+    // If it's a definition object with an execute method, it's a full function definition
+    // These require an executor to run, which is handled by the dispatcher in production.
+    // For standalone CascadeExecutor usage, definition objects should have their own execute method.
+    const definitionWithExecute = tierDef as { execute?: (input: TInput, context: TierContext) => Promise<unknown> }
+    if (typeof definitionWithExecute.execute === 'function') {
+      return definitionWithExecute.execute.bind(definitionWithExecute)
+    }
+
+    // Definition object without execute method - not directly executable
+    // Return undefined to skip this tier
+    return undefined
   }
 
   /**

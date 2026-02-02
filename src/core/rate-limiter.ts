@@ -101,7 +101,7 @@ export class InMemoryRateLimiter implements RateLimiter {
     if (!window || window.resetAt <= now) {
       return {
         allowed: true,
-        remaining: this.config.maxRequests - 1,
+        remaining: this.config.maxRequests,
         resetAt: now + this.config.windowMs,
       }
     }
