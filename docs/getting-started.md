@@ -4,13 +4,13 @@ Welcome to Functions.do! This guide will help you deploy your first serverless f
 
 ## Introduction
 
-Functions.do is a multi-language serverless platform that runs your code at the edge on Cloudflare Workers. Deploy TypeScript, Rust, Python, Go, and more with zero cold starts and global performance.
+Functions.do is a serverless platform that runs your code at the edge on Cloudflare Workers. Deploy TypeScript, JavaScript, and Python functions with a 4-tier cascade execution system (Code, Generative, Agentic, Human).
 
 ### Key Benefits
 
 - **Global Edge Deployment**: Your functions run in 300+ data centers worldwide
-- **Fast Cold Starts**: Sub-millisecond startup times for TypeScript and Rust
-- **Multi-Language Support**: Write functions in TypeScript, Rust, Python, Go, AssemblyScript, Zig, or C#
+- **Fast Cold Starts**: Sub-millisecond startup times for TypeScript/JavaScript
+- **Cascade Execution**: 4-tier system escalates from deterministic code to AI-generated to agentic to human review
 - **Quick Setup**: Deploy in under 5 minutes with our CLI
 
 ## Prerequisites
@@ -174,24 +174,17 @@ Now that you've deployed your first function, explore these resources to learn m
 
 - [API Reference](/docs/api-reference) - Complete API documentation
 - [TypeScript Guide](/docs/languages/typescript) - Deep dive into TypeScript functions
-- [Rust Guide](/docs/languages/rust) - Build high-performance functions with Rust
 - [Python Guide](/docs/languages/python) - Use Python with Pyodide runtime
+- [Architecture Overview](/docs/architecture/overview) - Cascade system and storage architecture
 - [Examples](/docs/examples) - Real-world function examples and tutorials
-- [Tutorials](/docs/tutorials) - Step-by-step guides for common use cases
 
 ### Supported Languages
-
-Functions.do supports multiple programming languages:
 
 | Language | Status | Use Case |
 |----------|--------|----------|
 | TypeScript | Stable | General purpose, fastest cold starts |
-| Rust | Stable | High performance, WebAssembly |
-| Python | Beta | Data processing, ML inference |
-| Go | Beta | System utilities, networking |
-| AssemblyScript | Alpha | WebAssembly without Rust |
-| Zig | Alpha | Low-level performance |
-| C# | Alpha | .NET ecosystem |
+| JavaScript | Stable | General purpose |
+| Python | Beta | Data processing, ML inference (via Pyodide) |
 
 ## Need Help?
 

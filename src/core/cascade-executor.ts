@@ -30,6 +30,8 @@ import {
   parseDuration,
 } from '@dotdo/functions'
 
+import { validateOutput } from './validation'
+
 /**
  * CascadeExecutor executes cascades by trying tiers in order,
  * escalating to the next tier on failure or timeout.
@@ -193,7 +195,7 @@ export class CascadeExecutor<TInput = unknown, TOutput = unknown> {
 
           // Success - return the result
           return {
-            output: result as TOutput,
+            output: validateOutput<TOutput>(result, `cascade tier ${tier} output`),
             successTier: tier,
             history,
             skippedTiers,
@@ -388,7 +390,7 @@ export class CascadeExecutor<TInput = unknown, TOutput = unknown> {
       )
 
       return {
-        output: result.result as TOutput,
+        output: validateOutput<TOutput>(result.result, `cascade parallel tier ${result.tier} output`),
         successTier: result.tier,
         history,
         skippedTiers,

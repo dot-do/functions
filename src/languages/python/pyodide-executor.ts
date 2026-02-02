@@ -14,6 +14,39 @@
 import { isPackageCompatible } from './pyodide-compat'
 
 /**
+ * Type guard for the non-standard performance.memory API (Chrome/Node.js).
+ * This checks for the presence of the memory property at runtime without
+ * requiring double type assertions through unknown.
+ */
+interface PerformanceWithMemory extends Performance {
+  memory: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number }
+}
+
+function hasMemoryInfo(perf: Performance): perf is PerformanceWithMemory {
+  return 'memory' in perf && typeof (perf as PerformanceWithMemory).memory?.usedJSHeapSize === 'number'
+}
+
+/**
+ * Type guard for globalThis with a loadPyodide function (Workers environment).
+ */
+interface GlobalWithPyodide {
+  loadPyodide: (options: { indexURL?: string }) => Promise<PyodideInterface>
+}
+
+function hasLoadPyodide(global: typeof globalThis): global is typeof globalThis & GlobalWithPyodide {
+  return 'loadPyodide' in global && typeof (global as Record<string, unknown>)['loadPyodide'] === 'function'
+}
+
+/**
+ * Adapt an external Pyodide module's return value to our internal PyodideInterface.
+ * The external API is structurally compatible but TypeScript can't verify it across
+ * module boundaries. This helper encapsulates the cast in a documented location.
+ */
+function asPyodideInterface(loaded: unknown): PyodideInterface {
+  return loaded as never
+}
+
+/**
  * Options for initializing the Pyodide runtime
  */
 export interface PyodideRuntimeOptions {
@@ -334,9 +367,9 @@ class MemoryTracker {
       if (this.pyodide?._module?.HEAPU8?.byteLength) {
         return this.pyodide._module.HEAPU8.byteLength
       }
-      // Fallback: estimate based on performance.memory if available
-      if (typeof performance !== 'undefined' && (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory) {
-        return (performance as unknown as { memory: { usedJSHeapSize: number } }).memory.usedJSHeapSize
+      // Fallback: estimate based on performance.memory if available (Chrome/Node.js non-standard API)
+      if (typeof performance !== 'undefined' && hasMemoryInfo(performance)) {
+        return performance.memory.usedJSHeapSize
       }
       return 0
     } catch {
@@ -639,10 +672,11 @@ export async function loadPyodideRuntime(
   if (!pyodideLoaderPromise) {
     pyodideLoaderPromise = (async () => {
       // Try to load from globalThis (Workers environment)
-      if (typeof globalThis !== 'undefined' && (globalThis as unknown as { loadPyodide?: (options: { indexURL?: string }) => Promise<PyodideInterface> }).loadPyodide) {
+      if (typeof globalThis !== 'undefined' && hasLoadPyodide(globalThis)) {
         const loadOptions: { indexURL?: string } = {}
         if (indexURL) loadOptions.indexURL = indexURL
-        return (globalThis as unknown as { loadPyodide: (options: { indexURL?: string }) => Promise<PyodideInterface> }).loadPyodide(loadOptions)
+        const g: GlobalWithPyodide = globalThis
+        return g.loadPyodide(loadOptions)
       }
 
       // Check if we're in Node.js environment
@@ -663,9 +697,10 @@ export async function loadPyodideRuntime(
           if (indexURL) {
             loadOptions.indexURL = indexURL
           }
-          // Cast to PyodideInterface since the external Pyodide types may differ slightly
+          // The external Pyodide module's loadPyodide returns a structurally compatible interface.
+          // We adapt it to our internal PyodideInterface via a helper that encapsulates the cast.
           const loaded = await pyodideModule.loadPyodide(loadOptions)
-          return loaded as unknown as PyodideInterface
+          return asPyodideInterface(loaded)
         }
       } catch {
         // Fallback: try loading from CDN via fetch

@@ -27,6 +27,7 @@ import type {
 } from '@dotdo/functions'
 
 import { parseDuration } from '@dotdo/functions'
+import { validateOutput } from '../core/validation'
 
 // =============================================================================
 // MODULE DOCUMENTATION
@@ -1120,7 +1121,7 @@ export class AgenticExecutor<TInput = unknown, TOutput = unknown>
       functionId: this.definition.id,
       functionVersion: this.definition.version,
       status,
-      output: state.output as TOutput,
+      output: validateOutput<TOutput>(state.output, `agentic output for ${this.definition.id}`),
       error,
       metrics: {
         durationMs,

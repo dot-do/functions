@@ -21,6 +21,7 @@ import type {
 } from '@dotdo/functions'
 import { parseDuration } from '@dotdo/functions'
 import { TIER_TIMEOUTS, GENERATIVE_CACHE, AI_MODELS } from '../config'
+import { validateOutput } from '../core/validation'
 
 // =============================================================================
 // CACHE API HELPERS
@@ -433,13 +434,19 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
 
         // Success!
         const completedAt = Date.now()
+        const validatedOutput = validateOutput<TOutput>(
+          parseResult.data,
+          `generative output for ${definition.id}`,
+          definition.outputSchema
+        )
+
         const successResult = this.createSuccessResult(
           executionId,
           definition,
           startedAt,
           completedAt,
           result,
-          parseResult.data as TOutput,
+          validatedOutput,
           retryCount,
           context,
           model,

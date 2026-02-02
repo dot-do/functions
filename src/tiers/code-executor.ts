@@ -27,6 +27,7 @@ import type {
   ExecutionId,
 } from '@dotdo/functions'
 import { parseDuration, executionId as toExecutionId } from '@dotdo/functions'
+import { validateOutput } from '../core/validation'
 import { stripTypeScript } from '../core/ts-strip'
 import { evaluate, type SandboxEnv, type EvaluateResult } from 'ai-evaluate'
 import { PyodideExecutor } from '../languages/python/pyodide-executor'
@@ -508,12 +509,18 @@ export class CodeExecutor {
 
       const completedAt = Date.now()
 
+      const validatedOutput = validateOutput<TOutput>(
+        result.output,
+        `code output for ${definition.id}`,
+        definition.outputSchema
+      )
+
       const successResult: CodeFunctionResultWithCache<TOutput> = {
         executionId,
         functionId: definition.id,
         functionVersion: definition.version,
         status: result.status,
-        output: result.output as TOutput,
+        output: validatedOutput,
         metrics: {
           durationMs: completedAt - startedAt,
           inputSizeBytes: calculateByteSize(input),
@@ -549,7 +556,15 @@ export class CodeExecutor {
       if (error instanceof Error) {
         const errWithPartial = error as Error & { partialResult?: unknown; retryable?: boolean }
         if (errWithPartial.partialResult !== undefined) {
-          output = errWithPartial.partialResult as TOutput
+          try {
+            output = validateOutput<TOutput>(
+              errWithPartial.partialResult,
+              `partial result for ${definition.id}`,
+              definition.outputSchema
+            )
+          } catch {
+            // If partial result validation fails, leave output undefined
+          }
           funcError.retryable = errWithPartial.retryable === true
         }
       }

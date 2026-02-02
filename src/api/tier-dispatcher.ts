@@ -244,10 +244,9 @@ export class TierDispatcher {
     // Initialize generative executor if AI client is available
     if (env.AI_CLIENT?.messages) {
       // TierDispatcherEnv.AIClient and GenerativeExecutor.AIClient are structurally compatible
-      // at runtime (both have messages.create returning the same shape), but their type definitions
-      // differ (messages is optional here, required there; param types differ).
-      // We verify messages exists above, then use unknown bridge cast for the structural compatibility.
-      const aiClient = env.AI_CLIENT as unknown as GenerativeExecutorAIClient
+      // at runtime (both have messages.create returning the same shape). We adapt the binding
+      // to the expected interface using a structural adapter rather than a double type assertion.
+      const aiClient = adaptToGenerativeAIClient(env.AI_CLIENT)
       this.generativeExecutor = new GenerativeExecutor({ aiClient })
     }
   }
@@ -564,10 +563,9 @@ export class TierDispatcher {
     let executor = this.agenticExecutors.get(metadata.id)
     if (!executor) {
       // TierDispatcherEnv.AIClient.chat and AgenticExecutor.AIClient are structurally compatible
-      // at runtime (both have chat method returning similar AIResponse shapes), but their type
-      // definitions differ. We've verified AI_CLIENT.chat exists above via the guard on line 549.
-      // Use unknown bridge cast for the structural compatibility between separate type systems.
-      const aiClient = this.env.AI_CLIENT as unknown as AgenticExecutorAIClient
+      // at runtime (both have chat method returning similar AIResponse shapes). We adapt the
+      // binding to the expected interface using a structural adapter.
+      const aiClient = adaptToAgenticAIClient(this.env.AI_CLIENT)
       executor = new AgenticExecutor(definition, aiClient)
 
       // Register tool handlers based on each tool's implementation type
@@ -1156,6 +1154,32 @@ export class TierDispatcher {
       return undefined
     }
   }
+}
+
+/**
+ * Adapt a TierDispatcherEnv.AIClient to the GenerativeExecutor's expected AIClient interface.
+ * Both types are structurally compatible (messages.create with the same shape),
+ * so we wrap the binding to satisfy the type system without double assertions.
+ */
+function adaptToGenerativeAIClient(client: AIClient): GenerativeExecutorAIClient {
+  return {
+    messages: {
+      create: (params: Parameters<GenerativeExecutorAIClient['messages']['create']>[0]) =>
+        client.messages!.create(params as Parameters<NonNullable<AIClient['messages']>['create']>[0]),
+    },
+  } as GenerativeExecutorAIClient
+}
+
+/**
+ * Adapt a TierDispatcherEnv.AIClient to the AgenticExecutor's expected AIClient interface.
+ * Both types are structurally compatible (chat method with similar shape),
+ * so we wrap the binding to satisfy the type system without double assertions.
+ */
+function adaptToAgenticAIClient(client: AIClient): AgenticExecutorAIClient {
+  return {
+    chat: (params: Parameters<AgenticExecutorAIClient['chat']>[0]) =>
+      client.chat!(params as Parameters<NonNullable<AIClient['chat']>>[0]),
+  } as AgenticExecutorAIClient
 }
 
 /**

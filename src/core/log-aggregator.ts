@@ -60,6 +60,31 @@ export const LOG_LEVEL_SEVERITY: Record<LogLevel, number> = {
  */
 const VALID_LOG_LEVELS: LogLevel[] = ['debug', 'info', 'warn', 'error', 'fatal']
 
+/**
+ * Create a pseudo-WebSocket object that satisfies the minimal WebSocket contract
+ * used by the log aggregator's subscriber tracking. This avoids a double type
+ * assertion (`as unknown as WebSocket`) by constructing an object with the
+ * required shape through a Proxy that delegates unknown property access.
+ */
+function createPseudoWebSocket(handlers: { send: (data: string) => void; close: () => void }): WebSocket {
+  const target = {
+    send: handlers.send,
+    readyState: 1,
+    close: handlers.close,
+  }
+  // Use a Proxy to handle any WebSocket property access gracefully.
+  // The target satisfies the minimal WebSocket contract used by wsSubscribers.
+  const ws: WebSocket = new Proxy(target, {
+    get(obj, prop) {
+      if (prop in obj) {
+        return Reflect.get(obj, prop)
+      }
+      return undefined
+    },
+  }) as never // safe: Proxy delegates all access to the target which satisfies the minimal contract
+  return ws
+}
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -576,16 +601,17 @@ export class LogAggregator {
           levels: options.levels,
         }
 
-        // Add to subscribers using a pseudo-WebSocket
-        const pseudoWs = {
+        // Add to subscribers using a pseudo-WebSocket.
+        // We create an object that satisfies the minimal WebSocket interface
+        // used by wsSubscribers (send, readyState, close).
+        const pseudoWs = createPseudoWebSocket({
           send: (data: string) => {
             const parsed = JSON.parse(data)
             const sseData = `event: ${parsed.type}\ndata: ${JSON.stringify(parsed)}\n\n`
             controller.enqueue(encoder.encode(sseData))
           },
-          readyState: 1,
           close: () => controller.close(),
-        } as unknown as WebSocket
+        })
 
         this.wsSubscribers.set(pseudoWs, streamOptions)
       },

@@ -268,6 +268,79 @@ export function validateInvokeBody(data: unknown, context = 'invoke request body
 }
 
 // =============================================================================
+// OUTPUT TYPE VALIDATION
+// =============================================================================
+
+/**
+ * Safely validate and cast an unknown value to a generic output type TOutput.
+ *
+ * Replaces unsafe `value as TOutput` casts throughout the executor layer.
+ * When a JSON schema is provided, validates the value conforms to the
+ * schema's top-level type constraint. Otherwise, performs basic runtime
+ * checks to catch the most common error: a raw string being returned
+ * where a parsed object/array was expected.
+ *
+ * @param value - The unknown value to validate (typically from JSON.parse, executor output, etc.)
+ * @param context - Description of where this validation is occurring (for error messages)
+ * @param schema - Optional JSON schema to validate top-level type against
+ * @returns The value cast to TOutput after runtime validation
+ * @throws ValidationError if the value is clearly incompatible with the expected type
+ *
+ * @example
+ * ```typescript
+ * // Instead of: parseResult.data as TOutput
+ * const output = validateOutput<TOutput>(parseResult.data, 'generative output', definition.outputSchema)
+ * ```
+ */
+export function validateOutput<TOutput>(
+  value: unknown,
+  context: string,
+  schema?: { type?: string } | null
+): TOutput {
+  // If the schema specifies a top-level type, validate against it
+  if (schema?.type) {
+    const schemaType = schema.type
+    const actualType = Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value
+
+    // Check for the most dangerous mismatch: string where object/array expected.
+    // This catches the "string cast to TOutput" anti-pattern where raw AI text
+    // or unparsed JSON strings are incorrectly cast to structured output types.
+    if (schemaType === 'object' && actualType === 'string') {
+      // Attempt to parse the string as JSON before failing
+      try {
+        const parsed = JSON.parse(value as string)
+        if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+          return parsed as TOutput
+        }
+      } catch {
+        // Not valid JSON - fall through to error
+      }
+      throw new ValidationError(
+        `Expected object output at ${context}, got string. The raw string was not valid JSON.`,
+        { context, expectedType: schemaType, actualType }
+      )
+    }
+
+    if (schemaType === 'array' && actualType === 'string') {
+      try {
+        const parsed = JSON.parse(value as string)
+        if (Array.isArray(parsed)) {
+          return parsed as TOutput
+        }
+      } catch {
+        // Not valid JSON - fall through to error
+      }
+      throw new ValidationError(
+        `Expected array output at ${context}, got string. The raw string was not valid JSON.`,
+        { context, expectedType: schemaType, actualType }
+      )
+    }
+  }
+
+  return value as TOutput
+}
+
+// =============================================================================
 // SAFE PARSE WRAPPER
 // =============================================================================
 

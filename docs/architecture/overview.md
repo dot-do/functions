@@ -11,13 +11,13 @@ This document provides a comprehensive overview of the Functions.do platform arc
 3. [4-Tier Cascade System](#4-tier-cascade-system)
 4. [Storage Layers](#storage-layers)
 5. [Worker/Durable Object Architecture](#workerdurable-object-architecture)
-6. [Distributed Runtime Architecture](#distributed-runtime-architecture)
+6. [Classifier Architecture](#classifier-architecture)
 
 ---
 
 ## High-Level Architecture
 
-Functions.do is a serverless function platform built on Cloudflare Workers that supports multiple programming languages (TypeScript, Rust, Python, Go, C#, Zig, AssemblyScript) with zero cold starts through a distributed runtime architecture.
+Functions.do is a serverless function platform built on Cloudflare Workers that supports TypeScript, JavaScript, and Python (beta) with a 4-tier cascade execution system. The platform uses Durable Objects for storage (with KV fallback), Cache API-based classifier caching, and a unified Env type defined at `src/core/env.ts`.
 
 ```mermaid
 flowchart TB
@@ -34,21 +34,19 @@ flowchart TB
         subgraph DO["Durable Objects"]
             Executor["Function Executor DO"]
             Logs["Function Logs DO"]
-            Runtime["Language Runtime DO"]
+            UserStore["User Storage DO"]
+            RateLimit["Rate Limiter DO"]
         end
     end
 
     subgraph Storage["Storage Layer"]
-        KV["Cloudflare KV\n(Metadata + Code)"]
-        R2["Cloudflare R2\n(Large Assets)"]
-        Hybrid["Hybrid Storage\n(KV + R2)"]
+        KV["Cloudflare KV\n(Legacy Fallback)"]
+        DOStore["Durable Objects\n(Primary Storage)"]
     end
 
     subgraph Runtimes["Language Runtimes"]
         ESM["ESM (TypeScript/JS)"]
-        WASM["WebAssembly\n(Rust/Go/Zig)"]
-        Pyodide["Pyodide\n(Python)"]
-        DotNet[".NET Runtime\n(C#)"]
+        Pyodide["Pyodide\n(Python - beta)"]
     end
 
     CLI --> Router
@@ -64,7 +62,6 @@ flowchart TB
     Executor --> Runtimes
 
     Logs --> KV
-    Runtime --> Runtimes
 ```
 
 ---
@@ -89,14 +86,10 @@ sequenceDiagram
 
     Router->>Compiler: Compile source code
 
-    alt TypeScript
+    alt TypeScript/JavaScript
         Compiler->>Compiler: esbuild -> ESM bundle
-    else Rust/Go/Zig
-        Compiler->>Compiler: Compile -> WASM binary
     else Python
         Compiler->>Compiler: Bundle with Pyodide bindings
-    else C#
-        Compiler->>Compiler: Roslyn compile + stub generation
     end
 
     Compiler-->>Router: Compiled code + source map
@@ -265,87 +258,68 @@ flowchart LR
 
 ## Storage Layers
 
-Functions.do uses a hybrid storage architecture that leverages both Cloudflare KV and R2 for optimal performance and cost efficiency.
+Functions.do uses Durable Objects (USER_STORAGE) as the primary storage layer, with KV namespaces as a legacy fallback during migration. The unified Env type at `src/core/env.ts` defines all storage bindings.
 
 ```mermaid
 flowchart TB
-    subgraph HybridStorage["Hybrid Code Storage"]
+    subgraph Storage["Storage Architecture"]
         direction TB
 
         Read["Read Request"]
         Write["Write Request"]
 
-        subgraph R2Layer["R2 Storage (Primary)"]
-            R2["Cloudflare R2"]
-            R2Code["function-id/code.js"]
-            R2Map["function-id/code.js.map"]
-            R2Compiled["function-id/compiled.js"]
-            R2WASM["function-id/module.wasm"]
+        subgraph DOLayer["Durable Objects (Primary)"]
+            UserStorage["USER_STORAGE DO"]
+            DOCode["Per-user isolated storage"]
+            DOFunctions["Functions + code + API keys"]
         end
 
-        subgraph KVLayer["KV Storage (Legacy/Fallback)"]
+        subgraph KVLayer["KV Storage (Legacy Fallback)"]
             KV["Cloudflare KV"]
-            KVCode["code:{functionId}"]
-            KVMap["sourcemap:{functionId}"]
-            KVMeta["meta:{functionId}"]
-        end
-
-        subgraph Config["Storage Options"]
-            PreferR2["preferR2: true"]
-            WriteR2["writeToR2: true"]
-            AutoMigrate["autoMigrate: false"]
+            KVRegistry["FUNCTIONS_REGISTRY"]
+            KVCode["FUNCTIONS_CODE"]
+            KVKeys["FUNCTIONS_API_KEYS"]
         end
     end
 
-    Read -->|preferR2=true| R2
-    R2 -->|Hit| Return["Return code"]
-    R2 -->|Miss| KV
-    KV -->|Hit + autoMigrate| MigrateToR2["Copy to R2"]
+    Read -->|Primary| UserStorage
+    UserStorage -->|Hit| Return["Return code"]
+    UserStorage -->|Miss| KV
     KV -->|Hit| Return
 
-    Write -->|writeToR2=true| R2
-    Write -->|writeToR2=false| KV
+    Write -->|Primary| UserStorage
+    Write -->|Legacy fallback| KV
 
-    style R2Layer fill:#E8F5E9
+    style DOLayer fill:#E8F5E9
     style KVLayer fill:#FFF3E0
 ```
 
-### Storage Migration Flow
+### Storage Migration Flow (KV to Durable Objects)
 
 ```mermaid
 sequenceDiagram
     participant Admin
-    participant Hybrid as Hybrid Storage
-    participant KV as KV Storage
-    participant R2 as R2 Storage
+    participant Storage as Storage Layer
+    participant DO as USER_STORAGE DO
+    participant KV as KV Storage (Legacy)
 
-    Admin->>Hybrid: migrateFunction(id, version)
+    Admin->>Storage: migrateFunction(id, version)
 
-    Hybrid->>R2: Check if exists
+    Storage->>DO: Check if exists
 
-    alt Already in R2
-        R2-->>Hybrid: Exists
-        Hybrid-->>Admin: Status: migrated
-    else Not in R2
-        Hybrid->>KV: Get code
-        KV-->>Hybrid: Return code
+    alt Already in DO
+        DO-->>Storage: Exists
+        Storage-->>Admin: Status: migrated
+    else Not in DO
+        Storage->>KV: Get code + metadata
+        KV-->>Storage: Return data
 
-        Hybrid->>R2: Put code
+        Storage->>DO: Store in user-isolated DO
 
-        Hybrid->>KV: Get source map
-        alt Source map exists
-            KV-->>Hybrid: Return source map
-            Hybrid->>R2: Put source map
-        end
-
-        Hybrid-->>Admin: Status: migrated
+        Storage-->>Admin: Status: migrated
     end
 
-    Note over Admin,R2: After verification, cleanup KV
-    Admin->>Hybrid: cleanupKV(id, version)
-    Hybrid->>R2: Verify exists
-    R2-->>Hybrid: Confirmed
-    Hybrid->>KV: Delete old entries
+    Note over Admin,KV: After verification, KV entries can be removed
 ```
 
 ---
@@ -359,7 +333,7 @@ flowchart TB
     subgraph Workers["Stateless Workers"]
         Router["API Router\n(Entry point)"]
         Loader["Worker Loader\n(Dynamic loading)"]
-        Compiler["Compiler Worker\n(Build pipeline)"]
+        EsbuildCompiler["esbuild-compiler\n(TypeScript compilation via Service Binding)"]
     end
 
     subgraph DurableObjects["Durable Objects"]
@@ -375,16 +349,17 @@ flowchart TB
             LogStore["Log Storage"]
         end
 
-        subgraph RuntimeDO["Language Runtime DO"]
-            RuntimeHost["Runtime Host"]
-            ALC["AssemblyLoadContext\n(C# dynamic loading)"]
+        subgraph UserStorageDO["User Storage DO"]
+            StorageHost["Per-user Storage"]
+            Functions["Functions + Code"]
+            APIKeys["API Keys"]
         end
     end
 
     subgraph Bindings["Service Bindings"]
         SB1["EXECUTOR"]
         SB2["LOGS"]
-        SB3["RUNTIME"]
+        SB3["USER_STORAGE"]
     end
 
     Router -->|"Service Binding"| SB1
@@ -392,15 +367,13 @@ flowchart TB
 
     SB1 --> ExecutorDO
     SB2 --> LogsDO
-    SB3 --> RuntimeDO
+    SB3 --> UserStorageDO
 
     Loader -->|"Worker Loader API"| ExecutorDO
 
-    ExecutorDO -->|"RPC (capnweb)"| RuntimeDO
-
     style ExecutorDO fill:#E3F2FD
     style LogsDO fill:#F3E5F5
-    style RuntimeDO fill:#FFF8E1
+    style UserStorageDO fill:#FFF8E1
 ```
 
 ### Function Executor Details
@@ -458,96 +431,37 @@ flowchart TB
 
 ---
 
-## Distributed Runtime Architecture
+## Classifier Architecture
 
-For heavy runtimes (Python/Pyodide, .NET, JVM), Functions.do uses a distributed architecture with thin stubs and shared runtime workers.
+The function classifier uses AI to determine which cascade tier should handle a given function invocation. Classification results are cached using Cloudflare's Cache API for cross-request, cross-isolate caching.
 
 ```mermaid
 flowchart TB
-    subgraph ThinStubs["Thin Stub Workers (~KB)"]
-        Stub1["User Function A\n(stub only)"]
-        Stub2["User Function B\n(stub only)"]
-        Stub3["User Function C\n(stub only)"]
+    subgraph Classifier["Function Classifier"]
+        Input["Function name + description"]
+        CacheCheck{"Cache API\nhit?"}
+        AICall["AI Provider\n(Workers AI primary)"]
+        CacheStore["Store in Cache API\n(TTL-based expiration)"]
+        Result["Classification Result\n(code|generative|agentic|human)"]
     end
 
-    subgraph ServiceBindings["Service Bindings\n(Zero-latency RPC)"]
-        SB["capnweb Protocol"]
-    end
+    Input --> CacheCheck
+    CacheCheck -->|Hit| Result
+    CacheCheck -->|Miss| AICall
+    AICall --> CacheStore
+    CacheStore --> Result
 
-    subgraph SharedRuntimes["Shared Runtime Workers (~MB)"]
-        subgraph DotNetRuntime[".NET Runtime"]
-            CLR["CLR Host"]
-            ALC1["ALC: Func A"]
-            ALC2["ALC: Func B"]
-            ALC3["ALC: Func C"]
-            JIT["JIT Cache\n(shared)"]
-        end
-
-        subgraph PyodideRuntime["Python Runtime"]
-            Pyodide["Pyodide Engine\n(~15MB)"]
-            VEnv1["venv: Func A"]
-            VEnv2["venv: Func B"]
-        end
-
-        subgraph MLRuntime["ML Runtime"]
-            ONNX["ONNX Runtime"]
-            Models["Cached Models"]
-        end
-    end
-
-    Stub1 -->|RPC| SB
-    Stub2 -->|RPC| SB
-    Stub3 -->|RPC| SB
-
-    SB --> DotNetRuntime
-    SB --> PyodideRuntime
-    SB --> MLRuntime
-
-    Note1["Benefits:\n- Single CLR/Pyodide instance\n- JIT cache shared\n- Always warm (99.99%)\n- Zero-latency RPC"]
-
-    style DotNetRuntime fill:#E8F5E9
-    style PyodideRuntime fill:#E3F2FD
-    style MLRuntime fill:#FFF8E1
+    style Classifier fill:#E3F2FD
 ```
 
-### RPC Communication Pattern
+### AI Provider Fallback Chain
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Stub as Thin Stub Worker
-    participant SB as Service Binding
-    participant Runtime as Shared Runtime Worker
-    participant ALC as AssemblyLoadContext
-
-    Client->>Stub: HTTP Request
-
-    Note over Stub: ~KB footprint
-
-    Stub->>SB: RPC: execute(functionId, payload)
-
-    Note over SB: Zero-copy serialization\n(capnweb/Cap'n Proto)
-
-    SB->>Runtime: Forward RPC
-
-    Note over Runtime: ~MB footprint (shared)
-
-    Runtime->>ALC: Load/get assembly
-
-    alt Cold Start
-        ALC->>ALC: Load from storage
-        ALC->>ALC: JIT compile
-    else Warm
-        ALC->>ALC: Return cached
-    end
-
-    ALC-->>Runtime: Execute function
-    Runtime-->>SB: Return result
-    SB-->>Stub: RPC Response
-    Stub-->>Client: HTTP Response
-
-    Note over Client,ALC: Total latency: <10ms\n(same-colo, zero network hop)
-```
+The classifier supports multiple AI providers with automatic fallback:
+1. Cloudflare Workers AI (primary, via binding)
+2. OpenRouter
+3. Anthropic
+4. OpenAI
+5. AWS Bedrock
 
 ---
 
@@ -555,22 +469,20 @@ sequenceDiagram
 
 | Component | Latency | Cold Start | Memory |
 |-----------|---------|------------|--------|
-| ESM (TypeScript) | <5ms | Instant | <50KB |
-| WASM (Rust) | <10ms | <10ms | 10-50KB |
-| WASM (Go) | <50ms | <50ms | 100KB-2MB |
-| Pyodide (Python) | ~100ms | ~1s* | ~15MB |
-| .NET (C#) | <50ms | <100ms* | Shared |
-
-*With distributed runtime architecture, cold starts are rare (99.99% warm)
+| ESM (TypeScript/JS) | <5ms | Instant | <50KB |
+| Pyodide (Python) | ~100ms | ~1s | ~15MB |
 
 ---
+
+## Key Implementation Files
+
+- **Unified Env type**: `src/core/env.ts` - Single source of truth for all Cloudflare Worker bindings
+- **Function Classifier**: `src/core/function-classifier.ts` - Cache API-based AI classifier with multi-provider fallback
+- **API Router**: `src/api/router.ts` - Request routing with cascade execution support
+- **Default invoke path**: Cascade execution (`/v1/cascade/:id`)
 
 ## Related Documentation
 
 - [Getting Started](../getting-started.md)
 - [API Reference](../api-reference.md)
 - [Language Guides](../guides/languages/index.md)
-- [Worker RPC Latency Spike](../spikes/worker-rpc-latency.md)
-- [WASM Binary Deployment](../spikes/wasm-binary-deployment.md)
-- [Capnweb RPC Integration](../spikes/capnweb-rpctarget-worker-loader.md)
-- [.NET Shared Runtime](../spikes/dotnet-shared-runtime.md)

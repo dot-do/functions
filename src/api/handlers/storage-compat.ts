@@ -54,12 +54,43 @@ export function getStorageClientCompat(env: any, userId: string = 'anonymous'): 
   }
 
   // Fall back to KV (legacy tests)
-  const registry = env.FUNCTIONS_REGISTRY ? new KVFunctionRegistry(env.FUNCTIONS_REGISTRY) : null
-  const code = env.FUNCTIONS_CODE ? new KVCodeStorage(env.FUNCTIONS_CODE) : null
+  // KVFunctionRegistry and KVCodeStorage implement RegistryLike and CodeStorageLike
+  // structurally. Use a fallback stub for the null case to avoid double assertions.
+  const registry: RegistryLike = env.FUNCTIONS_REGISTRY
+    ? new KVFunctionRegistry(env.FUNCTIONS_REGISTRY)
+    : createNullRegistry()
+  const code: CodeStorageLike = env.FUNCTIONS_CODE
+    ? new KVCodeStorage(env.FUNCTIONS_CODE)
+    : createNullCodeStorage()
 
   return {
-    registry: registry as unknown as RegistryLike,
-    code: code as unknown as CodeStorageLike,
+    registry,
+    code,
     userId,
+  }
+}
+
+/**
+ * Create a no-op registry stub for when no storage binding is available.
+ * All operations return null/empty to fail gracefully.
+ */
+function createNullRegistry(): RegistryLike {
+  return {
+    get: async () => null,
+    put: async () => {},
+    list: async () => ({ keys: [] }),
+    delete: async () => {},
+  }
+}
+
+/**
+ * Create a no-op code storage stub for when no storage binding is available.
+ * All operations return null to fail gracefully.
+ */
+function createNullCodeStorage(): CodeStorageLike {
+  return {
+    get: async () => null,
+    put: async () => {},
+    delete: async () => {},
   }
 }

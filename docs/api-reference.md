@@ -309,14 +309,9 @@ Valid examples: `my-function`, `processData_v2`, `api123`
 
 The following programming languages are supported:
 
-- `typescript` - TypeScript functions
+- `typescript` - TypeScript functions (recommended)
 - `javascript` - JavaScript functions
-- `rust` - Rust compiled to WebAssembly
-- `python` - Python functions (via Pyodide)
-- `go` - Go compiled to WebAssembly
-- `zig` - Zig compiled to WebAssembly
-- `assemblyscript` - AssemblyScript functions
-- `csharp` - C# functions
+- `python` - Python functions (beta, via Pyodide)
 
 ### Entry Point Validation
 

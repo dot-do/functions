@@ -99,6 +99,21 @@ export class TierAuthorizationError extends Error {
   }
 }
 
+/**
+ * Type guard for errors that have TierAuthorizationError shape,
+ * used when instanceof check may not work across module boundaries.
+ */
+function isTierAuthError(error: unknown): error is { tier: FunctionType; requiredScope: string } {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'tier' in error &&
+    'requiredScope' in error &&
+    typeof (error as Record<string, unknown>)['tier'] === 'string' &&
+    typeof (error as Record<string, unknown>)['requiredScope'] === 'string'
+  )
+}
+
 // =============================================================================
 // TYPES
 // =============================================================================
@@ -556,13 +571,12 @@ export const cascadeHandler: Handler = async (
         )
       }
       // Also check by error name in case instanceof doesn't work across modules
-      if (attempt.error?.name === 'TierAuthorizationError') {
-        const authError = attempt.error as unknown as { tier: FunctionType; requiredScope: string }
+      if (attempt.error?.name === 'TierAuthorizationError' && isTierAuthError(attempt.error)) {
         return jsonResponse(
           {
             error: 'Insufficient permissions for tier escalation',
-            tier: authError.tier,
-            requiredScope: authError.requiredScope,
+            tier: attempt.error.tier,
+            requiredScope: attempt.error.requiredScope,
             _meta: {
               cascadeId,
               functionId,

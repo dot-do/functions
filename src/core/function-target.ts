@@ -498,6 +498,21 @@ interface PipelineState {
 }
 
 /**
+ * Helper to adapt a thenable or promise-like value to PipelinedPromise.
+ * This encapsulates the necessary type cast in a single, documented location.
+ * The cast is safe because:
+ * - PipelineThenable provides then/catch/finally (satisfying PromiseLike)
+ * - The Proxy handler intercepts all property access to add pipeline behavior
+ * - Promise<never> (rejected) is a subtype of Promise<unknown>
+ */
+function asPipelinedPromise(value: PipelineThenable | PromiseLike<never>): PipelinedPromise {
+  // This is the one place where we bridge between the internal thenable
+  // representation and the public PipelinedPromise interface. The Proxy
+  // or Promise makes this structurally compatible at runtime.
+  return value as never
+}
+
+/**
  * Creates a proxy for promise pipelining
  *
  * Returns a thenable proxy that can be awaited and also supports
@@ -575,9 +590,11 @@ function createPipelineProxy(
     },
   }
 
-  // The proxy is cast through unknown because the Proxy transforms the type from
-  // PipelineThenable to PipelinedPromise via its handler
-  return new Proxy(typedThenable, proxyHandler) as unknown as PipelinedPromise
+  // The Proxy wraps PipelineThenable and exposes it as PipelinedPromise via its handler.
+  // PipelinedPromise extends Promise<unknown>, which PipelineThenable structurally satisfies
+  // via its then/catch/finally methods. The proxy handler adds dynamic method dispatch.
+  // We use a helper to encapsulate the type adaptation needed by the Proxy.
+  return asPipelinedPromise(new Proxy(typedThenable, proxyHandler))
 }
 
 /**
@@ -1294,8 +1311,9 @@ export class FunctionTarget extends RpcTarget {
    */
   pipeline(): PipelinedPromise {
     if (this._disposed) {
-      const rejected = Promise.reject(new Error('FunctionTarget has been disposed'))
-      return rejected as unknown as PipelinedPromise
+      // Promise<never> is assignable to Promise<unknown> which PipelinedPromise extends.
+      // Use helper to encapsulate the type adaptation.
+      return asPipelinedPromise(Promise.reject(new Error('FunctionTarget has been disposed')))
     }
 
     return createPipelineProxy(this, [])
