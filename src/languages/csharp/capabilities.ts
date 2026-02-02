@@ -600,7 +600,8 @@ export function createCapabilityBroker(): CapabilityBroker {
 
       if (instances.has(id)) {
         cacheHits++
-        return instances.get(id)!
+        const existing = instances.get(id)
+        if (existing) return existing
       }
 
       cacheMisses++

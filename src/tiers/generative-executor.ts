@@ -22,6 +22,7 @@ import type {
 import { parseDuration } from '@dotdo/functions'
 import { TIER_TIMEOUTS, GENERATIVE_CACHE, AI_MODELS } from '../config'
 import { validateOutput } from '../core/validation'
+import { sha256 } from '../core/crypto-utils'
 
 // =============================================================================
 // CACHE API HELPERS
@@ -96,16 +97,7 @@ function generateUUID(): string {
   })
 }
 
-/**
- * Compute SHA-256 hash using Web Crypto API (Cloudflare Workers compatible)
- */
-async function sha256(content: string): Promise<string> {
-  const encoder = new TextEncoder()
-  const data = encoder.encode(content)
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
-  const hashArray = Array.from(new Uint8Array(hashBuffer))
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
-}
+// sha256 is imported from ../core/crypto-utils
 
 // =============================================================================
 // TYPES

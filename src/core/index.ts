@@ -94,6 +94,9 @@ export {
   safeJsonParse,
 } from './validation'
 
+// Crypto Utilities
+export { sha256, hashApiKey as hashApiKeyCrypto } from './crypto-utils'
+
 // Utilities
 export { encodeULEB128, encodeSLEB128, encodeName, createSection } from './wasm-encoding'
 export { stripTypeScript } from './ts-strip'

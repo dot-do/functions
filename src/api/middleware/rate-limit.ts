@@ -59,7 +59,7 @@ function getClientIP(request: Request): string {
 
   const xForwardedFor = request.headers.get('X-Forwarded-For')
   if (xForwardedFor) {
-    return xForwardedFor.split(',')[0]!.trim()
+    return (xForwardedFor.split(',')[0] ?? '').trim() || 'unknown'
   }
 
   const xRealIP = request.headers.get('X-Real-IP')

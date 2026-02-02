@@ -625,7 +625,10 @@ export class LogAggregator {
     if (!this.tailSubscribers.has(functionId)) {
       this.tailSubscribers.set(functionId, new Set())
     }
-    this.tailSubscribers.get(functionId)!.add(callback)
+    const subscribers = this.tailSubscribers.get(functionId)
+    if (subscribers) {
+      subscribers.add(callback)
+    }
 
     // Return unsubscribe function
     return () => {
@@ -840,7 +843,10 @@ export class LogAggregator {
       if (!groups.has(key)) {
         groups.set(key, [])
       }
-      groups.get(key)!.push(entry)
+      const group = groups.get(key)
+      if (group) {
+        group.push(entry)
+      }
     }
 
     const result: AggregationResult = {}
@@ -933,7 +939,10 @@ export class LogAggregator {
     if (!this.logs.has(entry.functionId)) {
       this.logs.set(entry.functionId, [])
     }
-    this.logs.get(entry.functionId)!.push(entry)
+    const logs = this.logs.get(entry.functionId)
+    if (logs) {
+      logs.push(entry)
+    }
     this.allLogs.push(entry)
   }
 

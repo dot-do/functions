@@ -178,7 +178,7 @@ export class UserStorage extends DurableObject<Env> {
     cursor: SqlStorageCursor<T>
   ): T | null {
     const rows = cursor.toArray()
-    return rows.length > 0 ? rows[0]! : null
+    return rows.length > 0 ? (rows[0] ?? null) : null
   }
 
   // ===========================================================================

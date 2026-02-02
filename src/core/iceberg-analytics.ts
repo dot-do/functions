@@ -281,7 +281,7 @@ export interface IcebergAnalyticsSink {
  */
 export function getPartitionDate(timestamp: string | Date): string {
   const date = typeof timestamp === 'string' ? new Date(timestamp) : timestamp
-  return date.toISOString().split('T')[0]!
+  return date.toISOString().split('T')[0] ?? ''
 }
 
 /**

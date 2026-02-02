@@ -278,8 +278,8 @@ export class MetricsCollector {
       p50: this.percentile(durations, 50),
       p95: this.percentile(durations, 95),
       p99: this.percentile(durations, 99),
-      min: durations[0]!,
-      max: durations[count - 1]!,
+      min: durations[0] ?? 0,
+      max: durations[count - 1] ?? 0,
       avg: durations.reduce((a, b) => a + b, 0) / count,
       count,
     }
@@ -666,7 +666,7 @@ export class MetricsCollector {
    */
   private percentile(sortedValues: number[], p: number): number {
     if (sortedValues.length === 0) return 0
-    if (sortedValues.length === 1) return sortedValues[0]!
+    if (sortedValues.length === 1) return sortedValues[0] ?? 0
 
     // For small arrays (n < 100), use linear interpolation for better median calculation
     // For larger arrays (n >= 100), use nearest-rank method as expected by tests
@@ -677,15 +677,15 @@ export class MetricsCollector {
       const fraction = index - lower
 
       if (lower === upper) {
-        return sortedValues[lower]!
+        return sortedValues[lower] ?? 0
       }
 
-      return sortedValues[lower]! + fraction * (sortedValues[upper]! - sortedValues[lower]!)
+      return (sortedValues[lower] ?? 0) + fraction * ((sortedValues[upper] ?? 0) - (sortedValues[lower] ?? 0))
     }
 
     // Nearest-rank method: index = ceil((p/100) * n)
     const index = Math.ceil((p / 100) * sortedValues.length) - 1
-    return sortedValues[Math.max(0, Math.min(index, sortedValues.length - 1))]!
+    return sortedValues[Math.max(0, Math.min(index, sortedValues.length - 1))] ?? 0
   }
 
   /**
@@ -773,7 +773,9 @@ export class MetricsExporter {
     const functionIdMatches = prometheusData.matchAll(/function_id="([^"]+)"/g)
     const functionIds = new Set<string>()
     for (const match of functionIdMatches) {
-      functionIds.add(match[1]!)
+      if (match[1]) {
+        functionIds.add(match[1])
+      }
     }
 
     for (const functionId of functionIds) {

@@ -10,6 +10,9 @@
  * - ratelimit:{keyHash} - Rate limit tracking data
  */
 
+import { hashApiKey } from './crypto-utils'
+export { hashApiKey } from './crypto-utils'
+
 /**
  * Permissions that can be granted to an API key
  */
@@ -190,20 +193,6 @@ export interface UpdateApiKeyMetadata {
   scopes?: string[]
   /** New rate limit configuration */
   rateLimit?: ApiKeyRateLimitConfig
-}
-
-/**
- * Hash an API key using SHA-256
- *
- * @param apiKey - The raw API key to hash
- * @returns The hex-encoded SHA-256 hash
- */
-export async function hashApiKey(apiKey: string): Promise<string> {
-  const encoder = new TextEncoder()
-  const data = encoder.encode(apiKey)
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
-  const hashArray = Array.from(new Uint8Array(hashBuffer))
-  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 /**

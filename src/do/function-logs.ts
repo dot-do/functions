@@ -679,7 +679,10 @@ export class FunctionLogs {
     if (!this.subscribers.has(options.functionId)) {
       this.subscribers.set(options.functionId, new Set())
     }
-    this.subscribers.get(options.functionId)!.add(ws)
+    const subs = this.subscribers.get(options.functionId)
+    if (subs) {
+      subs.add(ws)
+    }
 
     // Send initial history if tail is requested
     if (options.tail && options.tail > 0) {

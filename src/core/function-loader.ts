@@ -452,10 +452,13 @@ export class FunctionLoader implements IFunctionLoader {
   private failedLoads: number = 0
   private totalRetries: number = 0
   private rollbackCount: number = 0
-  private loadTimes: number[] = []
+  private loadTimes: number[]
+  private loadTimesHead: number = 0
+  private loadTimesCount: number = 0
   private readonly maxLoadTimeSamples = 1000
 
   constructor(config: FunctionLoaderConfig) {
+    this.loadTimes = new Array(this.maxLoadTimeSamples)
     this.registry = config.registry
     this.codeStorage = config.codeStorage
     // Convert maxCacheSize config to TTL; Cache API manages its own eviction
@@ -1231,13 +1234,28 @@ export class FunctionLoader implements IFunctionLoader {
   }
 
   /**
-   * Record load time for metrics.
+   * Record load time for metrics using a circular buffer (O(1) insert).
    */
   private recordLoadTime(loadTimeMs: number): void {
-    this.loadTimes.push(loadTimeMs)
-    if (this.loadTimes.length > this.maxLoadTimeSamples) {
-      this.loadTimes.shift()
+    const index = (this.loadTimesHead + this.loadTimesCount) % this.maxLoadTimeSamples
+    this.loadTimes[index] = loadTimeMs
+    if (this.loadTimesCount < this.maxLoadTimeSamples) {
+      this.loadTimesCount++
+    } else {
+      // Buffer full: advance the head pointer (overwrite oldest)
+      this.loadTimesHead = (this.loadTimesHead + 1) % this.maxLoadTimeSamples
     }
+  }
+
+  /**
+   * Get the current load times as a plain array (for metrics computation).
+   */
+  private getLoadTimes(): number[] {
+    const result: number[] = new Array(this.loadTimesCount)
+    for (let i = 0; i < this.loadTimesCount; i++) {
+      result[i] = this.loadTimes[(this.loadTimesHead + i) % this.maxLoadTimeSamples] ?? 0
+    }
+    return result
   }
 
   /**
@@ -1246,7 +1264,7 @@ export class FunctionLoader implements IFunctionLoader {
   private calculatePercentile(sortedArray: number[], percentile: number): number {
     if (sortedArray.length === 0) return 0
     const index = Math.ceil((percentile / 100) * sortedArray.length) - 1
-    return sortedArray[Math.max(0, index)]!
+    return sortedArray[Math.max(0, index)] ?? 0
   }
 
   /**
@@ -1293,8 +1311,9 @@ export class FunctionLoader implements IFunctionLoader {
    * Get comprehensive metrics.
    */
   getMetrics(): FunctionLoaderMetrics {
-    const sortedLoadTimes = [...this.loadTimes].sort((a, b) => a - b)
-    const avgLoadTime = this.loadTimes.length > 0 ? this.loadTimes.reduce((a, b) => a + b, 0) / this.loadTimes.length : 0
+    const loadTimes = this.getLoadTimes()
+    const sortedLoadTimes = [...loadTimes].sort((a, b) => a - b)
+    const avgLoadTime = loadTimes.length > 0 ? loadTimes.reduce((a, b) => a + b, 0) / loadTimes.length : 0
 
     let openCount = 0
     let halfOpenCount = 0

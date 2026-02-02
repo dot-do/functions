@@ -278,7 +278,10 @@ function simulateCSharpExecution(
     // Check for function calls
     const funcCallMatch = returnExpr.match(/^(\w+)\s*\(([^)]*)\)$/)
     if (funcCallMatch && functions.has(funcCallMatch[1])) {
-      const func = functions.get(funcCallMatch[1])!
+      const func = functions.get(funcCallMatch[1])
+      if (!func) {
+        throw new Error(`Function '${funcCallMatch[1]}' not found`)
+      }
       const args = funcCallMatch[2].split(',').map(a => evaluateExpression(a.trim(), variables))
       return { value: func(...args), variables, functions }
     }

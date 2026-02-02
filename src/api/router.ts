@@ -92,7 +92,10 @@ export function resolveApiVersion(request: Request, path: string): { apiVersion:
   // 1. URL path prefix: match /v followed by digits at the start of the path
   const pathMatch = path.match(/^\/(v\d+)\//)
   if (pathMatch) {
-    return { apiVersion: pathMatch[1]!, apiVersionSource: 'path' }
+    const version = pathMatch[1]
+    if (version) {
+      return { apiVersion: version, apiVersionSource: 'path' }
+    }
   }
 
   // 2. Query parameter

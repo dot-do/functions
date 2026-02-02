@@ -368,11 +368,17 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
       reject(new DOMException('Aborted', 'AbortError'))
       return
     }
-    const timeout = setTimeout(resolve, ms)
-    signal?.addEventListener('abort', () => {
+    const timeout = setTimeout(() => {
+      if (signal) {
+        signal.removeEventListener('abort', onAbort)
+      }
+      resolve()
+    }, ms)
+    const onAbort = () => {
       clearTimeout(timeout)
       reject(new DOMException('Aborted', 'AbortError'))
-    })
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
   })
 }
 
@@ -695,8 +701,13 @@ export class FunctionClient {
     let cancelled = false
 
     // If external signal provided, forward abort
+    const onExternalAbort = () => controller.abort()
     if (signal) {
-      signal.addEventListener('abort', () => controller.abort())
+      if (signal.aborted) {
+        controller.abort()
+      } else {
+        signal.addEventListener('abort', onExternalAbort, { once: true })
+      }
     }
 
     // Setup timeout
@@ -754,6 +765,9 @@ export class FunctionClient {
         this.cancelled = true
         controller.abort()
         if (timeoutId) clearTimeout(timeoutId)
+        if (signal) {
+          signal.removeEventListener('abort', onExternalAbort)
+        }
       },
 
       async *[Symbol.asyncIterator]() {
@@ -831,6 +845,9 @@ export class FunctionClient {
           throw error
         } finally {
           if (timeoutId) clearTimeout(timeoutId)
+          if (signal) {
+            signal.removeEventListener('abort', onExternalAbort)
+          }
           reader.releaseLock()
         }
       },

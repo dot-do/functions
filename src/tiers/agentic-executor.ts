@@ -317,13 +317,13 @@ export class AgenticExecutor<TInput = unknown, TOutput = unknown>
     // Convert ToolDefinitions to AIFunctionDefinitions
     const aiTools: AIFunctionDefinition[] = this.registeredTools
       .filter((tool) => this.toolHandlers.has(tool.name))
-      .map((tool) =>
-        toolDefinitionToAIFunction(
-          tool,
-          this.toolHandlers.get(tool.name)!,
-          executionContext
-        )
-      )
+      .map((tool) => {
+        const handler = this.toolHandlers.get(tool.name)
+        if (!handler) {
+          throw new Error(`Tool handler '${tool.name}' not found`)
+        }
+        return toolDefinitionToAIFunction(tool, handler, executionContext)
+      })
 
     // Create role from definition
     const role = createRoleFromDefinition(
@@ -1267,7 +1267,10 @@ export class AgenticExecutor<TInput = unknown, TOutput = unknown>
       if (!this.pendingApprovals.has(executionId)) {
         this.pendingApprovals.set(executionId, [])
       }
-      this.pendingApprovals.get(executionId)!.push(pending)
+      const approvals = this.pendingApprovals.get(executionId)
+      if (approvals) {
+        approvals.push(pending)
+      }
     })
   }
 }

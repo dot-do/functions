@@ -1159,7 +1159,8 @@ export class FunctionTarget extends RpcTarget {
 
     // Single request - no batching needed
     if (batch.length === 1) {
-      const item = batch[0]!
+      const item = batch[0]
+      if (!item) return
       try {
         const result = await this.executeRequest(item.request, item.span, false)
         item.resolve(result)

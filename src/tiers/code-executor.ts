@@ -841,13 +841,13 @@ export class CodeExecutor {
     if (source.startsWith('__WASM_ASSETS__:')) {
       const parts = source.split(':')
       if (parts.length >= 3) {
-        return { type: 'assets', functionId: parts[1]!, version: parts[2]! }
+        return { type: 'assets', functionId: parts[1] ?? '', version: parts[2] ?? '' }
       }
     }
     if (source.startsWith('__WASM_KV__:')) {
       const parts = source.split(':')
       if (parts.length >= 3) {
-        return { type: 'kv', functionId: parts[1]!, version: parts[2]! }
+        return { type: 'kv', functionId: parts[1] ?? '', version: parts[2] ?? '' }
       }
     }
     if (source.startsWith('__WASM_INLINE__:')) {

@@ -457,9 +457,9 @@ export function parseVersion(version: string): SemanticVersion | null {
   }
 
   const result: SemanticVersion = {
-    major: parseInt(match[1]!, 10),
-    minor: parseInt(match[2]!, 10),
-    patch: parseInt(match[3]!, 10),
+    major: parseInt(match[1] ?? '0', 10),
+    minor: parseInt(match[2] ?? '0', 10),
+    patch: parseInt(match[3] ?? '0', 10),
   }
   if (match[4] !== undefined) {
     result.prerelease = match[4]

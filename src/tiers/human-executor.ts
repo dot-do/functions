@@ -25,6 +25,14 @@ import type {
 
 import { parseDuration } from '@dotdo/functions'
 import type { FunctionResult, ExecutionContext } from '@dotdo/functions'
+import { NotificationDispatcher } from './notification-dispatcher.js'
+import type {
+  NotificationConfig,
+  NotificationChannel,
+  NotificationType,
+  DispatchResult,
+  NotificationRecord,
+} from './notification-dispatcher.js'
 
 // =============================================================================
 // INTERNAL TYPES
@@ -90,6 +98,10 @@ interface ExecutorEnv {
   HUMAN_TASKS_DO?: DurableObjectNamespace
   USERS_KV?: KVNamespace
   TEAMS_KV?: KVNamespace
+  /** Configuration for the real notification dispatcher (email API, webhooks, etc.) */
+  NOTIFICATION_CONFIG?: NotificationConfig
+  /** Webhook URLs for task lifecycle events */
+  WEBHOOK_URLS?: string
 }
 
 // =============================================================================
@@ -101,10 +113,16 @@ export class HumanExecutor implements HumanFunctionExecutor {
   private env: ExecutorEnv
   private roundRobinIndex: number = 0
   private lastTrackedTaskId: string | null = null
+  private dispatcher: NotificationDispatcher | null = null
 
   constructor(state: DurableObjectState, env: ExecutorEnv) {
     this.state = state
     this.env = env
+
+    // Initialize the real notification dispatcher if configuration is provided
+    if (env.NOTIFICATION_CONFIG) {
+      this.dispatcher = new NotificationDispatcher(state.storage, env.NOTIFICATION_CONFIG)
+    }
   }
 
   // ===========================================================================
@@ -160,6 +178,14 @@ export class HumanExecutor implements HumanFunctionExecutor {
         }
         await this.submitResponse(taskId, body.response, body.responder)
         return new Response(JSON.stringify({ success: true }))
+      }
+
+      // GET /tasks/:id/notifications - Get notification history for a task
+      const notifMatch = path.match(/^\/tasks\/([^/]+)\/notifications$/)
+      if (method === 'GET' && notifMatch) {
+        const taskId = notifMatch[1]
+        const notifications = await this.getNotificationsForTask(taskId)
+        return Response.json({ notifications })
       }
 
       // POST /tasks/:id/cancel - Cancel task
@@ -270,6 +296,9 @@ export class HumanExecutor implements HumanFunctionExecutor {
 
     // Track the most recently created task for waitForResult
     this.lastTrackedTaskId = taskId
+
+    // Send task-created notifications to assignees
+    await this.sendTaskCreatedNotifications(storedTask)
 
     // Schedule alarm for reminders/escalations/expiration
     await this.scheduleAlarm(storedTask)
@@ -817,37 +846,128 @@ export class HumanExecutor implements HumanFunctionExecutor {
   // NOTIFICATIONS
   // ===========================================================================
 
+  /**
+   * Send a notification on task creation to all assigned users.
+   * Only uses the real dispatcher (not the legacy interface) to avoid
+   * breaking backward compatibility with existing notification service consumers.
+   */
+  private async sendTaskCreatedNotifications(task: StoredTask): Promise<void> {
+    if (!this.dispatcher) return
+
+    const assignees = task.routing.users ?? (task.routing.assignedTo ? [task.routing.assignedTo] : [])
+    if (assignees.length === 0) return
+
+    const channels = task.definition.reminders?.channels ?? ['email']
+    const subject = `New Task: ${task.definition.ui.title}`
+    const body = `You have been assigned a new task: ${task.definition.ui.title}. ${task.taskUrl}`
+
+    for (const assignee of assignees) {
+      for (const channel of channels) {
+        const dispatchChannel = channel as NotificationChannel
+        await this.dispatcher.dispatch(
+          dispatchChannel,
+          assignee,
+          subject,
+          body,
+          task.id,
+          'task_created'
+        )
+      }
+    }
+
+    // Also send webhook notifications for task creation
+    await this.sendWebhookNotification(task, 'task_created')
+  }
+
+  /**
+   * Send a webhook notification for task lifecycle events.
+   */
+  private async sendWebhookNotification(
+    task: StoredTask,
+    type: NotificationType
+  ): Promise<void> {
+    if (!this.dispatcher) return
+
+    // Check for configured webhooks
+    const webhookConfig = this.env.NOTIFICATION_CONFIG?.webhooks
+    if (!webhookConfig) return
+
+    const payload = {
+      event: type,
+      taskId: task.id,
+      taskUrl: task.taskUrl,
+      title: task.definition.ui.title,
+      status: task.status,
+      assignees: task.routing.users ?? [],
+      assignedTo: task.routing.assignedTo,
+      timestamp: Date.now(),
+    }
+
+    for (const [name, config] of Object.entries(webhookConfig)) {
+      await this.dispatcher.dispatchWebhookDirect(
+        config.url,
+        payload,
+        config.headers,
+        config.secret
+      )
+    }
+  }
+
   private async sendNotification(
     channel: string,
     recipient: string,
     task: StoredTask,
-    type: 'reminder' | 'escalation' | 'sla_warning' | 'sla_breach',
+    type: 'reminder' | 'escalation' | 'sla_warning' | 'sla_breach' | 'task_created',
     customMessage?: string
   ): Promise<void> {
-    const notifications = this.env.NOTIFICATIONS
-    if (!notifications) return
-
     const subject = this.buildNotificationSubject(task, type)
     const body = customMessage ?? this.buildNotificationBody(task, type)
 
-    switch (channel) {
-      case 'email':
-        await notifications.sendEmail(recipient, subject, body)
-        break
-      case 'slack':
-        await notifications.sendSlack(recipient, body)
-        break
-      case 'sms':
-        await notifications.sendSms(recipient, body)
-        break
-      case 'push':
-        await notifications.sendPush(recipient, subject, body)
-        break
+    // Use real dispatcher if available
+    if (this.dispatcher) {
+      const dispatchChannel = channel as NotificationChannel
+      await this.dispatcher.dispatch(
+        dispatchChannel,
+        recipient,
+        subject,
+        body,
+        task.id,
+        type as NotificationType
+      )
     }
+
+    // Also use the injected notification service (interface-based) if available
+    const notifications = this.env.NOTIFICATIONS
+    if (notifications) {
+      switch (channel) {
+        case 'email':
+          await notifications.sendEmail(recipient, subject, body)
+          break
+        case 'slack':
+          await notifications.sendSlack(recipient, body)
+          break
+        case 'sms':
+          await notifications.sendSms(recipient, body)
+          break
+        case 'push':
+          await notifications.sendPush(recipient, subject, body)
+          break
+      }
+    }
+  }
+
+  /**
+   * Get notification records for a task (from the real dispatcher).
+   */
+  async getNotificationsForTask(taskId: string): Promise<NotificationRecord[]> {
+    if (!this.dispatcher) return []
+    return this.dispatcher.getNotificationsForTask(taskId)
   }
 
   private buildNotificationSubject(task: StoredTask, type: string): string {
     switch (type) {
+      case 'task_created':
+        return `New Task: ${task.definition.ui.title}`
       case 'reminder':
         return `Reminder: ${task.definition.ui.title}`
       case 'escalation':
@@ -863,6 +983,8 @@ export class HumanExecutor implements HumanFunctionExecutor {
 
   private buildNotificationBody(task: StoredTask, type: string): string {
     switch (type) {
+      case 'task_created':
+        return `You have been assigned a new task: ${task.definition.ui.title}. ${task.taskUrl}`
       case 'reminder':
         return `Please respond to task: ${task.definition.ui.title}. ${task.taskUrl}`
       case 'escalation':

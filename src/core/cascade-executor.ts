@@ -41,6 +41,12 @@ export class CascadeExecutor<TInput = unknown, TOutput = unknown> {
   private options: CascadeOptions
 
   constructor(definition: CascadeDefinition<TInput, TOutput>) {
+    if (!definition) {
+      throw new Error('CascadeExecutor requires a definition')
+    }
+    if (!definition.tiers) {
+      throw new Error('CascadeExecutor requires tiers in the definition')
+    }
     this.definition = definition
     this.options = definition.options ?? {}
   }
@@ -255,7 +261,7 @@ export class CascadeExecutor<TInput = unknown, TOutput = unknown> {
             const hasCustomTimeout = this.options.tierTimeouts?.[tier] !== undefined
             if (hasCustomTimeout) {
               throw new CascadeExhaustedError(
-                `All tiers exhausted for cascade '${this.definition.id}'`,
+                `All tiers exhausted for cascade '${this.definition.id ?? 'unknown'}'`,
                 history,
                 Date.now() - startTime
               )
@@ -266,7 +272,7 @@ export class CascadeExecutor<TInput = unknown, TOutput = unknown> {
 
           // All tiers exhausted with non-timeout failures
           throw new CascadeExhaustedError(
-            `All tiers exhausted for cascade '${this.definition.id}'`,
+            `All tiers exhausted for cascade '${this.definition.id ?? 'unknown'}'`,
             history,
             Date.now() - startTime
           )
@@ -289,6 +295,12 @@ export class CascadeExecutor<TInput = unknown, TOutput = unknown> {
     input: TInput,
     tierContext: TierContext
   ): Promise<TOutput> {
+    if (!tier) {
+      throw new Error('Tier is required for executeTier')
+    }
+    if (!tierContext) {
+      throw new Error('TierContext is required for executeTier')
+    }
     const handler = this.getTierHandler(tier)
     if (!handler) {
       throw new Error(`Tier '${tier}' not defined in cascade`)
@@ -329,7 +341,10 @@ export class CascadeExecutor<TInput = unknown, TOutput = unknown> {
     }
 
     const promises = definedTiers.map(async (tier) => {
-      const handler = this.getTierHandler(tier)!
+      const handler = this.getTierHandler(tier)
+      if (!handler) {
+        throw new Error(`Tier '${tier}' handler unexpectedly undefined`)
+      }
       const tierTimeout = this.getTierTimeout(tier)
       const attemptStart = Date.now()
 
@@ -404,7 +419,7 @@ export class CascadeExecutor<TInput = unknown, TOutput = unknown> {
     } catch {
       // All promises rejected
       throw new CascadeExhaustedError(
-        `All tiers exhausted for cascade '${this.definition.id}'`,
+        `All tiers exhausted for cascade '${this.definition.id ?? 'unknown'}'`,
         history,
         Date.now() - startTime
       )

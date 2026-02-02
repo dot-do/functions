@@ -698,7 +698,10 @@ export function createDistributedCSharpStub(
         // Pre-load the assembly in the runtime DO
         const success = await runtimeBinding.loadAssembly(fullName, code, func.className)
         if (success) {
-          registeredFunctions.get(fullName)!.loaded = true
+          const registered = registeredFunctions.get(fullName)
+          if (registered) {
+            registered.loaded = true
+          }
         }
       }
 

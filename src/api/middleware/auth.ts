@@ -16,6 +16,7 @@ import {
   type OAuthContext,
   type OrganizationMembership,
 } from '../../core/oauth'
+import { hashApiKey } from '../../core/crypto-utils'
 
 /**
  * API key record stored in KV
@@ -77,18 +78,6 @@ export interface AuthMiddlewareResult {
   response?: Response
   authContext?: AuthContext
   error?: string
-}
-
-/**
- * Hash an API key using SHA-256
- * Returns a hex string for logging/correlation without exposing the actual key
- */
-async function hashApiKey(apiKey: string): Promise<string> {
-  const encoder = new TextEncoder()
-  const data = encoder.encode(apiKey)
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
-  const hashArray = Array.from(new Uint8Array(hashBuffer))
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
 /**

@@ -21,6 +21,7 @@ import {
   invokeFunction,
   deleteFunction,
 } from './config'
+import { waitForFunctionResult } from './utils'
 
 describe.skipIf(!shouldRunE2E())('E2E: TypeScript Function Deploy and Invoke', () => {
   const deployedFunctions: string[] = []
@@ -182,10 +183,7 @@ describe.skipIf(!shouldRunE2E())('E2E: TypeScript Function Deploy and Invoke', (
   })
 
   describe('Versioning', () => {
-    // NOTE: This test is flaky due to dispatch namespace propagation delays.
-    // When deploying v2 over v1, there may be a delay before the new version
-    // is served. This is expected behavior in Cloudflare Workers for Platforms.
-    it.skip('deploys multiple versions of the same function', async () => {
+    it('deploys multiple versions of the same function', async () => {
       const functionId = generateTestFunctionId()
       deployedFunctions.push(functionId)
 
@@ -219,10 +217,15 @@ describe.skipIf(!shouldRunE2E())('E2E: TypeScript Function Deploy and Invoke', (
         version: '2.0.0',
       })
 
-      // Latest should return v2
-      const result = await invokeFunction<{ version: number }>(functionId)
+      // Poll for propagation - dispatch namespace may have a delay
+      // before the new version is served (expected in Workers for Platforms)
+      const result = await waitForFunctionResult(
+        () => invokeFunction<{ version: number }>(functionId),
+        (r) => r.version === 2,
+        { timeout: 15000, interval: 500, description: 'function to serve version 2' }
+      )
       expect(result.version).toBe(2)
-    }, E2E_CONFIG.deployTimeout * 2 + E2E_CONFIG.invokeTimeout)
+    }, E2E_CONFIG.deployTimeout * 2 + E2E_CONFIG.invokeTimeout + 15000)
   })
 
   describe('Request/Response Handling', () => {

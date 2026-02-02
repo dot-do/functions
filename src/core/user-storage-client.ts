@@ -31,6 +31,7 @@ import type {
   ApiKeyPermissions,
   ListResult,
 } from '../do/user-storage'
+import { hashApiKey } from './crypto-utils'
 
 // ============================================================================
 // TYPES
@@ -91,21 +92,13 @@ function generateApiKey(): string {
   const randomBytes = new Uint8Array(32)
   crypto.getRandomValues(randomBytes)
   for (let i = 0; i < 32; i++) {
-    result += chars[randomBytes[i]! % chars.length]
+    result += chars[(randomBytes[i] ?? 0) % chars.length]
   }
   return result
 }
 
-/**
- * Hash an API key using SHA-256
- */
-export async function hashApiKey(apiKey: string): Promise<string> {
-  const encoder = new TextEncoder()
-  const data = encoder.encode(apiKey)
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
-  const hashArray = Array.from(new Uint8Array(hashBuffer))
-  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('')
-}
+// hashApiKey is imported from ./crypto-utils
+export { hashApiKey } from './crypto-utils'
 
 /**
  * Validate API key format
