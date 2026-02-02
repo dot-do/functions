@@ -102,9 +102,19 @@ export interface R2CodeStorageOptions {
  * R2-backed implementation of the CodeStorage interface.
  * Stores and retrieves function code from Cloudflare R2.
  *
+ * NOTE: This is an **opt-in** storage backend for use cases that exceed
+ * KV's 25 MB value limit or require R2-specific features (e.g., large WASM
+ * binaries, bulk data). For most function code storage, use KVCodeStorage
+ * instead -- it is the default used by all production code paths.
+ *
  * R2 is better suited for larger code files than KV:
- * - R2: 5GB max object size, no read/write limits
+ * - R2: 5GB max object size, strong consistency
  * - KV: 25MB max value size, eventual consistency
+ *
+ * CONSISTENCY NOTE: KV has eventual consistency (reads may lag writes by
+ * up to 60 seconds). R2 provides strong read-after-write consistency.
+ * If you need immediate read-after-write for small code, consider using
+ * UserStorage DO (Durable Object) which provides transactional guarantees.
  *
  * Features:
  * - Gzip compression for stored code (configurable)
@@ -116,6 +126,9 @@ export interface R2CodeStorageOptions {
  * - code/{functionId}/v/{version} - Specific version of function code
  * - code/{functionId}/latest.map - Source map for latest
  * - code/{functionId}/v/{version}.map - Source map for specific version
+ *
+ * @see KVCodeStorage - The recommended default storage backend
+ * @see HybridCodeStorage - For KV-to-R2 migration only (not for general use)
  */
 export class R2CodeStorage implements CodeStorage {
   private readonly compressionEnabled: boolean

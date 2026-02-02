@@ -13,6 +13,40 @@
  * - OAuth credentials or API key configured (see auth.ts for env vars)
  *
  * Run with: npm run test:e2e
+ *
+ * Skip Behavior (by design):
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ * Several test sections use `describe.skipIf()` to conditionally skip when
+ * credentials are not configured. This is intentional -- these tests hit a live
+ * deployed service and require real authentication tokens or API keys.
+ *
+ * Sections that always run (no credentials needed):
+ *   - 1. Authentication Configuration (detects strategy)
+ *   - 2. Public Endpoints (no auth required)
+ *   - 3. Protected Endpoints (verifies 401 responses)
+ *   - 8. Invalid Token Handling (verifies rejection)
+ *   - 11. Error Messages (verifies error format)
+ *   - Edge Cases (verifies graceful handling)
+ *
+ * Sections that require credentials (skip when unavailable):
+ *   - 4. OAuth Token Authentication   (needs OAuth or API key)
+ *   - 5. API Key Authentication       (needs FUNCTIONS_API_KEY)
+ *   - 6. Token Caching                (needs OAuth configured)
+ *   - 7. User Info                    (needs OAuth or API key)
+ *   - 9. Scope-Based Authorization    (needs OAuth or API key)
+ *   - 10. Auth Validation             (needs OAuth or API key)
+ *   - 12. Concurrent Requests         (needs OAuth or API key)
+ *
+ * For unit-level auth coverage WITHOUT live credentials, see:
+ *   - src/core/__tests__/auth.test.ts        (authenticateRequest, public endpoints, middleware)
+ *   - src/api/__tests__/auth.test.ts         (full auth middleware with mock KV, scopes, security)
+ *   - src/core/__tests__/kv-api-keys.test.ts (API key storage and validation)
+ *   - src/core/__tests__/oauth.test.ts       (OAuth token handling)
+ *
+ * Environment variables for authenticated tests:
+ *   - OAUTH_DO_CLIENT_ID / OAUTH_DO_CLIENT_SECRET  (M2M OAuth)
+ *   - OAUTH_DO_ACCESS_TOKEN                         (pre-existing token)
+ *   - FUNCTIONS_API_KEY                              (API key fallback)
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'

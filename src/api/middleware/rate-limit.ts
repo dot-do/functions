@@ -2,6 +2,21 @@
  * Rate Limit Middleware for Functions.do
  *
  * Provides request rate limiting based on IP, function ID, and custom keys.
+ *
+ * IMPORTANT: This middleware uses InMemoryRateLimiter which stores state in
+ * per-isolate memory. In Cloudflare Workers, each request may be handled by
+ * a different isolate, so rate limits are NOT globally enforced across all
+ * instances. This provides best-effort rate limiting suitable for:
+ * - Preventing obvious abuse from a single client hitting the same isolate
+ * - Development and testing environments
+ *
+ * FOR PRODUCTION (global rate limiting): Use the RateLimiterDO Durable Object
+ * from src/do/rate-limiter.ts. Durable Objects provide a single point of
+ * coordination, ensuring rate limits are enforced globally across all Worker
+ * isolates. Wire it up by calling env.RATE_LIMITER.idFromName(key) to route
+ * rate-limit checks to a single DO instance per key.
+ *
+ * @see src/do/rate-limiter.ts - Production-ready distributed rate limiter
  */
 
 import {

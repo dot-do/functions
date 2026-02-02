@@ -62,13 +62,30 @@ export interface HybridStorageOptions {
 /**
  * Hybrid code storage that uses both KV and R2.
  *
- * This allows for a gradual migration from KV to R2:
- * - Reads check R2 first, then fall back to KV
- * - Writes go to R2 by default
- * - Migration utilities to move existing code from KV to R2
+ * WARNING: This class is intended **only for KV-to-R2 migration scenarios**.
+ * It should NOT be used as a general-purpose storage backend because:
  *
- * After migration is complete, the KV storage can be deprecated
- * and removed in favor of R2-only storage.
+ * 1. CONSISTENCY RISK: KV is eventually consistent while R2 is strongly
+ *    consistent. When both are active, a write to one backend may not be
+ *    immediately visible via the other, leading to stale reads during the
+ *    migration window.
+ *
+ * 2. DUAL-WRITE COMPLEXITY: Writes go to only one backend (R2 by default),
+ *    so the two backends can diverge. Deletes are applied to both, but
+ *    failures are not transactional -- a delete could succeed in one and
+ *    fail in the other.
+ *
+ * 3. COST: Every read may hit two backends (R2 first, then KV fallback),
+ *    doubling the number of storage operations during the transition.
+ *
+ * RECOMMENDED APPROACH:
+ * - Use KVCodeStorage for most workloads (it is the production default).
+ * - Use R2CodeStorage only for large files (>25 MB).
+ * - Use this HybridCodeStorage ONLY during an active migration from KV
+ *   to R2, then switch to R2CodeStorage directly once migration completes.
+ *
+ * @see KVCodeStorage - The recommended default storage backend
+ * @see R2CodeStorage - For large files exceeding KV's 25 MB limit
  */
 export class HybridCodeStorage implements CodeStorage {
   private r2Storage: R2CodeStorage

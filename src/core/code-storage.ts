@@ -118,11 +118,22 @@ export interface KVCodeStorageOptions {
  * KV-backed implementation of the CodeStorage interface.
  * Stores and retrieves function code from Cloudflare Workers KV.
  *
+ * This is the **recommended default storage backend** for function code.
+ * It is used by the production code paths (UserStorage DO, tier-dispatcher,
+ * storage-compat layer) and has the most complete feature set including
+ * compression, chunking, compiled code caching, source maps, and WASM storage.
+ *
+ * For large binary assets (>25 MB), use R2CodeStorage instead.
+ * For KV-to-R2 migration scenarios, see HybridCodeStorage.
+ *
  * Features:
  * - Gzip compression for stored code (configurable)
  * - Automatic decompression on retrieval
  * - Backward compatible with uncompressed data
  * - Chunking support for large code files
+ *
+ * @see R2CodeStorage - For large files exceeding KV's 25 MB limit
+ * @see HybridCodeStorage - For KV-to-R2 migration only (not for general use)
  */
 export class KVCodeStorage implements CodeStorage {
   private static readonly CHUNK_SIZE = 25 * 1024 * 1024 // 25MB - KV limit

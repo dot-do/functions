@@ -47,6 +47,9 @@ export {
   // Human executor
   HUMAN_EXECUTOR,
 
+  // Request deduplication
+  REQUEST_DEDUP,
+
   // Deterministic mode
   DETERMINISTIC,
 

@@ -50,6 +50,7 @@ import {
   getCachedSourceCode,
   cacheSourceCode,
 } from '../caching'
+import { computeDedupKey, getDefaultDedupMap } from '../request-dedup'
 
 /**
  * Get a UserStorageClient for the current request.
@@ -750,23 +751,34 @@ export const invokeHandler: Handler = async (
 
   const start = Date.now()
 
-  // Step 3: Execute based on function type
-  if (['generative', 'agentic', 'human', 'cascade'].includes(functionType)) {
-    // Non-code execution path
-    return executeNonCodeFunction(env, {
-      metadata: extendedMetadata,
-      requestData: requestData!,
-      functionType,
-      classificationMeta,
-    }, start)
-  }
+  // Step 3: Request deduplication
+  // Compute a content-hash key from function ID + input so that identical
+  // concurrent invocations share a single execution within this isolate.
+  const dedupKey = await computeDedupKey(
+    `${functionId}:${version ?? 'latest'}:${functionType}`,
+    requestData
+  )
+  const dedupMap = getDefaultDedupMap()
 
-  // Code execution path
-  return executeCodeFunction(env, {
-    functionId: functionId!,
-    version,
-    metadata: metadata!,
-    requestData: requestData!,
-    request,
-  }, start)
+  return dedupMap.dedupOrExecute(dedupKey, async () => {
+    // Step 4: Execute based on function type
+    if (['generative', 'agentic', 'human', 'cascade'].includes(functionType)) {
+      // Non-code execution path
+      return executeNonCodeFunction(env, {
+        metadata: extendedMetadata,
+        requestData: requestData!,
+        functionType,
+        classificationMeta,
+      }, start)
+    }
+
+    // Code execution path
+    return executeCodeFunction(env, {
+      functionId: functionId!,
+      version,
+      metadata: metadata!,
+      requestData: requestData!,
+      request,
+    }, start)
+  })
 }

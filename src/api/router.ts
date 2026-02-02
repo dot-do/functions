@@ -474,7 +474,9 @@ export function createRouter(): Router {
               }
             }
           } else if (rateLimitConfig) {
-            // Fallback: in-memory rate limiter (for tests / when DO not configured)
+            // Fallback: per-isolate in-memory rate limiter (best-effort only).
+            // This does NOT enforce global rate limits across Workers isolates.
+            // For production, use the RateLimiterDO Durable Object (src/do/rate-limiter.ts).
             if (!fallbackIpLimiter && rateLimitConfig.ip) {
               fallbackIpLimiter = new InMemoryRateLimiter(rateLimitConfig.ip)
             }

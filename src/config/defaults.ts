@@ -349,6 +349,21 @@ export const INVOKE = {
 } as const
 
 // =============================================================================
+// REQUEST DEDUPLICATION CONFIGURATION
+// =============================================================================
+
+/**
+ * Configuration for request deduplication / coalescing.
+ * Identical concurrent invocations within the same isolate share a single execution.
+ */
+export const REQUEST_DEDUP = {
+  /** Whether deduplication is enabled */
+  ENABLED: true,
+  /** Safety-net TTL for in-flight entries (ms) before auto-eviction */
+  TTL_MS: 30_000,
+} as const
+
+// =============================================================================
 // COMBINED CONFIG OBJECT
 // =============================================================================
 

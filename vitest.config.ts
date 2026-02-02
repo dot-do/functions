@@ -4,6 +4,20 @@ import { resolve } from 'path'
 // Limit Node.js memory to prevent OOM
 process.env.NODE_OPTIONS = process.env.NODE_OPTIONS || '--max-old-space-size=4096'
 
+// =============================================================================
+// Test Directory Convention
+// =============================================================================
+//
+//   src/**/__tests__/*.test.ts   -- Unit and integration tests (run in Workers pool)
+//   test/e2e/*.e2e.test.ts       -- E2E tests against live deployed service (vitest.e2e.config.ts)
+//   test/e2e-workers/*.test.ts   -- E2E tests inside Workers runtime (vitest.e2e.workers.config.ts)
+//   cli/**/*.test.ts             -- CLI command tests (Node.js, vitest.config.cli.ts)
+//   sdk-templates/**/*.test.ts   -- SDK template tests (Node.js, separate config)
+//
+// This config runs unit/integration tests in @cloudflare/vitest-pool-workers.
+// E2E and CLI tests have their own vitest configs and are excluded here.
+// =============================================================================
+
 export default defineWorkersProject({
   test: {
     globals: true,
@@ -11,49 +25,63 @@ export default defineWorkersProject({
     maxConcurrency: 1,  // Only 1 test at a time
     maxWorkers: 1,      // Only 1 worker process
     isolate: true,      // Enable test isolation to prevent state leakage between tests
+
+    // Auto-discover all .test.ts files across the project.
+    // Specific directories and files that cannot run in the Workers pool are
+    // listed in `exclude` below with explanations.
     include: [
       'src/**/*.test.ts',
       'core/src/**/*.test.ts',
-      'cli/**/*.test.ts',
-      'sdk-templates/**/*.test.ts',
-      'docs/**/*.test.ts',
       'test/**/*.test.ts',
     ],
     exclude: [
       'node_modules/**',
-      // E2E tests - have separate vitest configs
-      'test/e2e/**',           // Needs live deployed service (vitest.e2e.config.ts)
-      'test/e2e-workers/**',   // Workers E2E tests (vitest.e2e.workers.config.ts)
-      // TDD red-phase stubs (unimplemented features)
-      'cli/__tests__/**',      // CLI command stubs: declared-but-unimplemented functions
-      'docs/__tests__/**',     // Doc validation stubs: check for unwritten docs
-      'test/esbuild-compiler.test.ts',    // esbuild worker not yet implemented
-      'test/runtime-compilation.test.ts',  // Runtime compilation not yet implemented
-      'src/__tests__/deploy-compilation.test.ts', // Deploy compilation not yet implemented
-      'src/core/__tests__/worker-loader.test.ts', // Worker loader not yet implemented
-      // Node.js-only tests (use child_process, fs, os - incompatible with Workers)
-      'src/cli/__tests__/**',  // CLI tests: execSync/spawn, fs, os
-      'sdk-templates/**',      // Template tests: execSync, fs, child_process
-      'src/languages/csharp/__tests__/runtime.test.ts',          // Imports node:os
-      'src/languages/csharp/__tests__/distributed-runtime.test.ts', // Imports node:os
-      'src/languages/go/__tests__/compile.test.ts',   // Imports child_process
-      'src/languages/go/__tests__/e2e.test.ts',       // Imports child_process
-      'src/languages/typescript/__tests__/compile.test.ts',      // Imports typescript (node:os)
-      'src/languages/typescript/__tests__/sdk-compiler.test.ts', // Imports typescript (node:os)
-      // Fake WASM compilers removed - these tests tested the old regex-based fakes.
+
+      // -----------------------------------------------------------------------
+      // E2E tests -- have their own vitest configs (not run by this config)
+      // -----------------------------------------------------------------------
+      'test/e2e/**',           // vitest.e2e.config.ts    (live deployed service)
+      'test/e2e-workers/**',   // vitest.e2e.workers.config.ts (Workers runtime E2E)
+
+      // -----------------------------------------------------------------------
+      // TDD red-phase stubs (unimplemented features -- expected to fail)
+      // -----------------------------------------------------------------------
+      'test/esbuild-compiler.test.ts',              // esbuild worker not yet implemented
+      'test/runtime-compilation.test.ts',            // Runtime compilation not yet implemented
+      'src/__tests__/deploy-compilation.test.ts',    // Deploy compilation not yet implemented
+      'src/core/__tests__/worker-loader.test.ts',    // Worker loader not yet implemented
+
+      // -----------------------------------------------------------------------
+      // Node.js-only tests (use child_process, fs, os -- incompatible with Workers)
+      // These run under vitest.config.cli.ts or sdk-template configs instead.
+      // -----------------------------------------------------------------------
+      'src/cli/__tests__/**',                                      // execSync/spawn, fs, os
+      'src/languages/csharp/__tests__/runtime.test.ts',            // node:os
+      'src/languages/csharp/__tests__/distributed-runtime.test.ts',// node:os
+      'src/languages/go/__tests__/compile.test.ts',                // child_process
+      'src/languages/go/__tests__/e2e.test.ts',                    // child_process
+      'src/languages/typescript/__tests__/compile.test.ts',        // typescript (node:os)
+      'src/languages/typescript/__tests__/sdk-compiler.test.ts',   // typescript (node:os)
+      'src/__tests__/wrangler-config.test.ts',                     // readFileSync
+
+      // -----------------------------------------------------------------------
+      // Removed/stale WASM compiler tests (old regex-based fakes)
       // See src/core/__tests__/honest-language-support.test.ts for current tests.
-      'src/languages/rust/__tests__/compile.test.ts',            // Fake Rust compiler removed
-      'src/languages/assemblyscript/__tests__/compile.test.ts',  // Fake AssemblyScript compiler removed
-      'src/languages/cpp/__tests__/compile.test.ts',             // Fake C++ compiler removed
-      'src/__tests__/wrangler-config.test.ts', // Uses readFileSync (not implemented in Workers)
-      // Pre-existing failures: unimplemented features / Pyodide runtime issues
-      'src/core/__tests__/distributed-rate-limiter.test.ts', // RateLimiterDO class not yet implemented
-      'src/core/__tests__/lru-benchmark.test.ts',            // LRU cache implementation incomplete
-      'src/__tests__/api-router.test.ts',                     // Router routes return 501 (stubs)
-      'src/__tests__/agentic-e2e.test.ts',                    // Auth/routing stubs not implemented
-      'src/tiers/__tests__/generative-executor.e2e.test.ts',  // Timeout/cache TTL issues
-      'src/languages/python/__tests__/e2e.test.ts',           // executePyodide not available in Workers miniflare
-      'src/tiers/__tests__/python-execution.test.ts',         // Pyodide execution fails in Workers miniflare
+      // -----------------------------------------------------------------------
+      'src/languages/rust/__tests__/compile.test.ts',
+      'src/languages/assemblyscript/__tests__/compile.test.ts',
+      'src/languages/cpp/__tests__/compile.test.ts',
+
+      // -----------------------------------------------------------------------
+      // Pre-existing failures: unimplemented features / runtime issues
+      // -----------------------------------------------------------------------
+      'src/core/__tests__/distributed-rate-limiter.test.ts',      // RateLimiterDO class not yet implemented
+      'src/core/__tests__/lru-benchmark.test.ts',                 // LRU cache implementation incomplete
+      'src/__tests__/api-router.test.ts',                          // Router routes return 501 (stubs)
+      'src/__tests__/agentic-e2e.test.ts',                         // Auth/routing stubs not implemented
+      'src/tiers/__tests__/generative-executor.e2e.test.ts',       // Timeout/cache TTL issues
+      'src/languages/python/__tests__/e2e.test.ts',                // executePyodide not in Workers miniflare
+      'src/tiers/__tests__/python-execution.test.ts',              // Pyodide execution fails in miniflare
     ],
     testTimeout: 30000,
     // CRITICAL: Limit parallelism to prevent RAM exhaustion (100GB+ without these limits)
