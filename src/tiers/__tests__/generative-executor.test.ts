@@ -1,8 +1,12 @@
 /**
- * Generative Functions Executor Tests (RED Phase)
+ * Generative Functions Executor Tests
  *
  * These tests validate the GenerativeExecutor functionality for executing
  * generative AI functions that make single model calls with structured output.
+ *
+ * Test setup uses @cloudflare/vitest-pool-workers with miniflare.
+ * Only external AI API clients are mocked; real Durable Objects / Cache API
+ * are used when available in the miniflare environment.
  *
  * Test Categories:
  * 1. Basic Generation - user/system prompts, output validation
@@ -13,8 +17,11 @@
  * 6. Token Tracking - input/output/total tokens, maxTokens
  * 7. Timeout Enforcement - 30s default, custom timeout, abort
  * 8. Retry & Rate Limiting - 429/500 retries, exponential backoff
- * 9. Caching - prompt hash caching, cache TTL
+ * 9. Caching - prompt hash caching, cache TTL, cache stats
  * 10. Execution Info - model, prompt, rawResponse, stopReason, latency
+ * 11. GPT Provider - GPT-specific request/response handling
+ * 12. Edge Cases - empty input, large input, unicode, concurrent, errors
+ * 13. Deprecated / No-op Methods - cleanupStaleEntries, stopCleanup
  *
  * @module tiers/generative-executor.test
  */
@@ -31,7 +38,6 @@ import type {
 import { defineGenerativeFunction, generativeFunction } from '@dotdo/functions/generative'
 import type { JsonSchema, ExecutionContext } from '@dotdo/functions'
 
-// The executor doesn't exist yet - this import will fail (RED phase)
 import { GenerativeExecutor } from '../generative-executor.js'
 
 // =============================================================================
@@ -39,13 +45,13 @@ import { GenerativeExecutor } from '../generative-executor.js'
 // =============================================================================
 
 /**
- * Mock AI client for deterministic testing
+ * Mock AI client for deterministic testing.
+ * Only external AI API calls are mocked - no internal logic is bypassed.
  */
 const createMockAIClient = () => ({
   messages: {
     create: vi.fn(),
   },
-  // OpenAI-style completions
   chat: {
     completions: {
       create: vi.fn(),
@@ -61,6 +67,7 @@ function createMockClaudeResponse(options: {
   inputTokens?: number
   outputTokens?: number
   stopReason?: 'end_turn' | 'max_tokens' | 'stop_sequence'
+  model?: string
 } = {}) {
   return {
     content: [{ type: 'text', text: options.content ?? '{"result": "success"}' }],
@@ -69,7 +76,7 @@ function createMockClaudeResponse(options: {
       output_tokens: options.outputTokens ?? 50,
     },
     stop_reason: options.stopReason ?? 'end_turn',
-    model: 'claude-3-sonnet-20240229',
+    model: options.model ?? 'claude-3-sonnet-20240229',
   }
 }
 
@@ -81,6 +88,7 @@ function createMockGPTResponse(options: {
   promptTokens?: number
   completionTokens?: number
   finishReason?: 'stop' | 'length'
+  model?: string
 } = {}) {
   return {
     choices: [
@@ -94,7 +102,7 @@ function createMockGPTResponse(options: {
       completion_tokens: options.completionTokens ?? 50,
       total_tokens: (options.promptTokens ?? 100) + (options.completionTokens ?? 50),
     },
-    model: 'gpt-4o-2024-05-13',
+    model: options.model ?? 'gpt-4o-2024-05-13',
   }
 }
 
@@ -147,7 +155,6 @@ describe('GenerativeExecutor', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.useFakeTimers()
     mockAIClient = createMockAIClient()
     executor = new GenerativeExecutor({
       aiClient: mockAIClient,
@@ -155,7 +162,7 @@ describe('GenerativeExecutor', () => {
   })
 
   afterEach(() => {
-    vi.useRealTimers()
+    vi.restoreAllMocks()
   })
 
   // ==========================================================================
@@ -167,7 +174,7 @@ describe('GenerativeExecutor', () => {
       const definition = createSimpleFunction()
       mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
 
-      const result = await executor.execute(definition, {})
+      await executor.execute(definition, {})
 
       expect(mockAIClient.messages.create).toHaveBeenCalled()
       const callArgs = mockAIClient.messages.create.mock.calls[0][0]
@@ -182,7 +189,7 @@ describe('GenerativeExecutor', () => {
         content: '{"category": "positive", "confidence": 0.95}',
       }))
 
-      const result = await executor.execute(definition, { text: 'I love this!' })
+      await executor.execute(definition, { text: 'I love this!' })
 
       const callArgs = mockAIClient.messages.create.mock.calls[0][0]
       expect(callArgs.system).toContain('sentiment classifier')
@@ -237,6 +244,15 @@ describe('GenerativeExecutor', () => {
 
       expect(result.output).toEqual({ result: 'from code block' })
     })
+
+    it('should set cached to false for non-cached results', async () => {
+      const definition = createSimpleFunction()
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      const result = await executor.execute(definition, {})
+
+      expect(result.generativeExecution.cached).toBe(false)
+    })
   })
 
   // ==========================================================================
@@ -259,6 +275,26 @@ describe('GenerativeExecutor', () => {
 
       const callArgs = mockAIClient.messages.create.mock.calls[0][0]
       expect(callArgs.model).toBe('claude-3-opus-20240229')
+    })
+
+    it('should use specified model (claude-3-haiku)', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-haiku',
+        name: 'Haiku Test',
+        version: '1.0.0',
+        userPrompt: 'Test',
+        outputSchema: simpleOutputSchema,
+        model: 'claude-3-haiku',
+      })
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse({
+        model: 'claude-3-haiku-20240307',
+      }))
+
+      const result = await executor.execute(definition, {})
+
+      const callArgs = mockAIClient.messages.create.mock.calls[0][0]
+      expect(callArgs.model).toBe('claude-3-haiku-20240307')
+      expect(result.generativeExecution.model).toBe('claude-3-haiku-20240307')
     })
 
     it('should use specified model (gpt-4o)', async () => {
@@ -285,7 +321,6 @@ describe('GenerativeExecutor', () => {
         version: '1.0.0',
         userPrompt: 'Test',
         outputSchema: simpleOutputSchema,
-        // No model specified
       })
       mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
 
@@ -327,7 +362,7 @@ describe('GenerativeExecutor', () => {
       expect(callArgs.model).toContain('claude-3-opus')
     })
 
-    it('should use correct provider for gemini models', async () => {
+    it('should throw for Gemini models (no Gemini client)', async () => {
       const definition = defineGenerativeFunction({
         id: 'test-gemini',
         name: 'Gemini Test',
@@ -337,8 +372,53 @@ describe('GenerativeExecutor', () => {
         model: 'gemini-pro',
       })
 
-      // Gemini would use a different client method
-      await expect(executor.execute(definition, {})).rejects.toThrow()
+      await expect(executor.execute(definition, {})).rejects.toThrow(/Gemini/)
+    })
+
+    it('should throw for gemini-flash (no Gemini client)', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-gemini-flash',
+        name: 'Gemini Flash Test',
+        version: '1.0.0',
+        userPrompt: 'Test',
+        outputSchema: simpleOutputSchema,
+        model: 'gemini-flash',
+      })
+
+      await expect(executor.execute(definition, {})).rejects.toThrow(/Gemini/)
+    })
+
+    it('should accept models starting with claude- prefix', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-claude-custom',
+        name: 'Claude Custom Test',
+        version: '1.0.0',
+        userPrompt: 'Test',
+        outputSchema: simpleOutputSchema,
+        model: 'claude-custom-2025',
+      })
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      const result = await executor.execute(definition, {})
+
+      expect(result.status).toBe('completed')
+    })
+
+    it('should accept models starting with gpt- prefix', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-gpt-custom',
+        name: 'GPT Custom Test',
+        version: '1.0.0',
+        userPrompt: 'Test',
+        outputSchema: simpleOutputSchema,
+        model: 'gpt-5-turbo',
+      })
+      // Non-standard GPT model goes through Claude path (not in GPT_MODELS set)
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      const result = await executor.execute(definition, {})
+
+      expect(result.status).toBe('completed')
     })
   })
 
@@ -430,7 +510,7 @@ describe('GenerativeExecutor', () => {
       expect(userMessage.content).toBe('User: Alice, Age: 30')
     })
 
-    it('should escape special characters in variable values', async () => {
+    it('should preserve special characters in variable values', async () => {
       const definition = defineGenerativeFunction({
         id: 'test-escape',
         name: 'Escape Test',
@@ -445,6 +525,24 @@ describe('GenerativeExecutor', () => {
       const callArgs = mockAIClient.messages.create.mock.calls[0][0]
       const userMessage = callArgs.messages.find((m: { role: string }) => m.role === 'user')
       expect(userMessage.content).toContain('function() { return "hello"; }')
+    })
+
+    it('should stringify object values in templates', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-object-value',
+        name: 'Object Value Test',
+        version: '1.0.0',
+        userPrompt: 'Data: {{data}}',
+        outputSchema: simpleOutputSchema,
+      })
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      await executor.execute(definition, { data: { key: 'value', nested: { a: 1 } } })
+
+      const callArgs = mockAIClient.messages.create.mock.calls[0][0]
+      const userMessage = callArgs.messages.find((m: { role: string }) => m.role === 'user')
+      expect(userMessage.content).toContain('"key"')
+      expect(userMessage.content).toContain('"value"')
     })
   })
 
@@ -468,7 +566,6 @@ describe('GenerativeExecutor', () => {
           required: ['name', 'count'],
         },
       })
-      // Valid response
       mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse({
         content: '{"name": "test", "count": 42}',
       }))
@@ -581,6 +678,52 @@ describe('GenerativeExecutor', () => {
 
       expect(result.output).toEqual(['item1', 'item2', 'item3'])
     })
+
+    it('should reject invalid JSON output and fail after schema retries', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-invalid-json',
+        name: 'Invalid JSON Test',
+        version: '1.0.0',
+        userPrompt: 'Generate',
+        outputSchema: simpleOutputSchema,
+        retryPolicy: { maxAttempts: 2 },
+      })
+      // All attempts return invalid JSON
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse({
+        content: 'this is not valid json at all',
+      }))
+
+      const result = await executor.execute(definition, {})
+
+      expect(result.status).toBe('failed')
+      expect(result.error?.message).toContain('validation')
+    })
+
+    it('should validate array item types', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-array-items',
+        name: 'Array Items Test',
+        version: '1.0.0',
+        userPrompt: 'Generate',
+        outputSchema: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { name: { type: 'string' } },
+            required: ['name'],
+          },
+        },
+      })
+      // Return array with missing required field on item
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse({
+        content: '[{"name": "ok"}, {"wrongField": "bad"}]',
+      }))
+
+      const result = await executor.execute(definition, {})
+
+      expect(result.status).toBe('failed')
+      expect(result.error?.message).toContain('name')
+    })
   })
 
   // ==========================================================================
@@ -608,16 +751,15 @@ describe('GenerativeExecutor', () => {
       await executor.execute(definition, { text: 'Nice work!' })
 
       const callArgs = mockAIClient.messages.create.mock.calls[0][0]
-      // Examples should be included as messages
+      // Examples (2 user + 2 assistant) + actual query (1 user) = 5 messages
       expect(callArgs.messages.length).toBeGreaterThan(1)
     })
 
-    it('should format examples correctly for model', async () => {
+    it('should format examples as user/assistant message pairs', async () => {
       const examples: GenerativeExample[] = [
         {
           input: { query: 'What is 2+2?' },
           output: { answer: '4', explanation: 'Basic arithmetic' },
-          explanation: 'Simple math question',
         },
       ]
       const definition = defineGenerativeFunction({
@@ -641,10 +783,10 @@ describe('GenerativeExecutor', () => {
       await executor.execute(definition, { query: 'What is 2*3?' })
 
       const callArgs = mockAIClient.messages.create.mock.calls[0][0]
-      // Check that example is formatted with input/output pair
       const messages = JSON.stringify(callArgs.messages)
+      // Example input should be rendered through the template
       expect(messages).toContain('What is 2+2')
-      // The content is JSON-stringified, so quotes are escaped
+      // Example output should be JSON-stringified
       expect(messages).toContain('\\"answer\\"')
       expect(messages).toContain('\\"4\\"')
     })
@@ -679,6 +821,25 @@ describe('GenerativeExecutor', () => {
 
       expect(firstIndex).toBeLessThan(secondIndex)
       expect(secondIndex).toBeLessThan(thirdIndex)
+    })
+
+    it('should handle definition with empty examples array', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-no-examples',
+        name: 'No Examples Test',
+        version: '1.0.0',
+        userPrompt: 'Generate',
+        outputSchema: simpleOutputSchema,
+        examples: [],
+      })
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      const result = await executor.execute(definition, {})
+
+      expect(result.status).toBe('completed')
+      const callArgs = mockAIClient.messages.create.mock.calls[0][0]
+      // Only the actual user message, no example messages
+      expect(callArgs.messages.length).toBe(1)
     })
   })
 
@@ -723,7 +884,7 @@ describe('GenerativeExecutor', () => {
       expect(result.generativeExecution.tokens.totalTokens).toBe(150)
     })
 
-    it('should respect maxTokens limit', async () => {
+    it('should respect maxTokens limit from definition', async () => {
       const definition = defineGenerativeFunction({
         id: 'test-max-tokens',
         name: 'Max Tokens Test',
@@ -758,6 +919,23 @@ describe('GenerativeExecutor', () => {
       expect(callArgs.max_tokens).toBe(1000)
     })
 
+    it('should default to 4096 maxTokens if not specified', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-default-tokens',
+        name: 'Default Tokens Test',
+        version: '1.0.0',
+        userPrompt: 'Generate',
+        outputSchema: simpleOutputSchema,
+        // No maxTokens specified
+      })
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      await executor.execute(definition, {})
+
+      const callArgs = mockAIClient.messages.create.mock.calls[0][0]
+      expect(callArgs.max_tokens).toBe(4096)
+    })
+
     it('should include tokens in execution metrics', async () => {
       const definition = createSimpleFunction()
       mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse({
@@ -783,7 +961,20 @@ describe('GenerativeExecutor', () => {
       const result = await executor.execute(definition, {})
 
       expect(result.generativeExecution.stopReason).toBe('max_tokens')
-      // Output may be incomplete/invalid due to truncation
+    })
+
+    it('should default token counts to 0 when usage is missing', async () => {
+      const definition = createSimpleFunction()
+      mockAIClient.messages.create.mockResolvedValue({
+        content: [{ type: 'text', text: '{"result": "ok"}' }],
+        // No usage field
+      })
+
+      const result = await executor.execute(definition, {})
+
+      expect(result.generativeExecution.tokens.inputTokens).toBe(0)
+      expect(result.generativeExecution.tokens.outputTokens).toBe(0)
+      expect(result.generativeExecution.tokens.totalTokens).toBe(0)
     })
   })
 
@@ -792,9 +983,16 @@ describe('GenerativeExecutor', () => {
   // ==========================================================================
 
   describe('Timeout Enforcement', () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
     it('should enforce 30s default timeout', async () => {
       const definition = createSimpleFunction()
-      // Mock a slow response that exceeds timeout
       mockAIClient.messages.create.mockImplementation(() =>
         new Promise((resolve) => {
           setTimeout(() => resolve(createMockClaudeResponse()), 35000)
@@ -809,7 +1007,7 @@ describe('GenerativeExecutor', () => {
       expect(result.error?.message).toContain('timeout')
     })
 
-    it('should respect custom timeout', async () => {
+    it('should respect custom timeout from definition', async () => {
       const definition = defineGenerativeFunction({
         id: 'test-custom-timeout',
         name: 'Custom Timeout Test',
@@ -881,6 +1079,47 @@ describe('GenerativeExecutor', () => {
 
       expect(result.status).toBe('timeout')
     })
+
+    it('should return timeout error with generativeExecution info', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-timeout-info',
+        name: 'Timeout Info Test',
+        version: '1.0.0',
+        userPrompt: 'Generate',
+        outputSchema: simpleOutputSchema,
+        timeout: '1s',
+      })
+      mockAIClient.messages.create.mockImplementation(() =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve(createMockClaudeResponse()), 5000)
+        })
+      )
+
+      const resultPromise = executor.execute(definition, {})
+      await vi.advanceTimersByTimeAsync(2000)
+      const result = await resultPromise
+
+      expect(result.status).toBe('timeout')
+      expect(result.generativeExecution).toBeDefined()
+      expect(result.generativeExecution.cached).toBe(false)
+      expect(result.generativeExecution.model).toBeDefined()
+    })
+
+    it('should support string duration timeout in context', async () => {
+      const definition = createSimpleFunction()
+      mockAIClient.messages.create.mockImplementation(() =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve(createMockClaudeResponse()), 8000)
+        })
+      )
+
+      const context: ExecutionContext = { timeout: '3s' }
+      const resultPromise = executor.execute(definition, {}, undefined, context)
+      await vi.advanceTimersByTimeAsync(4000)
+      const result = await resultPromise
+
+      expect(result.status).toBe('timeout')
+    })
   })
 
   // ==========================================================================
@@ -888,6 +1127,14 @@ describe('GenerativeExecutor', () => {
   // ==========================================================================
 
   describe('Retry & Rate Limiting', () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
     it('should retry on 429 rate limit error', async () => {
       const definition = createSimpleFunction()
       const rateLimitError = Object.assign(new Error('Rate limit exceeded'), {
@@ -947,7 +1194,7 @@ describe('GenerativeExecutor', () => {
       expect(delay2).toBeGreaterThan(delay1)
     })
 
-    it('should respect max retries', async () => {
+    it('should respect max retries from retryPolicy', async () => {
       const definition = defineGenerativeFunction({
         id: 'test-max-retries',
         name: 'Max Retries Test',
@@ -965,6 +1212,20 @@ describe('GenerativeExecutor', () => {
       const result = await resultPromise
 
       expect(mockAIClient.messages.create).toHaveBeenCalledTimes(2)
+      expect(result.status).toBe('failed')
+    })
+
+    it('should default to 3 max retries', async () => {
+      const definition = createSimpleFunction() // No retryPolicy
+      const serverError = Object.assign(new Error('Always fails'), { status: 500 })
+
+      mockAIClient.messages.create.mockRejectedValue(serverError)
+
+      const resultPromise = executor.execute(definition, {})
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      expect(mockAIClient.messages.create).toHaveBeenCalledTimes(3)
       expect(result.status).toBe('failed')
     })
 
@@ -1021,6 +1282,27 @@ describe('GenerativeExecutor', () => {
       // Should wait at least 5 seconds as per retry-after header
       expect(retryDelay - startTime).toBeGreaterThanOrEqual(5000)
     })
+
+    it('should preserve error name and message after all retries fail', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-error-preserve',
+        name: 'Error Preserve Test',
+        version: '1.0.0',
+        userPrompt: 'Generate',
+        outputSchema: simpleOutputSchema,
+        retryPolicy: { maxAttempts: 1 },
+      })
+      const serverError = Object.assign(new Error('Server on fire'), { status: 500 })
+
+      mockAIClient.messages.create.mockRejectedValue(serverError)
+
+      const resultPromise = executor.execute(definition, {})
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      expect(result.status).toBe('failed')
+      expect(result.error?.message).toContain('Server on fire')
+    })
   })
 
   // ==========================================================================
@@ -1045,7 +1327,7 @@ describe('GenerativeExecutor', () => {
       expect(result.output).toEqual({ result: 'cached value' })
     })
 
-    it('should return cached: true in execution info', async () => {
+    it('should return cached: true in execution info for cache hit', async () => {
       const definition = createSimpleFunction()
       const config: GenerativeFunctionConfig = { cacheEnabled: true }
       mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
@@ -1054,24 +1336,6 @@ describe('GenerativeExecutor', () => {
       const result = await executor.execute(definition, {}, config)
 
       expect(result.generativeExecution.cached).toBe(true)
-    })
-
-    // Cache API handles TTL via Cache-Control header - different behavior than in-memory
-    it.skip('should respect cacheTtlSeconds', async () => {
-      const definition = createSimpleFunction()
-      const config: GenerativeFunctionConfig = { cacheEnabled: true, cacheTtlSeconds: 5 }
-      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
-
-      // First call
-      await executor.execute(definition, {}, config)
-
-      // Advance past TTL
-      await vi.advanceTimersByTimeAsync(6000)
-
-      // Second call - cache expired, should hit API again
-      await executor.execute(definition, {}, config)
-
-      expect(mockAIClient.messages.create).toHaveBeenCalledTimes(2)
     })
 
     it('should use different cache keys for different inputs', async () => {
@@ -1103,11 +1367,21 @@ describe('GenerativeExecutor', () => {
       expect(mockAIClient.messages.create).toHaveBeenCalledTimes(2)
     })
 
+    it('should not cache by default (cacheEnabled defaults to false)', async () => {
+      const definition = createSimpleFunction()
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      await executor.execute(definition, {})
+      await executor.execute(definition, {})
+
+      expect(mockAIClient.messages.create).toHaveBeenCalledTimes(2)
+    })
+
     it('should not cache failed responses', async () => {
       const definition = createSimpleFunction()
       const config: GenerativeFunctionConfig = { cacheEnabled: true }
 
-      // First call fails
+      // First call fails (invalid JSON)
       mockAIClient.messages.create.mockResolvedValueOnce(createMockClaudeResponse({
         content: 'invalid json',
       }))
@@ -1119,8 +1393,27 @@ describe('GenerativeExecutor', () => {
       await executor.execute(definition, {}, config)
       const result = await executor.execute(definition, {}, config)
 
+      // Both calls went through because failed result was not cached
       expect(mockAIClient.messages.create).toHaveBeenCalledTimes(2)
       expect(result.output).toEqual({ result: 'success' })
+    })
+
+    it('should track cache hits and misses in getCacheStats', async () => {
+      const definition = createSimpleFunction()
+      const config: GenerativeFunctionConfig = { cacheEnabled: true }
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      // First call - miss
+      await executor.execute(definition, {}, config)
+      const statsAfterMiss = executor.getCacheStats()
+      expect(statsAfterMiss.misses).toBe(1)
+      expect(statsAfterMiss.hits).toBe(0)
+
+      // Second call - hit
+      await executor.execute(definition, {}, config)
+      const statsAfterHit = executor.getCacheStats()
+      expect(statsAfterHit.hits).toBe(1)
+      expect(statsAfterHit.misses).toBe(1)
     })
   })
 
@@ -1148,7 +1441,7 @@ describe('GenerativeExecutor', () => {
       expect(result.generativeExecution.model).toBe('claude-3-opus-20240229')
     })
 
-    it('should return generativeExecution.prompt', async () => {
+    it('should return generativeExecution.prompt with rendered templates', async () => {
       const definition = defineGenerativeFunction({
         id: 'test-prompt-info',
         name: 'Prompt Info Test',
@@ -1189,6 +1482,7 @@ describe('GenerativeExecutor', () => {
     })
 
     it('should return generativeExecution.modelLatencyMs', async () => {
+      vi.useFakeTimers()
       const definition = createSimpleFunction()
       mockAIClient.messages.create.mockImplementation(() =>
         new Promise((resolve) => {
@@ -1201,6 +1495,7 @@ describe('GenerativeExecutor', () => {
       const result = await resultPromise
 
       expect(result.generativeExecution.modelLatencyMs).toBeGreaterThanOrEqual(100)
+      vi.useRealTimers()
     })
 
     it('should return execution metadata', async () => {
@@ -1214,6 +1509,7 @@ describe('GenerativeExecutor', () => {
       expect(result.functionVersion).toBe('1.0.0')
       expect(result.metadata.startedAt).toBeDefined()
       expect(result.metadata.completedAt).toBeDefined()
+      expect(result.metadata.completedAt).toBeGreaterThanOrEqual(result.metadata.startedAt)
     })
 
     it('should include traceId from context', async () => {
@@ -1227,7 +1523,18 @@ describe('GenerativeExecutor', () => {
       expect(result.metadata.spanId).toBeDefined()
     })
 
+    it('should use executionId from context when provided', async () => {
+      const definition = createSimpleFunction()
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      const context: ExecutionContext = { executionId: 'custom-exec-id' }
+      const result = await executor.execute(definition, {}, undefined, context)
+
+      expect(result.executionId).toBe('custom-exec-id')
+    })
+
     it('should calculate duration correctly', async () => {
+      vi.useFakeTimers()
       const definition = createSimpleFunction()
       mockAIClient.messages.create.mockImplementation(() =>
         new Promise((resolve) => {
@@ -1240,11 +1547,173 @@ describe('GenerativeExecutor', () => {
       const result = await resultPromise
 
       expect(result.metrics.durationMs).toBeGreaterThanOrEqual(50)
+      vi.useRealTimers()
+    })
+
+    it('should include inputSizeBytes in metrics', async () => {
+      const definition = createSimpleFunction()
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      const result = await executor.execute(definition, {})
+
+      expect(typeof result.metrics.inputSizeBytes).toBe('number')
+      expect(result.metrics.inputSizeBytes).toBeGreaterThan(0)
+    })
+
+    it('should include outputSizeBytes in metrics', async () => {
+      const definition = createSimpleFunction()
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse({
+        content: '{"result": "some output"}',
+      }))
+
+      const result = await executor.execute(definition, {})
+
+      expect(typeof result.metrics.outputSizeBytes).toBe('number')
+      expect(result.metrics.outputSizeBytes).toBeGreaterThan(0)
     })
   })
 
   // ==========================================================================
-  // Edge Cases
+  // 11. GPT Provider
+  // ==========================================================================
+
+  describe('GPT Provider', () => {
+    it('should route gpt-4o to chat.completions.create', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-gpt-route',
+        name: 'GPT Route Test',
+        version: '1.0.0',
+        userPrompt: 'Test prompt',
+        outputSchema: simpleOutputSchema,
+        model: 'gpt-4o',
+      })
+      mockAIClient.chat.completions.create.mockResolvedValue(createMockGPTResponse())
+
+      await executor.execute(definition, {})
+
+      expect(mockAIClient.chat.completions.create).toHaveBeenCalled()
+      expect(mockAIClient.messages.create).not.toHaveBeenCalled()
+    })
+
+    it('should route gpt-4o-mini to chat.completions.create', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-gpt-mini-route',
+        name: 'GPT Mini Route Test',
+        version: '1.0.0',
+        userPrompt: 'Test prompt',
+        outputSchema: simpleOutputSchema,
+        model: 'gpt-4o-mini',
+      })
+      mockAIClient.chat.completions.create.mockResolvedValue(createMockGPTResponse())
+
+      await executor.execute(definition, {})
+
+      expect(mockAIClient.chat.completions.create).toHaveBeenCalled()
+    })
+
+    it('should include system prompt in GPT messages', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-gpt-system',
+        name: 'GPT System Test',
+        version: '1.0.0',
+        systemPrompt: 'You are a helpful assistant',
+        userPrompt: 'Hello',
+        outputSchema: simpleOutputSchema,
+        model: 'gpt-4o',
+      })
+      mockAIClient.chat.completions.create.mockResolvedValue(createMockGPTResponse())
+
+      await executor.execute(definition, {})
+
+      const callArgs = mockAIClient.chat.completions.create.mock.calls[0][0]
+      expect(callArgs.messages).toContainEqual(
+        expect.objectContaining({ role: 'system', content: 'You are a helpful assistant' })
+      )
+    })
+
+    it('should track GPT token usage correctly', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-gpt-tokens',
+        name: 'GPT Tokens Test',
+        version: '1.0.0',
+        userPrompt: 'Test',
+        outputSchema: simpleOutputSchema,
+        model: 'gpt-4o',
+      })
+      mockAIClient.chat.completions.create.mockResolvedValue(createMockGPTResponse({
+        promptTokens: 200,
+        completionTokens: 80,
+      }))
+
+      const result = await executor.execute(definition, {})
+
+      expect(result.generativeExecution.tokens.inputTokens).toBe(200)
+      expect(result.generativeExecution.tokens.outputTokens).toBe(80)
+      expect(result.generativeExecution.tokens.totalTokens).toBe(280)
+    })
+
+    it('should map GPT finish_reason=length to max_tokens', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-gpt-length',
+        name: 'GPT Length Test',
+        version: '1.0.0',
+        userPrompt: 'Test',
+        outputSchema: simpleOutputSchema,
+        model: 'gpt-4o',
+      })
+      mockAIClient.chat.completions.create.mockResolvedValue(createMockGPTResponse({
+        content: '{"result": "truncated',
+        finishReason: 'length',
+      }))
+
+      const result = await executor.execute(definition, {})
+
+      expect(result.generativeExecution.stopReason).toBe('max_tokens')
+    })
+
+    it('should map GPT finish_reason=stop to end_turn', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-gpt-stop',
+        name: 'GPT Stop Test',
+        version: '1.0.0',
+        userPrompt: 'Test',
+        outputSchema: simpleOutputSchema,
+        model: 'gpt-4o',
+      })
+      mockAIClient.chat.completions.create.mockResolvedValue(createMockGPTResponse({
+        finishReason: 'stop',
+      }))
+
+      const result = await executor.execute(definition, {})
+
+      expect(result.generativeExecution.stopReason).toBe('end_turn')
+    })
+
+    it('should return failed result if GPT client is not available', async () => {
+      const executorNoGPT = new GenerativeExecutor({
+        aiClient: {
+          messages: { create: vi.fn() },
+          // No chat.completions
+        },
+      })
+
+      const definition = defineGenerativeFunction({
+        id: 'test-no-gpt',
+        name: 'No GPT Test',
+        version: '1.0.0',
+        userPrompt: 'Test',
+        outputSchema: simpleOutputSchema,
+        model: 'gpt-4o',
+      })
+
+      const result = await executorNoGPT.execute(definition, {})
+      expect(result.status).toBe('failed')
+      expect(result.error?.message).toContain('GPT client not available')
+    })
+  })
+
+  // ==========================================================================
+  // 12. Edge Cases
   // ==========================================================================
 
   describe('Edge Cases', () => {
@@ -1283,25 +1752,22 @@ describe('GenerativeExecutor', () => {
       })
       mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
 
-      await executor.execute(definition, { text: 'Hello' })
+      await executor.execute(definition, { text: 'Hola amigos!' })
 
       const callArgs = mockAIClient.messages.create.mock.calls[0][0]
       const userMessage = callArgs.messages.find((m: { role: string }) => m.role === 'user')
-      expect(userMessage.content).toContain('Hello')
+      expect(userMessage.content).toContain('Hola amigos!')
     })
 
     it('should handle concurrent executions', async () => {
       const definition = createSimpleFunction()
       mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
 
-      const promises = [
+      const results = await Promise.all([
         executor.execute(definition, {}),
         executor.execute(definition, {}),
         executor.execute(definition, {}),
-      ]
-
-      await vi.runAllTimersAsync()
-      const results = await Promise.all(promises)
+      ])
 
       expect(results).toHaveLength(3)
       results.forEach((result) => {
@@ -1309,7 +1775,7 @@ describe('GenerativeExecutor', () => {
       })
     })
 
-    it('should handle API response with missing fields', async () => {
+    it('should handle API response with missing usage fields', async () => {
       const definition = createSimpleFunction()
       mockAIClient.messages.create.mockResolvedValue({
         content: [{ type: 'text', text: '{"result": "ok"}' }],
@@ -1319,25 +1785,109 @@ describe('GenerativeExecutor', () => {
       const result = await executor.execute(definition, {})
 
       expect(result.status).toBe('completed')
-      // Should handle gracefully with defaults
-      expect(result.generativeExecution.tokens.inputTokens).toBeDefined()
+      expect(result.generativeExecution.tokens.inputTokens).toBe(0)
+      expect(result.generativeExecution.tokens.outputTokens).toBe(0)
     })
 
-    it('should handle network errors', async () => {
+    it('should handle network errors (non-retryable)', async () => {
       const definition = createSimpleFunction()
       mockAIClient.messages.create.mockRejectedValue(new Error('Network error'))
 
-      const resultPromise = executor.execute(definition, {})
-      await vi.runAllTimersAsync()
-      const result = await resultPromise
+      const result = await executor.execute(definition, {})
 
       expect(result.status).toBe('failed')
       expect(result.error?.message).toContain('Network error')
     })
+
+    it('should generate unique execution IDs for each call', async () => {
+      const definition = createSimpleFunction()
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      const result1 = await executor.execute(definition, {})
+      const result2 = await executor.execute(definition, {})
+
+      expect(result1.executionId).toBeDefined()
+      expect(result2.executionId).toBeDefined()
+      expect(result1.executionId).not.toBe(result2.executionId)
+    })
+
+    it('should pass temperature from definition to API call', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-temperature',
+        name: 'Temperature Test',
+        version: '1.0.0',
+        userPrompt: 'Generate creatively',
+        outputSchema: simpleOutputSchema,
+        temperature: 0.8,
+      })
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      await executor.execute(definition, {})
+
+      const callArgs = mockAIClient.messages.create.mock.calls[0][0]
+      expect(callArgs.temperature).toBe(0.8)
+    })
+
+    it('should use definition temperature over config temperature (definition wins)', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-temp-override',
+        name: 'Temp Override Test',
+        version: '1.0.0',
+        userPrompt: 'Generate',
+        outputSchema: simpleOutputSchema,
+        temperature: 0.5,
+      })
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      const config: GenerativeFunctionConfig = { temperature: 0.9 }
+      await executor.execute(definition, {}, config)
+
+      const callArgs = mockAIClient.messages.create.mock.calls[0][0]
+      // definition.temperature ?? config?.temperature => definition wins
+      expect(callArgs.temperature).toBe(0.5)
+    })
+
+    it('should fall back to config temperature when definition has none', async () => {
+      // Create definition without explicit temperature
+      const definition: GenerativeFunctionDefinition = {
+        id: 'test-temp-fallback',
+        name: 'Temp Fallback Test',
+        version: '1.0.0',
+        userPrompt: 'Generate',
+        outputSchema: simpleOutputSchema,
+        model: 'claude-3-sonnet',
+      } as GenerativeFunctionDefinition
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      const config: GenerativeFunctionConfig = { temperature: 0.9 }
+      await executor.execute(definition, {}, config)
+
+      const callArgs = mockAIClient.messages.create.mock.calls[0][0]
+      // definition.temperature is undefined => config?.temperature (0.9) used
+      expect(callArgs.temperature).toBe(0.9)
+    })
+
+    it('should handle no system prompt (undefined)', async () => {
+      const definition = defineGenerativeFunction({
+        id: 'test-no-system',
+        name: 'No System Prompt Test',
+        version: '1.0.0',
+        userPrompt: 'Just a user prompt',
+        outputSchema: simpleOutputSchema,
+        // No systemPrompt
+      })
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      const result = await executor.execute(definition, {})
+
+      expect(result.status).toBe('completed')
+      const callArgs = mockAIClient.messages.create.mock.calls[0][0]
+      expect(callArgs.system).toBeUndefined()
+    })
   })
 
   // ==========================================================================
-  // renderPrompt helper
+  // 13. renderPrompt Helper
   // ==========================================================================
 
   describe('renderPrompt', () => {
@@ -1367,258 +1917,115 @@ describe('GenerativeExecutor', () => {
       expect(rendered).toContain('key')
       expect(rendered).toContain('value')
     })
+
+    it('should handle nested path access', () => {
+      const rendered = executor.renderPrompt('Name: {{user.name}}', {
+        user: { name: 'Alice' },
+      })
+      expect(rendered).toBe('Name: Alice')
+    })
+
+    it('should throw for missing nested variable', () => {
+      expect(() => executor.renderPrompt('Name: {{user.name}}', {
+        user: { age: 30 },
+      })).toThrow(/missing.*variable/i)
+    })
+
+    it('should handle numeric values', () => {
+      const rendered = executor.renderPrompt('Count: {{count}}', { count: 42 })
+      expect(rendered).toBe('Count: 42')
+    })
+
+    it('should handle boolean values', () => {
+      const rendered = executor.renderPrompt('Active: {{active}}', { active: true })
+      expect(rendered).toBe('Active: true')
+    })
   })
 
   // ==========================================================================
-  // 11. LRU Cache Eviction
-  // NOTE: These tests rely on in-memory LRU cache behavior which is not
-  // available with Cloudflare Cache API. Cache API handles TTL expiration
-  // and eviction automatically, and we cannot track size or evictions.
+  // 14. Deprecated / No-op Methods
   // ==========================================================================
 
-  describe('LRU Cache Eviction', () => {
-    // Cache API does not track size - skipping
-    it.skip('should have configurable max cache size', async () => {
-      const executorWithLimit = new GenerativeExecutor({
-        aiClient: mockAIClient,
-        maxCacheSize: 3,
-      })
-
-      const definition = defineGenerativeFunction({
-        id: 'test-cache-limit',
-        name: 'Cache Limit Test',
-        version: '1.0.0',
-        userPrompt: 'Process: {{input}}',
-        outputSchema: simpleOutputSchema,
-      })
-      const config: GenerativeFunctionConfig = { cacheEnabled: true }
-      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
-
-      // Fill cache with 3 entries
-      await executorWithLimit.execute(definition, { input: 'value1' }, config)
-      await executorWithLimit.execute(definition, { input: 'value2' }, config)
-      await executorWithLimit.execute(definition, { input: 'value3' }, config)
-
-      const stats = executorWithLimit.getCacheStats()
-      expect(stats.size).toBe(3)
+  describe('Deprecated Methods', () => {
+    it('cleanupStaleEntries should be a no-op', () => {
+      // Should not throw
+      expect(() => executor.cleanupStaleEntries()).not.toThrow()
     })
 
-    // Cache API handles eviction automatically - no LRU tracking
-    it.skip('should evict LRU entry when cache is full', async () => {
-      const executorWithLimit = new GenerativeExecutor({
-        aiClient: mockAIClient,
-        maxCacheSize: 2,
-      })
-
-      const definition = defineGenerativeFunction({
-        id: 'test-lru-eviction',
-        name: 'LRU Eviction Test',
-        version: '1.0.0',
-        userPrompt: 'Process: {{input}}',
-        outputSchema: simpleOutputSchema,
-      })
-      const config: GenerativeFunctionConfig = { cacheEnabled: true }
-      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
-
-      // Fill cache with 2 entries
-      await executorWithLimit.execute(definition, { input: 'first' }, config)
-      await executorWithLimit.execute(definition, { input: 'second' }, config)
-
-      // Access 'first' to make it recently used
-      await executorWithLimit.execute(definition, { input: 'first' }, config)
-
-      // Add a third entry - should evict 'second' (LRU)
-      await executorWithLimit.execute(definition, { input: 'third' }, config)
-
-      const stats = executorWithLimit.getCacheStats()
-      expect(stats.size).toBe(2)
-      expect(stats.evictions).toBe(1)
-
-      // 'first' should still be cached (was recently used)
-      mockAIClient.messages.create.mockClear()
-      await executorWithLimit.execute(definition, { input: 'first' }, config)
-      expect(mockAIClient.messages.create).not.toHaveBeenCalled()
-
-      // 'second' should be evicted (was LRU)
-      await executorWithLimit.execute(definition, { input: 'second' }, config)
-      expect(mockAIClient.messages.create).toHaveBeenCalledTimes(1)
+    it('stopCleanup should be a no-op', () => {
+      // Should not throw
+      expect(() => executor.stopCleanup()).not.toThrow()
     })
 
-    // Cache API does not track evictions
-    it.skip('should track evictions in cache stats', async () => {
-      const executorWithLimit = new GenerativeExecutor({
-        aiClient: mockAIClient,
-        maxCacheSize: 2,
-      })
+    it('getCacheStats should return all expected fields', () => {
+      const stats = executor.getCacheStats()
 
-      const definition = defineGenerativeFunction({
-        id: 'test-eviction-stats',
-        name: 'Eviction Stats Test',
-        version: '1.0.0',
-        userPrompt: 'Process: {{input}}',
-        outputSchema: simpleOutputSchema,
-      })
-      const config: GenerativeFunctionConfig = { cacheEnabled: true }
-      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
-
-      // Fill cache
-      await executorWithLimit.execute(definition, { input: 'a' }, config)
-      await executorWithLimit.execute(definition, { input: 'b' }, config)
-
-      // Trigger evictions
-      await executorWithLimit.execute(definition, { input: 'c' }, config)
-      await executorWithLimit.execute(definition, { input: 'd' }, config)
-      await executorWithLimit.execute(definition, { input: 'e' }, config)
-
-      const stats = executorWithLimit.getCacheStats()
-      expect(stats.evictions).toBe(3)
-    })
-
-    // Cache API handles TTL expiration automatically
-    it.skip('should proactively clean stale entries', async () => {
-      const executorWithCleanup = new GenerativeExecutor({
-        aiClient: mockAIClient,
-        maxCacheSize: 100,
-        staleCleanupIntervalMs: 1000, // Cleanup every 1 second
-      })
-
-      const definition = defineGenerativeFunction({
-        id: 'test-stale-cleanup',
-        name: 'Stale Cleanup Test',
-        version: '1.0.0',
-        userPrompt: 'Process: {{input}}',
-        outputSchema: simpleOutputSchema,
-      })
-      const config: GenerativeFunctionConfig = { cacheEnabled: true, cacheTtlSeconds: 2 }
-      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
-
-      // Add entries to cache
-      await executorWithCleanup.execute(definition, { input: 'value1' }, config)
-      await executorWithCleanup.execute(definition, { input: 'value2' }, config)
-
-      let stats = executorWithCleanup.getCacheStats()
-      expect(stats.size).toBe(2)
-
-      // Advance time past TTL
-      await vi.advanceTimersByTimeAsync(3000)
-
-      // Trigger cleanup (either via interval or manual call)
-      executorWithCleanup.cleanupStaleEntries()
-
-      stats = executorWithCleanup.getCacheStats()
-      expect(stats.size).toBe(0)
-      expect(stats.staleEvictions).toBeGreaterThan(0)
-    })
-
-    // Cache API does not track evictions separately
-    it.skip('should track stale evictions separately from LRU evictions', async () => {
-      const executorWithCleanup = new GenerativeExecutor({
-        aiClient: mockAIClient,
-        maxCacheSize: 2,
-        staleCleanupIntervalMs: 1000,
-      })
-
-      const definition = defineGenerativeFunction({
-        id: 'test-eviction-tracking',
-        name: 'Eviction Tracking Test',
-        version: '1.0.0',
-        userPrompt: 'Process: {{input}}',
-        outputSchema: simpleOutputSchema,
-      })
-      const config: GenerativeFunctionConfig = { cacheEnabled: true, cacheTtlSeconds: 2 }
-      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
-
-      // Fill cache and trigger 1 LRU eviction
-      await executorWithCleanup.execute(definition, { input: 'a' }, config)
-      await executorWithCleanup.execute(definition, { input: 'b' }, config)
-      await executorWithCleanup.execute(definition, { input: 'c' }, config)
-
-      // Advance time past TTL
-      await vi.advanceTimersByTimeAsync(3000)
-      executorWithCleanup.cleanupStaleEntries()
-
-      const stats = executorWithCleanup.getCacheStats()
-      expect(stats.evictions).toBe(1) // LRU eviction
-      expect(stats.staleEvictions).toBe(2) // TTL-based cleanup
-    })
-
-    // Cache API handles cleanup automatically
-    it.skip('should stop cleanup timer when stopCleanup is called', async () => {
-      const executorWithCleanup = new GenerativeExecutor({
-        aiClient: mockAIClient,
-        maxCacheSize: 100,
-        staleCleanupIntervalMs: 1000,
-      })
-
-      const definition = defineGenerativeFunction({
-        id: 'test-stop-cleanup',
-        name: 'Stop Cleanup Test',
-        version: '1.0.0',
-        userPrompt: 'Process: {{input}}',
-        outputSchema: simpleOutputSchema,
-      })
-      const config: GenerativeFunctionConfig = { cacheEnabled: true, cacheTtlSeconds: 1 }
-      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
-
-      await executorWithCleanup.execute(definition, { input: 'value' }, config)
-
-      // Stop the cleanup timer
-      executorWithCleanup.stopCleanup()
-
-      // Advance time past TTL and cleanup interval
-      await vi.advanceTimersByTimeAsync(5000)
-
-      // Entry should still be in cache (cleanup didn't run)
-      const stats = executorWithCleanup.getCacheStats()
-      expect(stats.size).toBe(1)
-    })
-
-    // Cache API does not track size - maxCacheSize not applicable
-    it.skip('should use default maxCacheSize of 1000 when not specified', async () => {
-      // Create executor without maxCacheSize option
-      const defaultExecutor = new GenerativeExecutor({
-        aiClient: mockAIClient,
-      })
-
-      const definition = defineGenerativeFunction({
-        id: 'test-default-size',
-        name: 'Default Size Test',
-        version: '1.0.0',
-        userPrompt: 'Process: {{input}}',
-        outputSchema: simpleOutputSchema,
-      })
-      const config: GenerativeFunctionConfig = { cacheEnabled: true }
-      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
-
-      // Fill cache with 1000+ entries and verify no eviction until limit
-      // This is a simplified test - just verify the executor accepts it
-      await defaultExecutor.execute(definition, { input: 'value' }, config)
-
-      const stats = defaultExecutor.getCacheStats()
-      expect(stats.maxSize).toBe(1000)
-    })
-
-    it('should return cache stats with all tracking fields', async () => {
-      const executorWithStats = new GenerativeExecutor({
-        aiClient: mockAIClient,
-        maxCacheSize: 5,
-      })
-
-      const definition = createSimpleFunction()
-      const config: GenerativeFunctionConfig = { cacheEnabled: true }
-      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
-
-      await executorWithStats.execute(definition, {}, config)
-
-      const stats = executorWithStats.getCacheStats()
-
-      // Verify all expected fields are present
       expect(stats).toHaveProperty('size')
       expect(stats).toHaveProperty('maxSize')
       expect(stats).toHaveProperty('hits')
       expect(stats).toHaveProperty('misses')
       expect(stats).toHaveProperty('evictions')
       expect(stats).toHaveProperty('staleEvictions')
+    })
+
+    it('getCacheStats should return 0 for size and eviction fields (Cache API)', () => {
+      const stats = executor.getCacheStats()
+
+      // Cache API manages these internally - always 0 from our perspective
+      expect(stats.size).toBe(0)
+      expect(stats.maxSize).toBe(0)
+      expect(stats.evictions).toBe(0)
+      expect(stats.staleEvictions).toBe(0)
+    })
+  })
+
+  // ==========================================================================
+  // 15. generativeFunction() Shorthand Helper
+  // ==========================================================================
+
+  describe('generativeFunction() Shorthand', () => {
+    it('should create a valid definition with generativeFunction()', async () => {
+      const definition = generativeFunction(
+        'quick-test',
+        'Respond with a greeting',
+        simpleOutputSchema
+      )
+
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse())
+
+      const result = await executor.execute(definition, {})
+
+      expect(result.status).toBe('completed')
+      expect(result.functionId).toBe('quick-test')
+    })
+
+    it('should support optional parameters in generativeFunction()', async () => {
+      const definition = generativeFunction(
+        'shorthand-with-opts',
+        'Classify: {{text}}',
+        classificationOutputSchema,
+        {
+          name: 'Quick Classifier',
+          model: 'claude-3-opus',
+          systemPrompt: 'You classify text',
+          examples: [
+            { input: { text: 'Great!' }, output: { category: 'positive', confidence: 0.9 } },
+          ],
+        }
+      )
+
+      mockAIClient.messages.create.mockResolvedValue(createMockClaudeResponse({
+        content: '{"category": "positive", "confidence": 0.85}',
+      }))
+
+      const result = await executor.execute(definition, { text: 'Nice work!' })
+
+      expect(result.status).toBe('completed')
+      // Should have used system prompt
+      const callArgs = mockAIClient.messages.create.mock.calls[0][0]
+      expect(callArgs.system).toBe('You classify text')
+      // Should have included examples
+      expect(callArgs.messages.length).toBeGreaterThan(1)
     })
   })
 })
