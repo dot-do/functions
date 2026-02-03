@@ -178,14 +178,16 @@ describe('FunctionClassifier', () => {
       expect(result.confidence).toBe(0.5)
     })
 
-    it('should reject invalid type from AI response', async () => {
+    it('should use fallback when AI returns invalid type', async () => {
       const binding = createMockAIBinding(
         '{"type":"unknown","confidence":0.9,"reasoning":"Invalid type"}'
       )
       const classifier = createClassifierFromBinding(binding)
 
-      // Should throw because "unknown" is not a valid type and response can't be parsed
-      await expect(classifier.classify('test')).rejects.toThrow()
+      // Fallback classifier is used when AI returns invalid type
+      const result = await classifier.classify('test')
+      expect(result.provider).toBe('fallback')
+      expect(result.confidence).toBe(0.5)
     })
   })
 
@@ -306,19 +308,25 @@ describe('FunctionClassifier', () => {
   })
 
   describe('error handling', () => {
-    it('should throw when AI binding fails and no fallback', async () => {
+    it('should use fallback when AI binding fails', async () => {
       const binding = createFailingBinding(new Error('AI service unavailable'))
       const classifier = createClassifierFromBinding(binding)
 
-      await expect(classifier.classify('calculateTax')).rejects.toThrow('AI service unavailable')
+      // Fallback classifier is used when AI fails
+      const result = await classifier.classify('calculateTax')
+      expect(result.provider).toBe('fallback')
+      expect(result.confidence).toBe(0.5)
+      expect(result.reasoning).toContain('Fallback classification used')
     })
 
-    it('should handle AI returning empty content', async () => {
+    it('should use fallback when AI returns empty content', async () => {
       const binding = createMockAIBinding('')
       const classifier = createClassifierFromBinding(binding)
 
-      // Empty response should fail to parse
-      await expect(classifier.classify('calculateTax')).rejects.toThrow()
+      // Empty response triggers fallback
+      const result = await classifier.classify('calculateTax')
+      expect(result.provider).toBe('fallback')
+      expect(result.confidence).toBe(0.5)
     })
 
     it('should retry on failure before giving up', async () => {
@@ -401,7 +409,11 @@ describe('FunctionClassifier', () => {
           failingBinding
         )
 
-        await expect(classifier.classify('test')).rejects.toThrow('All AI providers failed')
+        // Fallback classifier is used when all providers fail
+        const result = await classifier.classify('test')
+        expect(result.provider).toBe('fallback')
+        expect(result.confidence).toBe(0.5)
+        expect(result.reasoning).toContain('Fallback classification used')
       } finally {
         globalThis.fetch = originalFetch
       }

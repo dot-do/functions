@@ -269,6 +269,37 @@ export const AI_MODELS = {
   DEFAULT_MAX_ITERATIONS: 10,
 } as const
 
+/**
+ * Claude model shorthand to full model ID mappings.
+ * Maps user-friendly names to the full versioned model IDs.
+ */
+export const CLAUDE_MODELS: Record<string, string> = {
+  'claude-3-opus': 'claude-3-opus-20240229',
+  'claude-3-sonnet': 'claude-3-sonnet-20240229',
+  'claude-3-haiku': 'claude-3-haiku-20240307',
+  'claude-4-opus': 'claude-4-opus-20250115',
+  'claude-4-sonnet': 'claude-4-sonnet-20250115',
+}
+
+/**
+ * Set of supported GPT model identifiers.
+ */
+export const GPT_MODELS = new Set(['gpt-4o', 'gpt-4o-mini'])
+
+/**
+ * Set of supported Gemini model identifiers.
+ */
+export const GEMINI_MODELS = new Set(['gemini-pro', 'gemini-flash'])
+
+/**
+ * Set of all valid model identifiers (union of Claude, GPT, and Gemini).
+ */
+export const VALID_MODELS = new Set([
+  ...Object.keys(CLAUDE_MODELS),
+  ...GPT_MODELS,
+  ...GEMINI_MODELS,
+])
+
 // =============================================================================
 // CSHARP RUNTIME CONFIGURATION
 // =============================================================================

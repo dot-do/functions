@@ -40,6 +40,9 @@ export class CascadeExecutor<TInput = unknown, TOutput = unknown> {
   private definition: CascadeDefinition<TInput, TOutput>
   private options: CascadeOptions
 
+  /** Default global timeout for cascade execution (5 minutes) */
+  private static readonly DEFAULT_GLOBAL_TIMEOUT_MS = 300000
+
   constructor(definition: CascadeDefinition<TInput, TOutput>) {
     if (!definition) {
       throw new Error('CascadeExecutor requires a definition')
@@ -504,6 +507,25 @@ export class CascadeExecutor<TInput = unknown, TOutput = unknown> {
     }
 
     return null
+  }
+
+  /**
+   * Execute a promise with a global timeout wrapper.
+   * Returns the result if completed within timeoutMs, otherwise rejects with a timeout error.
+   */
+  private async executeWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Global timeout exceeded')), timeoutMs)
+        ),
+      ])
+    } finally {
+      clearTimeout(timeoutId)
+    }
   }
 
   /**

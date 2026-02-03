@@ -13,15 +13,35 @@
 import { KVFunctionRegistry } from '../../core/kv-function-registry'
 import { KVCodeStorage } from '../../core/code-storage'
 import { createUserStorageClient, type UserStorageClient } from '../../core/user-storage-client'
+import type { Env } from '../../core/env'
+import type { FunctionMetadata } from '../../core/types'
+
+/**
+ * List options for registry queries
+ */
+export interface RegistryListOptions {
+  prefix?: string
+  limit?: number
+  cursor?: string
+}
+
+/**
+ * List result from registry queries
+ */
+export interface RegistryListResult {
+  keys: Array<{ name: string; metadata?: FunctionMetadata }>
+  list_complete?: boolean
+  cursor?: string
+}
 
 /**
  * Minimal registry interface shared by UserStorageRegistry and KVFunctionRegistry
  */
 export interface RegistryLike {
-  get(functionId: string): Promise<any>
-  put(metadata: any): Promise<void>
-  list(options?: any): Promise<any>
-  update?(functionId: string, updates: any): Promise<any>
+  get(functionId: string): Promise<FunctionMetadata | null>
+  put(metadata: FunctionMetadata): Promise<void>
+  list(options?: RegistryListOptions): Promise<RegistryListResult>
+  update?(functionId: string, updates: Partial<FunctionMetadata>): Promise<FunctionMetadata | null>
   delete(functionId: string): Promise<void>
 }
 
@@ -47,7 +67,7 @@ export interface StorageClientCompat {
  * Get a storage client from the environment.
  * Prefers USER_STORAGE DO, falls back to KV namespaces.
  */
-export function getStorageClientCompat(env: any, userId: string = 'anonymous'): StorageClientCompat {
+export function getStorageClientCompat(env: Env, userId: string = 'anonymous'): StorageClientCompat {
   // Prefer DO storage (production)
   if (env.USER_STORAGE) {
     return createUserStorageClient(env.USER_STORAGE, userId)

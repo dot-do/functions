@@ -1355,6 +1355,7 @@ describe('TierDispatcher', () => {
       const result = await dispatcher.dispatch(metadata, {})
 
       expect(result.status).toBe(500)
+      // Error message propagated from executor
       expect(result.body.error).toBe('Unexpected error')
     })
 
@@ -1539,13 +1540,13 @@ describe('TierDispatcher', () => {
       expect(code).toBe('export default () => ({ ok: true })')
     })
 
-    it('should return undefined for nonexistent step code', async () => {
+    it('should return null for nonexistent step code', async () => {
       const dispatcher = new TierDispatcher(env)
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const code = await (dispatcher as any).getStepCode('nonexistent')
 
-      expect(code).toBeUndefined()
+      expect(code).toBeNull()
     })
   })
 })

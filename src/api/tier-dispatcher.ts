@@ -252,6 +252,32 @@ export class TierDispatcher {
   }
 
   /**
+   * Create a standardized error dispatch result.
+   * Extracts duplicated error response construction pattern.
+   */
+  private createDispatchError(
+    status: number,
+    errorMessage: string,
+    tier: TierNumber,
+    executorType: string,
+    startTime: number,
+    executionMeta?: Partial<DispatchResult['body']['_meta']>
+  ): DispatchResult {
+    return {
+      status,
+      body: {
+        error: errorMessage,
+        _meta: {
+          duration: Date.now() - startTime,
+          executorType,
+          tier,
+          ...executionMeta,
+        },
+      },
+    }
+  }
+
+  /**
    * Dispatch a function invocation to the appropriate tier executor
    */
   async dispatch(
@@ -311,23 +337,11 @@ export class TierDispatcher {
     start: number
   ): Promise<DispatchResult> {
     if (!this.codeExecutor) {
-      return {
-        status: 503,
-        body: {
-          error: 'Code executor not available',
-          _meta: { duration: Date.now() - start, executorType: 'code', tier: 1 },
-        },
-      }
+      return this.createDispatchError(503, 'Code executor not available', 1, 'code', start)
     }
 
     if (!code) {
-      return {
-        status: 404,
-        body: {
-          error: 'Function code not found',
-          _meta: { duration: Date.now() - start, executorType: 'code', tier: 1 },
-        },
-      }
+      return this.createDispatchError(404, 'Function code not found', 1, 'code', start)
     }
 
     // Build CodeFunctionDefinition from metadata
@@ -410,13 +424,7 @@ export class TierDispatcher {
     start: number
   ): Promise<DispatchResult> {
     if (!this.generativeExecutor || !this.env.AI_CLIENT) {
-      return {
-        status: 503,
-        body: {
-          error: 'Generative executor not available. AI_CLIENT not configured.',
-          _meta: { duration: Date.now() - start, executorType: 'generative', tier: 2 },
-        },
-      }
+      return this.createDispatchError(503, 'Generative executor not available. AI_CLIENT not configured.', 2, 'generative', start)
     }
 
     // Build GenerativeFunctionDefinition from metadata
@@ -507,17 +515,7 @@ export class TierDispatcher {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Generation failed'
-      return {
-        status: 500,
-        body: {
-          error: message,
-          _meta: {
-            duration: Date.now() - start,
-            executorType: 'generative',
-            tier: 2,
-          },
-        },
-      }
+      return this.createDispatchError(500, message, 2, 'generative', start)
     }
   }
 
@@ -530,13 +528,7 @@ export class TierDispatcher {
     start: number
   ): Promise<DispatchResult> {
     if (!this.env.AI_CLIENT?.chat) {
-      return {
-        status: 503,
-        body: {
-          error: 'Agentic executor not available. AI_CLIENT not configured.',
-          _meta: { duration: Date.now() - start, executorType: 'agentic', tier: 3 },
-        },
-      }
+      return this.createDispatchError(503, 'Agentic executor not available. AI_CLIENT not configured.', 3, 'agentic', start)
     }
 
     // Build AgenticFunctionDefinition from metadata, preserving tool implementations
@@ -648,17 +640,7 @@ export class TierDispatcher {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Agent execution failed'
-      return {
-        status: 500,
-        body: {
-          error: message,
-          _meta: {
-            duration: Date.now() - start,
-            executorType: 'agentic',
-            tier: 3,
-          },
-        },
-      }
+      return this.createDispatchError(500, message, 3, 'agentic', start)
     }
   }
 
@@ -671,13 +653,7 @@ export class TierDispatcher {
     start: number
   ): Promise<DispatchResult> {
     if (!this.env.HUMAN_TASKS) {
-      return {
-        status: 503,
-        body: {
-          error: 'Human executor not available. HUMAN_TASKS not configured.',
-          _meta: { duration: Date.now() - start, executorType: 'human', tier: 4 },
-        },
-      }
+      return this.createDispatchError(503, 'Human executor not available. HUMAN_TASKS not configured.', 4, 'human', start)
     }
 
     // Build HumanFunctionDefinition from metadata
@@ -699,25 +675,26 @@ export class TierDispatcher {
       const doId = this.env.HUMAN_TASKS.idFromName(taskId)
       const stub = this.env.HUMAN_TASKS.get(doId)
 
-      // Create the task via the Durable Object
-      const createResponse = await stub.fetch(new Request('https://internal/tasks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          definition,
-          input,
-        }),
-      }))
+      // Create the task via the Durable Object with timeout protection
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 30000)
+      let createResponse: Response
+      try {
+        createResponse = await stub.fetch(new Request('https://internal/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            definition,
+            input,
+          }),
+        }), { signal: controller.signal })
+      } finally {
+        clearTimeout(timeoutId)
+      }
 
       if (!createResponse.ok) {
         const errorText = await createResponse.text()
-        return {
-          status: createResponse.status,
-          body: {
-            error: `Failed to create human task: ${errorText}`,
-            _meta: { duration: Date.now() - start, executorType: 'human', tier: 4 },
-          },
-        }
+        return this.createDispatchError(createResponse.status, `Failed to create human task: ${errorText}`, 4, 'human', start)
       }
 
       const task = await createResponse.json() as {
@@ -750,17 +727,7 @@ export class TierDispatcher {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to create human task'
-      return {
-        status: 500,
-        body: {
-          error: message,
-          _meta: {
-            duration: Date.now() - start,
-            executorType: 'human',
-            tier: 4,
-          },
-        },
-      }
+      return this.createDispatchError(500, message, 4, 'human', start)
     }
   }
 
@@ -1137,21 +1104,22 @@ export class TierDispatcher {
 
   /**
    * Get code for a step function via UserStorage DO or KV fallback
+   * Returns null for "not found" (standardized with getStepMetadata)
    */
-  private async getStepCode(functionId: string): Promise<string | undefined> {
+  private async getStepCode(functionId: string): Promise<string | null> {
     try {
       if (this.env.USER_STORAGE) {
         const client = createUserStorageClient(this.env.USER_STORAGE, 'anonymous')
-        return await client.code.get(functionId) || undefined
+        return await client.code.get(functionId) || null
       }
       // KV fallback
       if (this.env.FUNCTIONS_CODE) {
         const code = new KVCodeStorage(this.env.FUNCTIONS_CODE)
-        return await code.get(functionId) || undefined
+        return await code.get(functionId) || null
       }
-      return undefined
+      return null
     } catch {
-      return undefined
+      return null
     }
   }
 }

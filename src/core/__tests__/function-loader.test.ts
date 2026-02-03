@@ -15,6 +15,27 @@
  *
  * Test setup uses @cloudflare/vitest-pool-workers with miniflare
  * for realistic Cloudflare Workers environment testing.
+ *
+ * ## Skipped Tests Documentation
+ *
+ * Several tests are skipped for documented reasons:
+ *
+ * ### sandboxEnv Required (2 tests)
+ * Tests that invoke stub.fetch() with actual code execution require sandboxEnv
+ * binding for ai-evaluate secure execution. Without sandboxEnv, fetch returns error.
+ * - "should invoke function with POST request containing JSON body"
+ * - "should handle multiple fetch calls on the same stub"
+ * See epic functions-8v1 for ai-evaluate integration.
+ *
+ * ### Cache API Limitations (11 tests)
+ * The FunctionLoader uses Cloudflare's Cache API for cross-isolate caching.
+ * Cache API has different semantics than in-memory LRU cache:
+ * - Size is not tracked (getCacheStats().size always returns 0)
+ * - clearCache() cannot bulk-delete entries (TTL-based expiration only)
+ * - maxCacheSize is converted to TTL, not enforced as hard limit
+ * - LRU eviction is handled automatically by Cache API
+ * These tests were written for in-memory LRU cache behavior and are skipped
+ * because they don't apply to Cache API semantics.
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'

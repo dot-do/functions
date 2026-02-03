@@ -37,6 +37,10 @@ export {
 
   // AI models
   AI_MODELS,
+  CLAUDE_MODELS,
+  GPT_MODELS,
+  GEMINI_MODELS,
+  VALID_MODELS,
 
   // C# runtime
   CSHARP,

@@ -45,6 +45,20 @@ import { INVOKE } from '../../config/defaults'
 import { createLogger } from '../../core/logger'
 
 const logger = createLogger({ context: { component: 'invoke-handler' } })
+
+/**
+ * Type guard for checking if FunctionMetadata is actually ExtendedMetadata.
+ *
+ * ExtendedMetadata extends FunctionMetadata with optional fields used by
+ * generative, agentic, and human tiers. This type guard checks for the
+ * presence of any tier-specific fields.
+ *
+ * @param meta - The function metadata to check
+ * @returns True if the metadata has ExtendedMetadata fields
+ */
+function isExtendedMetadata(meta: FunctionMetadata): meta is ExtendedMetadata {
+  return 'userPrompt' in meta || 'goal' in meta || 'systemPrompt' in meta || 'tools' in meta
+}
 import {
   getCachedMetadata,
   cacheMetadata,
@@ -664,9 +678,10 @@ export async function executeNonCodeFunction(
   const dispatcher = new TierDispatcher(env)
   // Always pass the determined functionType to the dispatcher so it routes correctly,
   // regardless of whether the type came from AI classification or a default.
-  const dispatchMetadata = { ...metadata, type: functionType }
+  // The spread creates a new ExtendedMetadata with the type field set.
+  const dispatchMetadata: ExtendedMetadata = { ...metadata, type: functionType }
   const result = await dispatcher.dispatch(
-    dispatchMetadata as ExtendedMetadata,
+    dispatchMetadata,
     requestData
   )
 
@@ -737,7 +752,11 @@ export const invokeHandler: Handler = async (
   const { functionId, version, requestData, metadata } = validation
 
   // Step 2: Classify function type
-  const extendedMetadata = metadata as ExtendedMetadata
+  // Use type guard to safely narrow metadata to ExtendedMetadata
+  // If it's not ExtendedMetadata, create a minimal ExtendedMetadata with just the base fields
+  const extendedMetadata: ExtendedMetadata = isExtendedMetadata(metadata!)
+    ? metadata
+    : { ...metadata! }
   const aiBinding = (env.AI || env.AI_CLIENT) as WorkersAIBinding | undefined
 
   // Extract only the string properties needed for classifier fallback providers

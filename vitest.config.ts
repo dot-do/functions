@@ -49,7 +49,9 @@ export default defineWorkersProject({
       'test/esbuild-compiler.test.ts',              // esbuild worker not yet implemented
       'test/runtime-compilation.test.ts',            // Runtime compilation not yet implemented
       'src/__tests__/deploy-compilation.test.ts',    // Deploy compilation not yet implemented
-      'src/core/__tests__/worker-loader.test.ts',    // Worker loader not yet implemented
+      // Note: worker-loader.test.ts has been ENABLED - it now has working tests
+      // Some tests remain skipped (miniflare integration, ai-evaluate integration)
+      // but the core functionality tests are enabled.
 
       // -----------------------------------------------------------------------
       // Node.js-only tests (use child_process, fs, os -- incompatible with Workers)

@@ -28,6 +28,7 @@ import type {
 
 import { parseDuration } from '@dotdo/functions'
 import { validateOutput } from '../core/validation'
+import { CircuitBreaker } from '../core/circuit-breaker'
 
 // =============================================================================
 // MODULE DOCUMENTATION
@@ -296,13 +297,24 @@ export class AgenticExecutor<TInput = unknown, TOutput = unknown>
   private pendingApprovals: Map<string, PendingApproval[]> = new Map()
   private autonomousAgent: AutonomousAgent | undefined
 
+  // Circuit breaker for AI calls
+  private circuitBreaker: CircuitBreaker
+
   constructor(
     private definition: AgenticFunctionDefinition<TInput, TOutput>,
     private aiClient?: AIClient,
-    private env?: Record<string, unknown>
+    private env?: Record<string, unknown>,
+    circuitBreakerOptions?: { threshold?: number; resetTimeout?: number }
   ) {
     // Register tools from definition
     this.registeredTools = [...(definition.tools || [])]
+
+    // Initialize circuit breaker for AI call protection
+    this.circuitBreaker = new CircuitBreaker({
+      threshold: circuitBreakerOptions?.threshold ?? 5,
+      resetTimeout: circuitBreakerOptions?.resetTimeout ?? 30000,
+      name: 'agentic-executor',
+    })
   }
 
   /**
@@ -618,6 +630,13 @@ export class AgenticExecutor<TInput = unknown, TOutput = unknown>
   }
 
   /**
+   * Get circuit breaker statistics for monitoring
+   */
+  getCircuitBreakerStats() {
+    return this.circuitBreaker.getStats()
+  }
+
+  /**
    * Approve a tool call that requires approval
    */
   async approveToolCall(
@@ -778,8 +797,10 @@ export class AgenticExecutor<TInput = unknown, TOutput = unknown>
             tokens: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
           }
         } else {
-          // Call AI with timeout race
-          const aiResult = await raceWithTimeout(this.aiClient!.chat(aiRequest))
+          // Call AI with timeout race, protected by circuit breaker
+          const aiResult = await raceWithTimeout(
+            this.circuitBreaker.call(() => this.aiClient!.chat(aiRequest))
+          )
 
           if (aiResult.type === 'timeout' || timedOut) {
             status = 'timeout'

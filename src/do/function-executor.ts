@@ -215,6 +215,9 @@ const INFINITE_LOOP_TIMEOUT_MS = 100
 const P95_PERCENTILE = 0.95
 const P99_PERCENTILE = 0.99
 
+/** Maximum concurrent executions allowed in the activeExecutions Map */
+const MAX_CONCURRENT_EXECUTIONS = 100
+
 /**
  * Environment bindings for FunctionExecutor
  */
@@ -455,6 +458,11 @@ export class FunctionExecutor {
     const executionId = crypto.randomUUID()
     const startTime = Date.now()
     const coldStart = !this.loadedFunctions.has(options.functionId)
+
+    // Bound the activeExecutions Map to prevent unbounded memory growth
+    if (this.activeExecutions.size >= MAX_CONCURRENT_EXECUTIONS) {
+      throw new Error('Execution queue full - try again later')
+    }
 
     // Check if we need to queue this execution
     if (this.activeExecutions.size >= this.config.maxConcurrentExecutions) {

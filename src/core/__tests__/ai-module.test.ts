@@ -263,23 +263,27 @@ describe('classifyFunction', () => {
     }
   })
 
-  it('should pass through to FunctionClassifier.classify', async () => {
-    // Mock global fetch to simulate the Workers AI REST API
+  it('should use deterministic fallback when all providers fail', async () => {
+    // Mock global fetch to simulate network failure
     const originalFetch = globalThis.fetch
     globalThis.fetch = vi.fn().mockRejectedValue(new Error('No network'))
 
     try {
-      await expect(
-        classifyFunction('testFunc', 'desc', undefined, {
-          providers: [
-            {
-              type: 'cloudflare-workers-ai',
-              accountId: 'test-account',
-              apiKey: 'test-key',
-            },
-          ],
-        })
-      ).rejects.toThrow()
+      const result = await classifyFunction('testFunc', 'desc', undefined, {
+        providers: [
+          {
+            type: 'cloudflare-workers-ai',
+            accountId: 'test-account',
+            apiKey: 'test-key',
+          },
+        ],
+      })
+
+      // Fallback returns 'human' as default when no metadata hints are present
+      expect(result.type).toBe('human')
+      expect(result.confidence).toBe(0.5)
+      expect(result.provider).toBe('fallback')
+      expect(result.reasoning).toContain('Fallback classification')
     } finally {
       globalThis.fetch = originalFetch
     }

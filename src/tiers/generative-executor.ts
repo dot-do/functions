@@ -23,6 +23,7 @@ import { parseDuration } from '@dotdo/functions'
 import { TIER_TIMEOUTS, GENERATIVE_CACHE, AI_MODELS } from '../config'
 import { validateOutput } from '../core/validation'
 import { sha256 } from '../core/crypto-utils'
+import { CircuitBreaker } from '../core/circuit-breaker'
 
 // =============================================================================
 // CACHE API HELPERS
@@ -166,6 +167,10 @@ export interface GenerativeExecutorOptions {
   maxCacheSize?: number
   /** Interval in milliseconds for proactive stale entry cleanup (default: 60000ms = 1 minute) */
   staleCleanupIntervalMs?: number
+  /** Circuit breaker failure threshold (default: 5) */
+  circuitBreakerThreshold?: number
+  /** Circuit breaker reset timeout in ms (default: 30000) */
+  circuitBreakerResetTimeout?: number
 }
 
 /**
@@ -196,25 +201,10 @@ interface CacheEntry {
 }
 
 // =============================================================================
-// MODEL MAPPING
+// MODEL MAPPING (imported from centralized config)
 // =============================================================================
 
-const CLAUDE_MODELS: Record<string, string> = {
-  'claude-3-opus': 'claude-3-opus-20240229',
-  'claude-3-sonnet': 'claude-3-sonnet-20240229',
-  'claude-3-haiku': 'claude-3-haiku-20240307',
-  'claude-4-opus': 'claude-4-opus-20250115',
-  'claude-4-sonnet': 'claude-4-sonnet-20250115',
-}
-
-const GPT_MODELS = new Set(['gpt-4o', 'gpt-4o-mini'])
-const GEMINI_MODELS = new Set(['gemini-pro', 'gemini-flash'])
-
-const VALID_MODELS = new Set([
-  ...Object.keys(CLAUDE_MODELS),
-  ...GPT_MODELS,
-  ...GEMINI_MODELS,
-])
+import { CLAUDE_MODELS, GPT_MODELS, GEMINI_MODELS, VALID_MODELS } from '../config'
 
 // =============================================================================
 // GENERATIVE EXECUTOR
@@ -238,10 +228,20 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
   private cacheHits: number = 0
   private cacheMisses: number = 0
 
+  // Circuit breaker for AI calls
+  private circuitBreaker: CircuitBreaker
+
   constructor(options: GenerativeExecutorOptions) {
     this.aiClient = options.aiClient
     // NOTE: maxCacheSize and staleCleanupIntervalMs no longer apply
     // Cache API manages its own eviction and TTL is handled by Cache-Control headers
+
+    // Initialize circuit breaker for AI call protection
+    this.circuitBreaker = new CircuitBreaker({
+      threshold: options.circuitBreakerThreshold ?? 5,
+      resetTimeout: options.circuitBreakerResetTimeout ?? 30000,
+      name: 'generative-executor',
+    })
   }
 
   /**
@@ -262,17 +262,10 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
   }
 
   /**
-   * @deprecated No longer needed - Cache API handles TTL automatically via Cache-Control headers
+   * Get circuit breaker statistics for monitoring
    */
-  cleanupStaleEntries(): void {
-    // No-op: Cache API handles TTL expiration automatically
-  }
-
-  /**
-   * @deprecated No longer needed - no cleanup timer with Cache API
-   */
-  stopCleanup(): void {
-    // No-op: No cleanup timer to stop with Cache API
+  getCircuitBreakerStats() {
+    return this.circuitBreaker.getStats()
   }
 
   /**
@@ -356,14 +349,16 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
 
     while (retryCount < maxAttempts) {
       try {
-        const result = await this.executeModelCall(
-          model,
-          messages,
-          renderedSystemPrompt,
-          config?.maxTokens ?? definition.maxTokens,
-          definition.temperature ?? config?.temperature,
-          timeoutMs,
-          context?.signal
+        const result = await this.circuitBreaker.call(() =>
+          this.executeModelCall(
+            model,
+            messages,
+            renderedSystemPrompt,
+            config?.maxTokens ?? definition.maxTokens,
+            definition.temperature ?? config?.temperature,
+            timeoutMs,
+            context?.signal
+          )
         )
 
         // Parse and validate output
@@ -797,6 +792,12 @@ export class GenerativeExecutor<TInput = unknown, TOutput = unknown>
     data?: unknown
     error?: string
   } {
+    // Security: Enforce size limit before parsing to prevent DoS
+    const MAX_OUTPUT_SIZE = 10 * 1024 * 1024 // 10MB
+    if (rawResponse.length > MAX_OUTPUT_SIZE) {
+      return { success: false, error: 'Output exceeds maximum size limit' }
+    }
+
     let content = rawResponse.trim()
 
     // Handle markdown code blocks

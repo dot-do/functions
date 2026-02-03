@@ -11,6 +11,17 @@
  */
 
 /**
+ * Helper to safely access process.env in environments where process may exist.
+ * Works in Node.js, Bun, and test environments without type assertions.
+ */
+function getProcessEnv(key: string): string | undefined {
+  if (typeof process !== 'undefined' && process.env) {
+    return process.env[key]
+  }
+  return undefined
+}
+
+/**
  * Log levels in order of severity
  */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
@@ -336,10 +347,7 @@ export function createLogger(config: LoggerConfig = {}): Logger {
  * @param envLogLevel - Optional log level from Worker env bindings
  */
 export function getLogLevelFromEnv(envLogLevel?: string): LogLevel {
-  const raw = envLogLevel
-    ?? (typeof globalThis !== 'undefined' && 'process' in globalThis
-      ? (globalThis as any).process?.env?.['LOG_LEVEL']
-      : undefined)
+  const raw = envLogLevel ?? getProcessEnv('LOG_LEVEL')
   if (raw) {
     const level = raw.toLowerCase() as LogLevel
     if (level in LOG_LEVEL_VALUES) {
@@ -359,10 +367,7 @@ export function getLogLevelFromEnv(envLogLevel?: string): LogLevel {
  * @param isProduction - Whether running in production (defaults to false)
  */
 export function getLogFormatFromEnv(envLogFormat?: string, isProduction?: boolean): 'json' | 'text' {
-  const raw = envLogFormat
-    ?? (typeof globalThis !== 'undefined' && 'process' in globalThis
-      ? (globalThis as any).process?.env?.['LOG_FORMAT']
-      : undefined)
+  const raw = envLogFormat ?? getProcessEnv('LOG_FORMAT')
   if (raw === 'json') {
     return 'json'
   }
@@ -373,8 +378,7 @@ export function getLogFormatFromEnv(envLogFormat?: string, isProduction?: boolea
   if (isProduction) {
     return 'json'
   }
-  if (typeof globalThis !== 'undefined' && 'process' in globalThis
-    && (globalThis as any).process?.env?.['NODE_ENV'] === 'production') {
+  if (getProcessEnv('NODE_ENV') === 'production') {
     return 'json'
   }
   return 'text'

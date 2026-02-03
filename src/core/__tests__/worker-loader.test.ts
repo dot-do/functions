@@ -1,7 +1,5 @@
-// Tests skipped pending ai-evaluate integration - see epic functions-8v1
-
 /**
- * Worker Loader Tests (RED Phase - TDD)
+ * Worker Loader Tests
  *
  * These tests validate the Worker Loader functionality for Functions.do.
  * The Worker Loader is responsible for:
@@ -9,17 +7,43 @@
  * 2. Caching loaded isolates to avoid repeated compilation
  * 3. Managing function lifecycle within V8 isolates
  *
- * These tests are written in the RED phase of TDD - they SHOULD FAIL
- * because the implementation does not exist yet.
- *
  * Test setup uses @cloudflare/vitest-pool-workers with miniflare
  * for realistic Cloudflare Workers environment testing.
+ *
+ * ## Test Categories
+ *
+ * ### Basic Functionality (enabled)
+ * Tests for core WorkerLoader.get() functionality with mock Fetcher.
+ *
+ * ### Caching Behavior (enabled)
+ * Tests for cache hits, misses, and request coalescing.
+ *
+ * ### Cache Management (enabled)
+ * Tests for invalidation, clearing, and statistics.
+ *
+ * ### WorkerStub Interface (enabled)
+ * Tests that the returned stub has the correct interface.
+ *
+ * ### Error Handling (enabled)
+ * Tests for error cases like not found, timeout, service errors.
+ *
+ * ### Miniflare Integration (skipped)
+ * Tests requiring actual miniflare bindings - skipped in vitest-pool-workers.
+ *
+ * ### ai-evaluate Integration (skipped)
+ * Tests for loadFunction() with worker_loaders binding - requires production
+ * env or ai-evaluate integration (epic functions-8v1).
  */
 
 import { describe, it, expect, beforeEach, vi, beforeAll, afterAll } from 'vitest'
-import { env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test'
 import { WorkerLoader } from '../worker-loader'
 import type { WorkerStub, CacheStats } from '../types'
+
+// cloudflare:test imports are only needed for miniflare integration tests (skipped)
+// These tests use mock Fetchers instead and don't need the actual bindings
+// Placeholder declarations to satisfy TypeScript for skipped tests
+declare const createExecutionContext: () => ExecutionContext
+declare const waitOnExecutionContext: (ctx: ExecutionContext) => Promise<void>
 
 /**
  * Test environment with Worker Loader binding
@@ -104,7 +128,7 @@ describe('WorkerLoader', () => {
   })
 
   describe('WorkerLoader.get() - Basic Functionality', () => {
-    it.skip('should return a WorkerStub for a given function ID', async () => {
+    it('should return a WorkerStub for a given function ID', async () => {
       const functionId = 'test-function-123'
 
       // Act: Get the function stub
@@ -117,7 +141,7 @@ describe('WorkerLoader', () => {
       expect(stub.id).toBe(functionId)
     })
 
-    it.skip('should return a WorkerStub with callable fetch method', async () => {
+    it('should return a WorkerStub with callable fetch method', async () => {
       const functionId = 'hello-world'
 
       const stub = await loader.get(functionId)
@@ -137,7 +161,7 @@ describe('WorkerLoader', () => {
       expect(response).toBeInstanceOf(Response)
     })
 
-    it.skip('should throw error for non-existent function', async () => {
+    it('should throw error for non-existent function', async () => {
       const nonExistentId = 'non-existent-function'
 
       await expect(loader.get(nonExistentId)).rejects.toThrow('Function not found')
@@ -145,7 +169,7 @@ describe('WorkerLoader', () => {
   })
 
   describe('WorkerLoader.get() - Caching Behavior', () => {
-    it.skip('should return cached WorkerStub on subsequent calls with same ID', async () => {
+    it('should return cached WorkerStub on subsequent calls with same ID', async () => {
       const functionId = 'cached-function'
 
       // First call - should load the function
@@ -158,7 +182,7 @@ describe('WorkerLoader', () => {
       expect(stub1).toBe(stub2)
     })
 
-    it.skip('should only call the loader service once for same function ID', async () => {
+    it('should only call the loader service once for same function ID', async () => {
       const functionId = 'single-load-function'
 
       // Make multiple calls with the same function ID
@@ -170,7 +194,7 @@ describe('WorkerLoader', () => {
       expect(fetchSpy).toHaveBeenCalledTimes(1)
     })
 
-    it.skip('should load different functions independently', async () => {
+    it('should load different functions independently', async () => {
       const functionId1 = 'function-alpha'
       const functionId2 = 'function-beta'
 
@@ -186,7 +210,7 @@ describe('WorkerLoader', () => {
       expect(fetchSpy).toHaveBeenCalledTimes(2)
     })
 
-    it.skip('should handle concurrent requests for same function with request coalescing', async () => {
+    it('should handle concurrent requests for same function with request coalescing', async () => {
       const functionId = 'concurrent-function'
 
       // Create a delayed fetch to simulate realistic loading time
@@ -227,7 +251,7 @@ describe('WorkerLoader', () => {
       expect(fetchCallCount).toBe(1)
     })
 
-    it.skip('should cache isolates across multiple concurrent get() calls', async () => {
+    it('should cache isolates across multiple concurrent get() calls', async () => {
       const functionId = 'hot-function'
 
       // Simulate multiple calls that might happen during a single request
@@ -246,7 +270,7 @@ describe('WorkerLoader', () => {
   })
 
   describe('WorkerLoader - Cache Management', () => {
-    it.skip('should support cache invalidation for specific function', async () => {
+    it('should support cache invalidation for specific function', async () => {
       const functionId = 'invalidatable-function'
 
       // Load the function
@@ -265,7 +289,7 @@ describe('WorkerLoader', () => {
       expect(fetchSpy).toHaveBeenCalledTimes(2)
     })
 
-    it.skip('should support clearing entire cache', async () => {
+    it('should support clearing entire cache', async () => {
       await loader.get('func-1')
       await loader.get('func-2')
       await loader.get('func-3')
@@ -284,7 +308,7 @@ describe('WorkerLoader', () => {
       expect(fetchSpy).toHaveBeenCalledTimes(6)
     })
 
-    it.skip('should report cache statistics', async () => {
+    it('should report cache statistics', async () => {
       // Load some functions
       await loader.get('func-a')
       await loader.get('func-b')
@@ -302,7 +326,7 @@ describe('WorkerLoader', () => {
   })
 
   describe('WorkerStub Interface', () => {
-    it.skip('should provide a fetch method that proxies to the loaded function', async () => {
+    it('should provide a fetch method that proxies to the loaded function', async () => {
       const functionId = 'echo-function'
       const stub = await loader.get(functionId)
 
@@ -318,7 +342,7 @@ describe('WorkerLoader', () => {
       expect(response.ok).toBe(true)
     })
 
-    it.skip('should expose the function ID on the stub', async () => {
+    it('should expose the function ID on the stub', async () => {
       const functionId = 'my-typescript-func'
 
       const stub = await loader.get(functionId)
@@ -326,7 +350,7 @@ describe('WorkerLoader', () => {
       expect(stub.id).toBe(functionId)
     })
 
-    it.skip('should provide connect method for durable object style connections', async () => {
+    it('should provide connect method for durable object style connections', async () => {
       const functionId = 'stateful-function'
       const stub = await loader.get(functionId)
 
@@ -334,7 +358,7 @@ describe('WorkerLoader', () => {
       expect(typeof stub.connect).toBe('function')
     })
 
-    it.skip('should provide scheduled method for cron triggers', async () => {
+    it('should provide scheduled method for cron triggers', async () => {
       const functionId = 'scheduled-function'
       const stub = await loader.get(functionId)
 
@@ -342,7 +366,7 @@ describe('WorkerLoader', () => {
       expect(typeof stub.scheduled).toBe('function')
     })
 
-    it.skip('should provide queue method for queue consumers', async () => {
+    it('should provide queue method for queue consumers', async () => {
       const functionId = 'queue-consumer'
       const stub = await loader.get(functionId)
 
@@ -352,7 +376,7 @@ describe('WorkerLoader', () => {
   })
 
   describe('Error Handling', () => {
-    it.skip('should handle loader service errors gracefully', async () => {
+    it('should handle loader service errors gracefully', async () => {
       const errorFetcher = {
         fetch: vi.fn().mockRejectedValue(new Error('Service unavailable')),
       } as unknown as Fetcher
@@ -362,7 +386,7 @@ describe('WorkerLoader', () => {
       await expect(errorLoader.get('any-function')).rejects.toThrow('Service unavailable')
     })
 
-    it.skip('should handle malformed JSON responses from loader', async () => {
+    it('should handle malformed JSON responses from loader', async () => {
       const malformedFetcher = {
         fetch: vi.fn().mockResolvedValue(
           new Response('not valid json at all', {
@@ -377,6 +401,9 @@ describe('WorkerLoader', () => {
       await expect(malformedLoader.get('any-function')).rejects.toThrow()
     })
 
+    // Skipped: AbortController timeout doesn't work reliably in vitest-pool-workers
+    // The mock fetcher's setTimeout continues running even after abort.
+    // This test would work in a real Workers environment or with proper timer mocking.
     it.skip('should handle timeout when loading function', async () => {
       const slowFetcher = {
         fetch: vi.fn().mockImplementation(
@@ -397,7 +424,7 @@ describe('WorkerLoader', () => {
       await expect(slowLoader.get('slow-function')).rejects.toThrow(/timeout/i)
     })
 
-    it.skip('should handle 500 error responses from loader', async () => {
+    it('should handle 500 error responses from loader', async () => {
       const serverErrorFetcher = {
         fetch: vi.fn().mockResolvedValue(
           new Response(JSON.stringify({ error: 'Internal server error' }), {
@@ -416,9 +443,15 @@ describe('WorkerLoader', () => {
 
 /**
  * Integration tests using miniflare environment
- * These tests verify the WorkerLoader works correctly in a Workers runtime
+ * These tests verify the WorkerLoader works correctly in a Workers runtime.
+ *
+ * NOTE: These tests are skipped because they require actual miniflare bindings
+ * that are not available in vitest-pool-workers. To run these tests:
+ * - Use vitest.e2e.workers.config.ts which provides real miniflare bindings
+ * - Or run in a real Cloudflare Workers environment
  */
 describe('WorkerLoader - Miniflare Integration', () => {
+  // Skipped: requires real miniflare bindings (cloudflare:test createExecutionContext)
   it.skip('should work with actual Request/Response objects in Workers runtime', async () => {
     // This test validates that the WorkerLoader properly handles
     // the actual Cloudflare Workers Request and Response objects
@@ -440,6 +473,7 @@ describe('WorkerLoader - Miniflare Integration', () => {
     expect(response).toBeInstanceOf(Response)
   })
 
+  // Skipped: requires real miniflare bindings (cloudflare:test waitOnExecutionContext)
   it.skip('should properly handle execution context lifecycle', async () => {
     // In a real Workers environment, we need to ensure proper cleanup
     const mockFetcher = createMockLoaderFetcher()
@@ -474,10 +508,11 @@ describe('WorkerLoader - Miniflare Integration', () => {
  * - Timeout handling for runaway code
  * - Error propagation from sandbox to host
  *
- * These tests are written in the RED phase of TDD - they SHOULD FAIL
- * because the implementation does not exist yet.
+ * NOTE: These tests are SKIPPED because they require the worker_loaders binding
+ * which is only available in production Cloudflare Workers environment.
+ * See epic functions-8v1 for ai-evaluate integration.
  */
-describe('WorkerLoader - ai-evaluate Integration', () => {
+describe.skip('WorkerLoader - ai-evaluate Integration', () => {
   /**
    * Mock environment that simulates the production env with LOADER binding
    */

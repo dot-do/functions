@@ -664,6 +664,24 @@ function createProvider(
  * // { type: 'code', confidence: 0.95, reasoning: '...', provider: 'cloudflare-workers-ai' }
  * ```
  */
+/**
+ * Metadata about a function for fallback classification
+ */
+export interface FunctionMetadata {
+  /** Function name */
+  name: string
+  /** Function description */
+  description?: string
+  /** Input schema */
+  inputSchema?: Record<string, unknown>
+  /** Whether the function has code */
+  code?: boolean
+  /** Prompt template for AI execution */
+  prompt?: string
+  /** Tools available to the function */
+  tools?: unknown[]
+}
+
 export class FunctionClassifier {
   private providers: AIProvider[]
   /**
@@ -672,6 +690,12 @@ export class FunctionClassifier {
    * which persists across Worker isolates and requests.
    */
   private trackedCacheKeys: Set<string> = new Set()
+  /**
+   * Track in-flight classification requests to prevent cache stampede.
+   * When multiple concurrent requests arrive for the same function,
+   * only one AI call is made and the result is shared.
+   */
+  private inflightRequests = new Map<string, Promise<ClassificationResult>>()
   private defaultCacheTtlSeconds: number
   private temperature: number
   private timeoutMs: number
@@ -723,6 +747,32 @@ export class FunctionClassifier {
       return cached
     }
 
+    // Check for in-flight request (cache stampede protection)
+    const inflight = this.inflightRequests.get(cacheKey)
+    if (inflight) {
+      return inflight
+    }
+
+    // Create the classification promise and track it
+    const promise = this.doClassify(name, description, inputSchema, cacheKey)
+    this.inflightRequests.set(cacheKey, promise)
+
+    try {
+      return await promise
+    } finally {
+      this.inflightRequests.delete(cacheKey)
+    }
+  }
+
+  /**
+   * Internal classification logic - called by classify() with stampede protection.
+   */
+  private async doClassify(
+    name: string,
+    description: string | undefined,
+    inputSchema: Record<string, unknown> | undefined,
+    cacheKey: string
+  ): Promise<ClassificationResult> {
     // Build the classification prompt
     const prompt = buildUserMessage(name, description, inputSchema)
     const startTime = Date.now()
@@ -763,10 +813,31 @@ export class FunctionClassifier {
       }
     }
 
-    // All providers failed
-    throw new Error(
-      `All AI providers failed to classify function "${name}". Errors: ${JSON.stringify(errors)}`
-    )
+    // All providers failed - use deterministic fallback
+    const metadata: FunctionMetadata = {
+      name,
+      description,
+      inputSchema,
+    }
+    const fallbackType = this.fallbackClassify(metadata)
+    return {
+      type: fallbackType,
+      confidence: 0.5,
+      reasoning: `Fallback classification used after all AI providers failed. Classified as '${fallbackType}' based on function metadata.`,
+      provider: 'fallback',
+      latencyMs: Date.now() - startTime,
+    }
+  }
+
+  /**
+   * Deterministic fallback classification when all AI providers fail.
+   * Uses simple heuristics based on function metadata.
+   */
+  private fallbackClassify(fn: FunctionMetadata): FunctionType {
+    if (fn.code) return 'code'
+    if (fn.prompt && !fn.tools?.length) return 'generative'
+    if (fn.tools?.length) return 'agentic'
+    return 'human'
   }
 
   /**
