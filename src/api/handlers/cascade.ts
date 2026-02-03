@@ -28,7 +28,7 @@ import type {
   TierAttempt,
   FunctionType,
 } from '@dotdo/functions'
-import { TierDispatcher, type ExtendedMetadata, type TierDispatcherEnv } from '../tier-dispatcher'
+import { TierDispatcher, type ExtendedMetadata, type TierDispatcherEnv, isExtendedMetadata } from '../tier-dispatcher'
 import {
   FunctionClassifier,
   createClassifierFromBinding,
@@ -382,7 +382,12 @@ export const cascadeHandler: Handler = async (
   // Get function metadata from UserStorage DO
   const userId = context?.authContext?.userId || 'anonymous'
   const storageClient = getStorageClientCompat(env, userId)
-  const metadata = await storageClient.registry.get(functionId) as ExtendedMetadata | null
+  const rawMetadata = await storageClient.registry.get(functionId)
+  const metadata: ExtendedMetadata | null = rawMetadata && isExtendedMetadata(rawMetadata)
+    ? rawMetadata
+    : rawMetadata
+    ? { ...rawMetadata }  // Wrap base FunctionMetadata as minimal ExtendedMetadata
+    : null
 
   if (!metadata) {
     return jsonErrorResponse('FUNCTION_NOT_FOUND', `Function not found: ${functionId}`)

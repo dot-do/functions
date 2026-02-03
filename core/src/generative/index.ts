@@ -54,7 +54,11 @@ export interface GenerativeFunctionDefinition<
   maxTokens?: number
 }
 
-export type AIModel =
+/**
+ * Known/supported AI model identifiers.
+ * These are strongly typed for common models.
+ */
+export type KnownAIModel =
   | 'claude-3-opus'
   | 'claude-3-sonnet'
   | 'claude-3-haiku'
@@ -64,7 +68,42 @@ export type AIModel =
   | 'gpt-4o-mini'
   | 'gemini-pro'
   | 'gemini-flash'
-  | string // Allow custom model IDs
+
+/**
+ * Brand symbol for custom model IDs.
+ * This prevents accidental string assignment while still allowing custom models.
+ */
+declare const __customModelBrand: unique symbol
+
+/**
+ * A branded type for custom AI model identifiers.
+ * Use customModel() to create a CustomAIModel from a string.
+ */
+export type CustomAIModel = string & { readonly [__customModelBrand]: 'CustomAIModel' }
+
+/**
+ * Creates a CustomAIModel from a string.
+ * Use this to specify AI models not in the KnownAIModel list.
+ *
+ * @param modelId - The model identifier string (e.g., 'anthropic/claude-3.5-sonnet')
+ * @returns A branded CustomAIModel
+ *
+ * @example
+ * ```typescript
+ * import { customModel } from '@dotdo/functions/generative'
+ *
+ * const myModel = customModel('my-provider/custom-model-v1')
+ * ```
+ */
+export function customModel(modelId: string): CustomAIModel {
+  return modelId as CustomAIModel
+}
+
+/**
+ * AI model type that supports both known models and custom branded models.
+ * Use KnownAIModel values directly or wrap custom strings with customModel().
+ */
+export type AIModel = KnownAIModel | CustomAIModel
 
 export interface GenerativeExample {
   input: Record<string, unknown>

@@ -160,6 +160,20 @@ export interface DispatchResult<TOutput = unknown> {
 }
 
 /**
+ * Type guard for checking if FunctionMetadata is actually ExtendedMetadata.
+ *
+ * ExtendedMetadata extends FunctionMetadata with optional fields used by
+ * generative, agentic, and human tiers. This type guard checks for the
+ * presence of any tier-specific fields.
+ *
+ * @param meta - The function metadata to check
+ * @returns True if the metadata has ExtendedMetadata fields
+ */
+export function isExtendedMetadata(meta: FunctionMetadata): meta is ExtendedMetadata {
+  return meta !== null && ('userPrompt' in meta || 'goal' in meta || 'systemPrompt' in meta || 'tools' in meta)
+}
+
+/**
  * Extended metadata with type information
  */
 export interface ExtendedMetadata extends FunctionMetadata {
@@ -1088,13 +1102,19 @@ export class TierDispatcher {
       if (this.env.USER_STORAGE) {
         const client = createUserStorageClient(this.env.USER_STORAGE, 'anonymous')
         const data = await client.registry.get(functionId)
-        return data as ExtendedMetadata | null
+        if (!data) return null
+        // Use type guard to check for extended metadata, or wrap as minimal ExtendedMetadata
+        return isExtendedMetadata(data) ? data : { ...data }
       }
-      // KV fallback
+      // TODO(functions-y6kb): Remove KV fallback once all deployments have USER_STORAGE DO
+      // KV fallback is retained for backwards compatibility during migration period.
+      // Once USER_STORAGE DO is universally deployed, this fallback can be removed.
       if (this.env.FUNCTIONS_REGISTRY) {
         const registry = new KVFunctionRegistry(this.env.FUNCTIONS_REGISTRY)
         const data = await registry.get(functionId)
-        return data as ExtendedMetadata | null
+        if (!data) return null
+        // Use type guard to check for extended metadata, or wrap as minimal ExtendedMetadata
+        return isExtendedMetadata(data) ? data : { ...data }
       }
       return null
     } catch {
@@ -1112,7 +1132,9 @@ export class TierDispatcher {
         const client = createUserStorageClient(this.env.USER_STORAGE, 'anonymous')
         return await client.code.get(functionId) || null
       }
-      // KV fallback
+      // TODO(functions-y6kb): Remove KV fallback once all deployments have USER_STORAGE DO
+      // KV fallback is retained for backwards compatibility during migration period.
+      // Once USER_STORAGE DO is universally deployed, this fallback can be removed.
       if (this.env.FUNCTIONS_CODE) {
         const code = new KVCodeStorage(this.env.FUNCTIONS_CODE)
         return await code.get(functionId) || null
@@ -1125,11 +1147,52 @@ export class TierDispatcher {
 }
 
 /**
+ * Runtime validation error for type adapter failures
+ */
+class TypeAdapterError extends Error {
+  constructor(adapterName: string, missingProperty: string) {
+    super(`${adapterName}: AIClient missing required property '${missingProperty}'`)
+    this.name = 'TypeAdapterError'
+  }
+}
+
+/**
+ * Validate that AIClient has the required shape for GenerativeExecutor.
+ * @throws TypeAdapterError if validation fails
+ */
+function validateGenerativeAIClient(client: AIClient): void {
+  if (!client.messages) {
+    throw new TypeAdapterError('adaptToGenerativeAIClient', 'messages')
+  }
+  if (typeof client.messages.create !== 'function') {
+    throw new TypeAdapterError('adaptToGenerativeAIClient', 'messages.create')
+  }
+}
+
+/**
+ * Validate that AIClient has the required shape for AgenticExecutor.
+ * @throws TypeAdapterError if validation fails
+ */
+function validateAgenticAIClient(client: AIClient): void {
+  if (!client.chat) {
+    throw new TypeAdapterError('adaptToAgenticAIClient', 'chat')
+  }
+  if (typeof client.chat !== 'function') {
+    throw new TypeAdapterError('adaptToAgenticAIClient', 'chat (must be function)')
+  }
+}
+
+/**
  * Adapt a TierDispatcherEnv.AIClient to the GenerativeExecutor's expected AIClient interface.
  * Both types are structurally compatible (messages.create with the same shape),
  * so we wrap the binding to satisfy the type system without double assertions.
+ *
+ * @throws TypeAdapterError if the client is missing required properties
  */
 function adaptToGenerativeAIClient(client: AIClient): GenerativeExecutorAIClient {
+  // Runtime validation before type adaptation
+  validateGenerativeAIClient(client)
+
   return {
     messages: {
       create: (params: Parameters<GenerativeExecutorAIClient['messages']['create']>[0]) =>
@@ -1142,8 +1205,13 @@ function adaptToGenerativeAIClient(client: AIClient): GenerativeExecutorAIClient
  * Adapt a TierDispatcherEnv.AIClient to the AgenticExecutor's expected AIClient interface.
  * Both types are structurally compatible (chat method with similar shape),
  * so we wrap the binding to satisfy the type system without double assertions.
+ *
+ * @throws TypeAdapterError if the client is missing required properties
  */
 function adaptToAgenticAIClient(client: AIClient): AgenticExecutorAIClient {
+  // Runtime validation before type adaptation
+  validateAgenticAIClient(client)
+
   return {
     chat: (params: Parameters<AgenticExecutorAIClient['chat']>[0]) =>
       client.chat!(params as Parameters<NonNullable<AIClient['chat']>>[0]),

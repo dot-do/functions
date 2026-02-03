@@ -190,15 +190,17 @@ describe('E2E: Agentic Functions API', () => {
 
       const response = await worker.fetch(request, mockEnv, mockCtx)
 
-      // Should return 200 OK or 501 if not implemented yet
-      expect([200, 501, 503]).toContain(response.status)
-
-      if (response.status === 200) {
-        const body = (await response.json()) as AgenticInvokeResult
-        expect(body.functionId).toBe('test-agent')
-        expect(body.executionId).toBeDefined()
-        expect(body.status).toBeDefined()
+      // TODO: Enable strict assertion when agentic executor bindings are available
+      if (response.status === 501 || response.status === 503) {
+        expect([501, 503]).toContain(response.status) // Executor not available
+        return
       }
+
+      expect(response.status).toBe(200)
+      const body = (await response.json()) as AgenticInvokeResult
+      expect(body.functionId).toBe('test-agent')
+      expect(body.executionId).toBeDefined()
+      expect(body.status).toBeDefined()
     })
 
     it('should return correct Content-Type for agentic function response', async () => {

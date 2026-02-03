@@ -226,14 +226,19 @@ describe('Generative Functions E2E', () => {
 
       const response = await invokeHandler(request, mockEnv, mockCtx, context)
 
-      expect([200, 501]).toContain(response.status)
-      if (response.status === 200) {
-        const body = await response.json() as Record<string, unknown>
-        expect(body['sentiment']).toBe('positive')
-        expect(body['confidence']).toBeGreaterThan(0.9)
-        expect(body['_meta']).toBeDefined()
-        expect((body['_meta'] as Record<string, unknown>)['executorType']).toBe('generative')
+      // TODO: Enable strict assertion when AI provider bindings are available
+      // For now, skip if 501 (not implemented)
+      if (response.status === 501) {
+        expect(response.status).toBe(501) // Executor not available in test env
+        return
       }
+
+      expect(response.status).toBe(200)
+      const body = await response.json() as Record<string, unknown>
+      expect(body['sentiment']).toBe('positive')
+      expect(body['confidence']).toBeGreaterThan(0.9)
+      expect(body['_meta']).toBeDefined()
+      expect((body['_meta'] as Record<string, unknown>)['executorType']).toBe('generative')
     })
 
     it('should return proper error response for missing function', async () => {
@@ -276,8 +281,14 @@ describe('Generative Functions E2E', () => {
 
       const response = await invokeHandler(request, mockEnv, mockCtx, context)
 
+      // TODO: Enable strict assertion when AI provider bindings are available
+      if (response.status === 501) {
+        expect(response.status).toBe(501) // Executor not available in test env
+        return
+      }
+
       // Should return 400 for missing variable or 500 for execution error
-      expect([400, 500, 501]).toContain(response.status)
+      expect(response.status === 400 || response.status === 500).toBe(true)
     })
 
     it('should include execution metadata in response', async () => {
@@ -315,8 +326,14 @@ describe('Generative Functions E2E', () => {
 
       const response = await invokeHandler(request, mockEnv, mockCtx, context)
 
+      // TODO: Enable strict assertion when AI provider bindings are available
+      if (response.status === 501) {
+        expect(response.status).toBe(501) // Executor not available in test env
+        return
+      }
+
       // Verify response is successful
-      expect([200, 501]).toContain(response.status)
+      expect(response.status).toBe(200)
 
       if (response.status === 200) {
         const body = await response.json() as Record<string, unknown>
@@ -391,7 +408,13 @@ describe('Generative Functions E2E', () => {
 
       const response = await invokeHandler(request, mockEnv, mockCtx, context)
 
-      expect([200, 501]).toContain(response.status)
+      // TODO: Enable strict assertion when AI provider bindings are available
+      if (response.status === 501) {
+        expect(response.status).toBe(501) // Executor not available in test env
+        return
+      }
+
+      expect(response.status).toBe(200)
     })
   })
 
@@ -455,10 +478,16 @@ describe('Generative Functions E2E', () => {
 
       const response = await invokeHandler(request, mockEnv, mockCtx, context)
 
+      // TODO: Enable strict assertion when cascade execution is fully implemented
       // RED PHASE: Currently cascade functions return 500 when type is 'cascade'
       // because full cascade execution isn't implemented yet.
+      if (response.status === 501 || response.status === 500) {
+        expect([500, 501]).toContain(response.status) // Cascade/executor not available
+        return
+      }
+
       // When implemented, should succeed via generative tier after code tier fails
-      expect([200, 500, 501]).toContain(response.status)
+      expect(response.status).toBe(200)
     })
 
     it('should pass context from code tier to generative tier', async () => {
@@ -513,8 +542,14 @@ describe('Generative Functions E2E', () => {
 
       const response = await invokeHandler(request, mockEnv, mockCtx, context)
 
+      // TODO: Enable strict assertion when cascade execution is fully implemented
       // RED PHASE: Cascade type returns 500 until fully implemented
-      expect([200, 500, 501]).toContain(response.status)
+      if (response.status === 501 || response.status === 500) {
+        expect([500, 501]).toContain(response.status) // Cascade/executor not available
+        return
+      }
+
+      expect(response.status).toBe(200)
     })
 
     it('should respect cascade timeout across all tiers', async () => {
@@ -552,9 +587,15 @@ describe('Generative Functions E2E', () => {
 
       const response = await invokeHandler(request, mockEnv, mockCtx, context)
 
-      // Should timeout, return error, or complete (if timeout not enforced)
+      // TODO: Enable strict assertion when timeout handling is fully implemented
       // RED PHASE: Currently timeout may not be properly enforced at API layer
-      expect([200, 408, 500, 501, 504]).toContain(response.status)
+      if (response.status === 501 || response.status === 500) {
+        expect([500, 501]).toContain(response.status) // Executor not available
+        return
+      }
+
+      // Should timeout with 408 or 504
+      expect(response.status === 408 || response.status === 504).toBe(true)
     }, 5000) // Set test timeout to 5 seconds
 
     it('should track cascade metrics including generative tier', async () => {
@@ -589,23 +630,25 @@ describe('Generative Functions E2E', () => {
 
       const response = await invokeHandler(request, mockEnv, mockCtx, context)
 
-      // Response should be successful or indicate not implemented
-      expect([200, 501]).toContain(response.status)
-
-      if (response.status === 200) {
-        const body = await response.json() as Record<string, unknown>
-        const meta = body['_meta'] as Record<string, unknown>
-
-        // Basic metadata should exist
-        expect(meta).toBeDefined()
-        expect(meta['duration']).toBeDefined()
-
-        // RED PHASE: Enhanced cascade metrics not yet implemented
-        // When implemented, uncomment:
-        // expect(meta.traceId || meta.requestId).toBeDefined()
-        // expect(meta.tier).toBe('generative')
-        // expect(meta.escalations).toBeDefined()
+      // TODO: Enable strict assertion when AI provider bindings are available
+      if (response.status === 501) {
+        expect(response.status).toBe(501) // Executor not available in test env
+        return
       }
+
+      expect(response.status).toBe(200)
+      const body = await response.json() as Record<string, unknown>
+      const meta = body['_meta'] as Record<string, unknown>
+
+      // Basic metadata should exist
+      expect(meta).toBeDefined()
+      expect(meta['duration']).toBeDefined()
+
+      // RED PHASE: Enhanced cascade metrics not yet implemented
+      // When implemented, uncomment:
+      // expect(meta.traceId || meta.requestId).toBeDefined()
+      // expect(meta.tier).toBe('generative')
+      // expect(meta.escalations).toBeDefined()
     })
   })
 

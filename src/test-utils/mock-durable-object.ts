@@ -44,15 +44,24 @@ export function createMockDurableObjectStorage(): DurableObjectStorage {
     },
     sync: async (): Promise<void> => {},
     transaction: async <T>(closure: (txn: DurableObjectTransaction) => Promise<T>): Promise<T> => {
-      // Simplified transaction - just run the closure with storage as txn
-      return closure({
+      // Create snapshot for rollback on error
+      const snapshot = new Map(data)
+      const txnApi = {
         get: async (key: string) => data.get(key),
         put: async (key: string, value: unknown) => { data.set(key, value) },
         delete: async (key: string) => data.delete(key),
         deleteAll: async () => { data.clear() },
         list: async () => new Map(data),
         rollback: () => {},
-      } as unknown as DurableObjectTransaction)
+      } as unknown as DurableObjectTransaction
+      try {
+        return await closure(txnApi)
+      } catch (e) {
+        // Rollback on error: restore data from snapshot
+        data.clear()
+        snapshot.forEach((v, k) => data.set(k, v))
+        throw e
+      }
     },
   } as unknown as DurableObjectStorage
 }

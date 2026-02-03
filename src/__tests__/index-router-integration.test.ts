@@ -116,8 +116,8 @@ describe('Index Router Integration', () => {
 
       const response = await worker.fetch(request, mockEnv, mockCtx)
 
-      // Should either succeed or return validation error
-      expect([200, 201, 400]).toContain(response.status)
+      // Deploy should succeed with 200 or 201
+      expect(response.status === 200 || response.status === 201).toBe(true)
     })
 
     it('POST /api/functions returns 400 for missing fields', async () => {
@@ -172,7 +172,8 @@ describe('Index Router Integration', () => {
   })
 
   describe('Function invoke endpoint (delegated to router)', () => {
-    it('POST /functions/:id invokes a function', async () => {
+    // TODO: Enable when LOADER/USER_FUNCTIONS bindings are available in test environment
+    it.skip('POST /functions/:id invokes a function', async () => {
       const request = new Request('https://functions.do/functions/test-func', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -181,11 +182,11 @@ describe('Index Router Integration', () => {
 
       const response = await worker.fetch(request, mockEnv, mockCtx)
 
-      // 501 expected when LOADER/USER_FUNCTIONS not configured
-      expect([200, 501]).toContain(response.status)
+      expect(response.status).toBe(200)
     })
 
-    it('POST /functions/:id/invoke invokes a function', async () => {
+    // TODO: Enable when LOADER/USER_FUNCTIONS bindings are available in test environment
+    it.skip('POST /functions/:id/invoke invokes a function', async () => {
       const request = new Request('https://functions.do/functions/test-func/invoke', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -194,8 +195,7 @@ describe('Index Router Integration', () => {
 
       const response = await worker.fetch(request, mockEnv, mockCtx)
 
-      // 501 expected when LOADER/USER_FUNCTIONS not configured
-      expect([200, 501]).toContain(response.status)
+      expect(response.status).toBe(200)
     })
 
     it('POST /functions/:id returns 404 for missing function', async () => {

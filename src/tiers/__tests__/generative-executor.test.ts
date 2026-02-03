@@ -1946,15 +1946,16 @@ describe('GenerativeExecutor', () => {
   // 14. Deprecated / No-op Methods
   // ==========================================================================
 
-  describe('Deprecated Methods', () => {
-    it('cleanupStaleEntries should be a no-op', () => {
-      // Should not throw
-      expect(() => executor.cleanupStaleEntries()).not.toThrow()
+  describe('Deprecated Methods (Removed)', () => {
+    it('cleanupStaleEntries was removed - no longer exists', () => {
+      // These deprecated methods were removed per functions-tk1o
+      // Verify they no longer exist on the executor
+      expect((executor as Record<string, unknown>).cleanupStaleEntries).toBeUndefined()
     })
 
-    it('stopCleanup should be a no-op', () => {
-      // Should not throw
-      expect(() => executor.stopCleanup()).not.toThrow()
+    it('stopCleanup was removed - no longer exists', () => {
+      // These deprecated methods were removed per functions-tk1o
+      expect((executor as Record<string, unknown>).stopCleanup).toBeUndefined()
     })
 
     it('getCacheStats should return all expected fields', () => {

@@ -509,8 +509,8 @@ describe('Function Details API - GET /functions/:id', () => {
       })
       const response = await worker.fetch(request, mockEnv, mockCtx)
 
-      // DELETE handler should work (returns 200 or 404 depending on function existence)
-      expect([200, 404]).toContain(response.status)
+      // DELETE handler should return 200 for existing function (set up in beforeEach)
+      expect(response.status).toBe(200)
     })
   })
 

@@ -89,8 +89,8 @@ describe('API Router', () => {
 
       const response = await router.handle(request, mockEnv, mockCtx)
 
-      // Should route to deploy handler (expect success or validation error)
-      expect([200, 201, 400]).toContain(response.status)
+      // Deploy should succeed with 200 or 201
+      expect(response.status === 200 || response.status === 201).toBe(true)
     })
 
     it('routes GET /api/functions/:id to info handler', async () => {
@@ -115,7 +115,8 @@ describe('API Router', () => {
       expect(body['id']).toBe('test-func')
     })
 
-    it('routes POST /functions/:id to invoke handler', async () => {
+    // TODO: Enable when LOADER/USER_FUNCTIONS bindings are available in test environment
+    it.skip('routes POST /functions/:id to invoke handler', async () => {
       // Set up a test function
       await mockEnv.FUNCTIONS_REGISTRY.put(
         'registry:invoke-test',
@@ -138,11 +139,11 @@ describe('API Router', () => {
 
       const response = await router.handle(request, mockEnv, mockCtx)
 
-      // Should route to invoke handler
-      expect([200, 501]).toContain(response.status) // 501 if no executor available
+      expect(response.status).toBe(200)
     })
 
-    it('routes POST /functions/:id/invoke to invoke handler', async () => {
+    // TODO: Enable when LOADER/USER_FUNCTIONS bindings are available in test environment
+    it.skip('routes POST /functions/:id/invoke to invoke handler', async () => {
       // Set up a test function
       await mockEnv.FUNCTIONS_REGISTRY.put(
         'registry:explicit-invoke',
@@ -162,8 +163,7 @@ describe('API Router', () => {
 
       const response = await router.handle(request, mockEnv, mockCtx)
 
-      // Should route to invoke handler
-      expect([200, 501]).toContain(response.status)
+      expect(response.status).toBe(200)
     })
 
     it('routes DELETE /api/functions/:id to delete handler', async () => {
@@ -196,8 +196,8 @@ describe('API Router', () => {
 
       const response = await router.handle(request, mockEnv, mockCtx)
 
-      // Should route to logs handler (503 if logs not configured)
-      expect([200, 503]).toContain(response.status)
+      // Should return 503 when FUNCTION_LOGS not configured (test environment)
+      expect(response.status).toBe(503)
     })
 
     it('returns 404 for unknown routes', async () => {
@@ -274,7 +274,8 @@ describe('API Router', () => {
       // All requests should be processed (checking middleware runs)
       for (const request of requests) {
         const response = await router.handle(request, mockEnv, mockCtx)
-        expect([200, 429]).toContain(response.status)
+        // Should succeed for reasonable request counts
+        expect(response.status).toBe(200)
       }
     })
 
@@ -390,8 +391,8 @@ describe('API Router', () => {
 
       const response = await router.handle(request, mockEnv, mockCtx)
 
-      // Should either find it or return 404, not crash
-      expect([200, 404]).toContain(response.status)
+      // Should return 404 for non-existent function
+      expect(response.status).toBe(404)
     })
   })
 

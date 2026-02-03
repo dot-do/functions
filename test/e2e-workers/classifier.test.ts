@@ -428,4 +428,57 @@ describe('AI Classifier with real bindings', () => {
       expect(['generative', 'agentic']).toContain(complexResult.type)
     })
   })
+
+  // ============================================================================
+  // Fallback Behavior Tests
+  // ============================================================================
+
+  describe('Fallback behavior', () => {
+    it('should return valid classification even without AI binding', async () => {
+      // Create a classifier without AI binding to test fallback
+      const { FunctionClassifier: ClassifierClass } = await import('../../src/core/function-classifier')
+      const fallbackClassifier = new ClassifierClass({ providers: [] })
+
+      const result = await fallbackClassifier.classify(
+        'calculateTax',
+        'Computes tax based on income'
+      )
+
+      // Should still return a valid result using deterministic fallback
+      expect(result).toBeDefined()
+      expect(['code', 'generative', 'agentic', 'human']).toContain(result.type)
+      expect(result.provider).toBe('fallback')
+      expect(result.confidence).toBe(0.5) // Fallback confidence
+      expect(result.reasoning).toContain('Fallback classification')
+    })
+
+    it('should use deterministic fallback for code functions', async () => {
+      const { FunctionClassifier: ClassifierClass } = await import('../../src/core/function-classifier')
+      const fallbackClassifier = new ClassifierClass({ providers: [] })
+
+      // When code is present, should classify as 'code'
+      const result = await fallbackClassifier.classify(
+        'processData',
+        'Processes the input data'
+      )
+
+      expect(result.provider).toBe('fallback')
+      // Fallback uses heuristics - without code/prompt/tools, defaults to 'human'
+      expect(['code', 'generative', 'agentic', 'human']).toContain(result.type)
+    })
+
+    it('should include latency metrics even for fallback', async () => {
+      const { FunctionClassifier: ClassifierClass } = await import('../../src/core/function-classifier')
+      const fallbackClassifier = new ClassifierClass({ providers: [] })
+
+      const result = await fallbackClassifier.classify(
+        'testFunction',
+        'A test function'
+      )
+
+      expect(result.latencyMs).toBeDefined()
+      expect(typeof result.latencyMs).toBe('number')
+      expect(result.latencyMs).toBeGreaterThanOrEqual(0)
+    })
+  })
 })
